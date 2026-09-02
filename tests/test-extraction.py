@@ -27,7 +27,8 @@ def expect(cond, msg):
 
 
 def extract(html):
-    return fetch._stdlib_extract(html)
+    text, ok = fetch._stdlib_extract(html)
+    return text
 
 
 def run_main(argv, page_html, ctype="text/html"):
@@ -197,6 +198,103 @@ if has_trafilatura:
 else:
     expect(r.returncode == 1 and "SCIO_EXTRACTOR=trafilatura" in r.stdout and "not importable" in r.stdout,
            "SCIO_EXTRACTOR=trafilatura refuses to run when the package is missing, instead of silently falling back to stdlib")
+
+
+def extractor_mode(value):
+    e = dict(os.environ)
+    if value is None:
+        e.pop("SCIO_EXTRACTOR", None)
+    else:
+        e["SCIO_EXTRACTOR"] = value
+    r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "fetch.py")], capture_output=True, text=True, env=e)
+    return r.returncode, r.stdout
+
+
+code, out = extractor_mode("stdlib")
+expect(code == 2 and "must be one of" not in out, "SCIO_EXTRACTOR=stdlib is a valid mode (prints the CLI usage doc for no URL, not a mode error)")
+code, out = extractor_mode(" StdLib ")
+expect(code == 2 and "must be one of" not in out, "SCIO_EXTRACTOR is trimmed and lower-cased (' StdLib ' is accepted)")
+code, out = extractor_mode("")
+expect(code == 2 and "must be one of" not in out, "an empty SCIO_EXTRACTOR falls back to the 'auto' default rather than erroring")
+code, out = extractor_mode("trafiltura")   # the exact typo from the review this regression test is named for
+expect(code == 2 and "must be one of" in out, "an invalid SCIO_EXTRACTOR value (a typo) fails loudly instead of silently behaving as stdlib")
+
+# --- an <article><footer> carries evidence (author bio, correction notice, licence line); a page footer is chrome --
+footer_page = """
+<html><body>
+<article>
+<p>Body text.</p>
+<footer><p>Corrections: an earlier version misstated the date.</p></footer>
+</article>
+<footer><p>Site-wide legal boilerplate.</p></footer>
+</body></html>
+"""
+out = extract(footer_page)
+expect("Corrections: an earlier version misstated the date" in out, "a <footer> nested inside <article> survives (was unconditionally dropped before this fix)")
+expect("Site-wide legal boilerplate" not in out, "a page-level <footer> outside <article>/<main> is still dropped")
+
+# --- meaningful <img alt> text is kept and labelled, not silently discarded (security.md: alt text is scanned like prose)
+alt_page = '<html><body><article><p>Before.</p><img src="chart.png" alt="Revenue rose 12% year over year"><p>After.</p></article></body></html>'
+out = extract(alt_page)
+expect("[image: Revenue rose 12% year over year]" in out, "meaningful alt text is kept, labelled as an image description")
+expect("Before." in out and "After." in out, "surrounding text is unaffected by the alt-text capture")
+empty_alt = '<html><body><article><img src="spacer.gif" alt=""><p>Text.</p></article></body></html>'
+expect("[image:" not in extract(empty_alt), "an empty alt attribute produces no image-description line")
+
+# --- expanded binary denylist covers common archive/executable types; +xml/+json vendor types are still textual ---
+for binary_type in ("application/x-rar-compressed", "application/x-7z-compressed", "application/gzip", "application/x-executable"):
+    expect(binary_type.startswith(fetch.BINARY_CONTENT_TYPES), f"{binary_type} is recognized as a binary content type")
+expect("application/vnd.api+json".startswith(fetch.BINARY_CONTENT_TYPES) and "application/vnd.api+json".endswith(fetch.TEXTUAL_VENDOR_SUFFIXES),
+       "a +json vendor type matches the vnd. prefix but also the textual-suffix exception (main() combines both)")
+
+# --- content-type comparison is case-insensitive (HTTP media types are case-insensitive per the spec) -------------
+mixed_case, mixed_method = fetch.to_text(b"<html><body><article><p>Cased content type.</p></article></body></html>", "Text/HTML; Charset=UTF-8")
+expect("Cased content type" in mixed_case, "a mixed-case Content-Type (Text/HTML) still triggers extraction, not just the body-sniff fallback")
+
+# --- a forced trafilatura exception falls back to stdlib and reports the exception type, without a crash ----------
+class _BoomExtractor:
+    def extract(self, *a, **kw):
+        raise ValueError("synthetic failure for the test")
+
+
+real_trafilatura = fetch._trafilatura
+fetch._trafilatura = _BoomExtractor()
+try:
+    boom_text, boom_method = fetch.extract_html("<html><body><article><p>Still extracted via stdlib.</p></article></body></html>")
+finally:
+    fetch._trafilatura = real_trafilatura
+expect("Still extracted via stdlib" in boom_text, "a trafilatura exception still falls back to a usable stdlib extraction")
+expect(boom_method == "stdlib (trafilatura: ValueError)", "the exception type is reported, not swallowed and not its message")
+
+# --- scio_local.py's t_fetch requests a much smaller budget by default, still capped at the 200 KB ceiling --------
+SERVER = os.path.join(os.path.dirname(HERE), "skills", "scio", "server")
+local_spec = importlib.util.spec_from_file_location("scio_local", os.path.join(SERVER, "scio_local.py"))
+scio_local = importlib.util.module_from_spec(local_spec)
+sys.path.insert(0, SERVER)
+local_spec.loader.exec_module(scio_local)
+
+expect(scio_local.DEFAULT_FETCH_BYTES == 20_000, "the MCP layer's default fetch budget is 20 KB, well under the 200 KB ceiling")
+expect(scio_local.MAX_FETCH_BYTES == 200_000, "the MCP layer's fetch ceiling still matches security.md §3's 200 KB")
+
+captured_args = {}
+
+
+def fake_run(script, args=(), **kw):
+    captured_args["args"] = args
+    return 0, "ok"
+
+
+real_run = scio_local.run
+scio_local.run = fake_run
+try:
+    scio_local.t_fetch({"url": "https://example.com"})
+    expect(captured_args["args"] == ["https://example.com", "--max-bytes", "20000"], "no max_bytes given: t_fetch requests the 20 KB default, not the full 200 KB ceiling")
+    scio_local.t_fetch({"url": "https://example.com", "max_bytes": 500_000})
+    expect(captured_args["args"] == ["https://example.com", "--max-bytes", "200000"], "an oversized max_bytes request is still clamped to the 200 KB ceiling")
+    scio_local.t_fetch({"url": "https://example.com", "max_bytes": 50_000})
+    expect(captured_args["args"] == ["https://example.com", "--max-bytes", "50000"], "an explicit in-range max_bytes is passed through unchanged")
+finally:
+    scio_local.run = real_run
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall extraction checks passed")
 sys.exit(1 if failures else 0)

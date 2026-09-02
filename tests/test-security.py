@@ -207,8 +207,10 @@ expect(approve(f"python3 {S}/verify-rules.py /tmp/served.json --out /tmp/out.jso
 expect(approve(f"python3 {S}/verify-rules.py /tmp/served.json") == "allow", "2: verify-rules.py without --out still is")
 expect(approve(f"python3 {S}/fetch.py https://example.com --max-bytes 999999999") is None, "6: fetch.py --max-bytes above the 200 KB budget is not auto-approved")
 expect(approve(f"python3 {S}/fetch.py https://example.com --max-bytes 200000") == "allow", "6: fetch.py --max-bytes 200000 still is")
+scio_local_src = open(os.path.join(HERE, "..", "server", "scio_local.py")).read()
 expect("min(int(a[a.index(\"--max-bytes\") + 1]), 200_000)" in open(os.path.join(HERE, "fetch.py")).read()
-       and "min(int(a[\"max_bytes\"]), 200_000)" in open(os.path.join(HERE, "..", "server", "scio_local.py")).read(), "6: fetch.py and scio-local clamp max_bytes")
+       and "min(int(a[\"max_bytes\"]), MAX_FETCH_BYTES)" in scio_local_src and "MAX_FETCH_BYTES = 200_000" in scio_local_src,
+       "6: fetch.py and scio-local clamp max_bytes to the 200 KB ceiling")
 for name, txt in (("VS Code", vs), ("OpenCode", "\n".join(l for l in oc.splitlines() if not l.strip().startswith("//"))), ("Antigravity", ag)):
     expect("__SCIO_SCRIPTS__" in txt and "(?:\\/[\\w.\\-\\/]+)?" not in txt and "*skills/scio/scripts/" not in txt and "(.*/)?skills/scio" not in txt,
            f"1: {name} approves only the absolute scripts directory (placeholder, no wildcard prefix)")

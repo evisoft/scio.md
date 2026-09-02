@@ -8,8 +8,8 @@ homoglyph/punycode hosts, identifiers in the query); follows at most 3 same-sche
 reads up to RAW_DOWNLOAD_CAP off the wire (a fixed, deliberately modest safety ceiling — not "large enough that no
 real page is ever cut off", which no fixed number can promise against a hostile page padding its head to dodge it;
 just enough that ordinary boilerplate ahead of the article no longer swallows the whole budget before extraction
-gets to run) — extracts the article content from that, stripping scripts/styles/nav/footer/form/dialog everywhere,
-plus header/aside and cookie/consent/breadcrumb containers outside the identified article, not just tags — then
+gets to run) — extracts the article content from that, stripping scripts/styles/nav/form/dialog everywhere, plus
+header/footer/aside and cookie/consent/breadcrumb containers outside an <article>/<main> ancestor, not just tags — then
 applies --max-bytes (default 200 KB, the budget of security.md §3, measured in actual UTF-8 bytes) to the
 *extracted* text, so the budget is spent on content instead of on boilerplate that happened to load first; refuses
 binary content types outright rather than decoding them as text; never sends cookies or the API key; runs
@@ -38,8 +38,18 @@ guard = import_module("guard-fetch")
 scan = import_module("scan-injection")
 
 # mirrors verify-rules.py's own pattern for an optional heavy dependency (cryptography, there): try it, fall back
-# when absent, never require it to install or run the skill
-EXTRACTOR_MODE = os.environ.get("SCIO_EXTRACTOR", "auto").strip().lower()
+# when absent, never require it to install or run the skill. Only ImportError is caught (not a bare Exception): a
+# present-but-broken trafilatura install (a version incompatibility, a corrupted wheel) raises and is visible,
+# rather than being silently misreported as "not installed."
+EXTRACTOR_MODES = {"auto", "stdlib", "trafilatura"}
+# `or "auto"` (not .get(..., "auto")): a variable set to an empty string is common by accident in shell scripts
+# (e.g. SCIO_EXTRACTOR="${SOME_CONFIG:-}") and should behave like "unset", not like an invalid explicit value
+EXTRACTOR_MODE = (os.environ.get("SCIO_EXTRACTOR") or "auto").strip().lower() or "auto"
+if EXTRACTOR_MODE not in EXTRACTOR_MODES:
+    # fail loudly rather than silently landing on "stdlib" for a typo (SCIO_EXTRACTOR=trafiltura would otherwise
+    # pass through `in ("auto", "trafilatura")` as False and quietly behave as stdlib, unnoticed)
+    print(f"scio fetch: SCIO_EXTRACTOR={EXTRACTOR_MODE!r} — must be one of {', '.join(sorted(EXTRACTOR_MODES))}.")
+    sys.exit(2)
 _trafilatura = None
 if EXTRACTOR_MODE in ("auto", "trafilatura"):
     try:
@@ -55,7 +65,13 @@ if EXTRACTOR_MODE in ("auto", "trafilatura"):
 # this ceiling has still only cost 500 KB of memory and decode work, not several megabytes.
 RAW_DOWNLOAD_CAP = 500_000
 BINARY_CONTENT_TYPES = ("image/", "audio/", "video/", "font/", "application/pdf", "application/zip",
-                         "application/octet-stream", "application/msword", "application/vnd.")
+                         "application/octet-stream", "application/msword", "application/vnd.",
+                         "application/x-rar", "application/x-7z", "application/gzip", "application/x-gzip",
+                         "application/x-bzip", "application/x-tar", "application/x-executable",
+                         "application/x-msdownload", "application/x-shockwave-flash")
+# a vendor MIME type ending in +xml or +json (e.g. application/vnd.api+json) is structured text by definition
+# (RFC 6839's structured syntax suffix) even though it starts with the generic "application/vnd." prefix above
+TEXTUAL_VENDOR_SUFFIXES = ("+xml", "+json")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -147,10 +163,15 @@ def fetch(url, cap=RAW_DOWNLOAD_CAP):
 
 
 # Unconditional structural boilerplate: never article content, safe to drop everywhere (nav menus, forms,
-# off-canvas dialogs, embedded/inert content). header/aside are handled separately below — nested inside
-# <article>/<main> they routinely carry exactly what a researcher needs (title, byline, dateline, a pull quote,
-# a definition box), so only a header/aside outside the content region is page chrome.
-STRUCTURAL_BOILERPLATE = {"script", "style", "noscript", "svg", "iframe", "nav", "footer", "form", "dialog"}
+# off-canvas dialogs, embedded/inert content). header/footer/aside are handled separately below (CONTEXTUAL_
+# BOILERPLATE) — nested inside an <article>/<main> ancestor they routinely carry exactly what a researcher needs
+# (title, byline, dateline, a pull quote, a definition box, an author bio, a correction notice, a licence line),
+# so only one that sits outside an <article>/<main> ancestor is page chrome.
+STRUCTURAL_BOILERPLATE = {"script", "style", "noscript", "svg", "iframe", "nav", "form", "dialog"}
+CONTEXTUAL_BOILERPLATE = {"header", "footer", "aside"}
+# "content root" names the two tags this heuristic trusts as marking the article, however they got there — it is
+# not identified content in any semantic sense: a page that puts navigation inside a literal <main> fools it just
+# as a pre-HTML5 page that puts its article in a bare <div> gets no benefit from this rule at all
 CONTENT_ROOTS = {"article", "main"}
 BLOCK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "td", "th", "dt", "dd",
               "section", "article", "main", "header", "aside", "pre", "blockquote", "figure", "figcaption",
@@ -175,11 +196,14 @@ class _Extractor(HTMLParser):
     conservative list of tags and class/id words that are boilerplate almost everywhere. It walks the tree with a
     proper open-tag stack (not a regex, so a `<div class="cookie-consent">` containing further nested `<div>`s is
     dropped as one subtree, not truncated at its first `</div>`) and drops STRUCTURAL_BOILERPLATE subtrees,
-    cookie/consent/breadcrumb subtrees, and header/aside subtrees that sit outside <article>/<main>; everything
-    else's text survives untouched. Not a full HTML5 parser — badly nested markup can make the open-tag stack
-    drift — but strictly more accurate than tag-stripping regexes, which have the same drift problem and no
-    boilerplate awareness at all. A page whose boilerplate uses none of these signals (plain <div> navigation, no
-    recognizable class names) will still leak through; trafilatura's density scoring catches those, this does not."""
+    cookie/consent/breadcrumb subtrees, and CONTEXTUAL_BOILERPLATE (header/footer/aside) subtrees that sit outside
+    an <article>/<main> ancestor; everything else's text survives untouched, including an <img alt="…"> caption,
+    labelled so it reads as a description rather than article prose (security.md's alt-text-is-scanned-like-prose
+    stance otherwise has nothing to scan, since a discarded attribute never reaches scan-injection.py at all). Not
+    a full HTML5 parser — badly nested markup can make the open-tag stack drift — but strictly more accurate than
+    tag-stripping regexes, which have the same drift problem and no boilerplate awareness at all. A page whose
+    boilerplate uses none of these signals (plain <div> navigation, no recognizable class names) will still leak
+    through; trafilatura's density scoring catches those, this does not."""
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.chunks = []
@@ -189,19 +213,23 @@ class _Extractor(HTMLParser):
     def _boilerplate(self, tag, attrs):
         # class/id boundary words win regardless of tag or nesting: a cookie/consent/breadcrumb container is
         # boilerplate even when it happens to be spelled <aside class="cookie-banner"> inside <article> — checked
-        # first so the header/aside ancestor rule below (which returns on tag alone) can never shadow it
+        # first so the header/footer/aside ancestor rule below (which returns on tag alone) can never shadow it
         blob = " ".join(v for k, v in attrs if k in ("class", "id") and v)
         if blob and _is_boundary_blob(blob):
             return True
         if tag in STRUCTURAL_BOILERPLATE:
             return True
-        if tag in ("header", "aside"):   # boilerplate only outside the identified content region — see CONTENT_ROOTS
+        if tag in CONTEXTUAL_BOILERPLATE:   # boilerplate only outside an <article>/<main> ancestor — see CONTENT_ROOTS
             return not (set(self.stack[:-1]) & CONTENT_ROOTS)
         return False
 
     def handle_starttag(self, tag, attrs):
         if tag in VOID_TAGS:
-            if tag == "br" and self.skip_root is None:
+            if tag == "img" and self.skip_root is None:
+                alt = next((v for k, v in attrs if k == "alt" and v), None)
+                if alt:
+                    self.chunks.append(f"\n[image: {alt}]\n")
+            elif tag == "br" and self.skip_root is None:
                 self.chunks.append("\n")
             return
         if tag in BLOCK_TAGS and self.skip_root is None:
@@ -217,7 +245,11 @@ class _Extractor(HTMLParser):
     def handle_endtag(self, tag):
         if tag in VOID_TAGS or tag not in self.stack:
             return
-        del self.stack[len(self.stack) - 1 - self.stack[::-1].index(tag):]   # closes mismatched inner tags too, browser-style
+        # closes the matched element and any unmatched inner entries still open above it (e.g. a page that skips
+        # </p> before the next block, which real HTML auto-closes). This is not HTML5 tree-construction recovery —
+        # no implied end tags, no adoption agency algorithm — just enough that one ordinary omission doesn't drift
+        # the stack permanently; a genuinely mismatched *extra* closing tag can still desync it (docstring above).
+        del self.stack[len(self.stack) - 1 - self.stack[::-1].index(tag):]
         if self.skip_root is not None and len(self.stack) < self.skip_root:
             self.skip_root = None
 
@@ -227,13 +259,16 @@ class _Extractor(HTMLParser):
 
 
 def _stdlib_extract(body):
+    """Returns (text, ok) — ok is False when the parser raised partway through, so a caller can tell "the page was
+    short" from "parsing broke and this is an incomplete prefix", the same distinction extract_html already makes
+    for a trafilatura exception."""
     parser = _Extractor()
     try:
         parser.feed(body)
         parser.close()
     except Exception:   # malformed markup the parser cannot recover from: whatever was collected so far is still better than nothing
-        pass
-    return "".join(parser.chunks)
+        return "".join(parser.chunks), False
+    return "".join(parser.chunks), True
 
 
 def extract_html(body, url=None):
@@ -246,11 +281,14 @@ def extract_html(body, url=None):
         try:
             extracted = _trafilatura.extract(body, url=url, include_comments=False, include_tables=True, favor_precision=True)
         except Exception as e:
-            return _stdlib_extract(body), f"stdlib (trafilatura: {type(e).__name__})"
+            text, ok = _stdlib_extract(body)
+            return text, f"stdlib{'' if ok else ' (parse error)'} (trafilatura: {type(e).__name__})"
         if extracted and extracted.strip():
             return extracted, "trafilatura"
-        return _stdlib_extract(body), "stdlib (trafilatura: no article content detected)"
-    return _stdlib_extract(body), "stdlib"
+        text, ok = _stdlib_extract(body)
+        return text, f"stdlib{'' if ok else ' (parse error)'} (trafilatura: no article content detected)"
+    text, ok = _stdlib_extract(body)
+    return text, "stdlib" if ok else "stdlib (parse error)"
 
 
 def truncate_utf8(text, max_bytes):
@@ -278,7 +316,7 @@ def to_text(data, ctype, url=None):
     except LookupError:
         body = data.decode("utf-8", errors="replace")
     method = "text"
-    if "html" in (ctype or "") or re.search(r"<html|<body|<p\b", body, re.I):
+    if "html" in (ctype or "").lower() or re.search(r"<html|<body|<p\b", body, re.I):   # HTTP media types are case-insensitive
         body, method = extract_html(body, url)
     body = re.sub(r"[ \t]+", " ", body)
     return re.sub(r"\n\s*\n+", "\n\n", body).strip(), method
@@ -307,7 +345,7 @@ def main():
         sys.exit(1)
     data, ctype, raw_truncated = result
     base_ctype = (ctype or "").split(";")[0].strip().lower()
-    if base_ctype.startswith(BINARY_CONTENT_TYPES):
+    if base_ctype.startswith(BINARY_CONTENT_TYPES) and not base_ctype.endswith(TEXTUAL_VENDOR_SUFFIXES):
         # decoding a binary payload as text and running it through extraction/scanning wastes cycles on garbage
         # that was never going to be readable; say so plainly instead of returning mojibake as if it were an article
         print(f"scio fetch: {final} ({base_ctype or 'unknown type'}, {len(data)} bytes received) — binary content type, not decoded as text.")
