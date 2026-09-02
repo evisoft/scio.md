@@ -3,10 +3,12 @@
     python3 tests/test-extraction.py
 Exercises the pure functions directly (no network — guard-fetch.py refuses every address a local test server
 could bind to, by design, so this never goes through fetch()/get_once()). Covers the token-efficiency fix: dropping
-structural boilerplate (nav/header/footer/aside/form/dialog) and cookie/consent/breadcrumb containers by a real
-open-tag stack rather than a truncate-then-strip regex, without over-stripping legitimately named containers, and
-applying the --max-bytes budget to the extracted text instead of to the raw download. Exit 0 when every case holds."""
-import importlib.util, os, sys
+structural boilerplate (nav/footer/form/dialog) and, outside <article>/<main>, header/aside and cookie/consent/
+breadcrumb containers, by a real open-tag stack rather than a truncate-then-strip regex; retaining header/aside
+nested inside the identified article (titles, bylines, callouts); applying the --max-bytes budget (actual UTF-8
+bytes, not Unicode code points) to the extracted text instead of to the raw download; and refusing binary content
+types outright. Exit 0 when every case holds."""
+import contextlib, importlib.util, io, os, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(os.path.dirname(HERE), "skills", "scio", "scripts")
@@ -26,6 +28,24 @@ def expect(cond, msg):
 
 def extract(html):
     return fetch._stdlib_extract(html)
+
+
+def run_main(argv, page_html, ctype="text/html"):
+    """Runs fetch.main() with fetch() monkeypatched to return page_html without touching the network — guard-fetch.py
+    would refuse any address a local test server could bind to anyway, so this is the only way to exercise main()."""
+    real_fetch, real_argv = fetch.fetch, sys.argv
+    fetch.fetch = lambda url, cap=None: ((page_html.encode(), ctype, False), None, url)
+    sys.argv = ["fetch.py"] + argv
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            try:
+                fetch.main()
+            except SystemExit:
+                pass
+    finally:
+        fetch.fetch, sys.argv = real_fetch, real_argv
+    return buf.getvalue()
 
 
 # --- structural boilerplate: dropped wherever it sits, however deep --------------------------------------------
@@ -101,6 +121,67 @@ expect(method in ("trafilatura", "stdlib"), "to_text reports which extractor ran
 plain, plain_method = fetch.to_text(b"plain text, no markup here", "text/plain")
 expect(plain == "plain text, no markup here", "plain text is untouched")
 expect(plain_method == "text", "non-HTML content is reported as method='text', not run through either extractor")
+
+# --- header/aside nested in <article>/<main> carry exactly what a researcher needs: retained ---------------------
+article_meta = """
+<html><body>
+<div class="site-header"><nav>Home About Contact</nav></div>
+<article>
+  <header><h1>The Real Headline</h1><p class="byline">By Jane Researcher, 2026-01-01</p></header>
+  <p>The body text of the article.</p>
+  <aside><p>Editor's note: a definition box worth keeping.</p></aside>
+</article>
+</body></html>
+"""
+out = extract(article_meta)
+expect("The Real Headline" in out, "an <article><header> title survives (was unconditionally dropped before this fix)")
+expect("By Jane Researcher" in out, "a byline inside an article header survives")
+expect("The body text of the article" in out, "ordinary article body text still survives")
+expect("Editor's note: a definition box worth keeping" in out, "an <aside> nested inside <article> survives (was unconditionally dropped before this fix)")
+expect("Home About Contact" not in out, "a site-level header outside <article>/<main> is still dropped")
+
+# --- byte-accurate truncation: --max-bytes means UTF-8 bytes, not Python's len() (Unicode code points) -----------
+# each "中" is 3 UTF-8 bytes but 1 code point: a char-based cap would let 3x the promised bytes through
+cjk = "中" * 100
+capped, was_truncated, returned = fetch.truncate_utf8(cjk, 30)
+expect(was_truncated, "a 300-byte string is truncated against a 30-byte budget")
+expect(returned <= 30, "truncate_utf8 never returns more than max_bytes of UTF-8-encoded text")
+expect(len(capped.encode("utf-8")) == returned, "the reported byte count matches the actual encoded length")
+expect("�" not in capped, "a multi-byte character is never split into a replacement character")
+untouched, was_truncated2, returned2 = fetch.truncate_utf8("short", 1000)
+expect(not was_truncated2 and untouched == "short" and returned2 == 5, "text under the budget is returned unchanged")
+paragraphs = "First paragraph, fairly short.\n\nSecond paragraph that runs long enough to cross the byte budget here."
+cut, cut_truncated, _ = fetch.truncate_utf8(paragraphs, 45)
+expect(cut_truncated and cut == "First paragraph, fairly short.", "a truncation is pulled back to the preceding paragraph break instead of landing mid-sentence")
+
+# --- binary content types are recognized and refused rather than decoded as text ---------------------------------
+expect("image/jpeg".startswith(fetch.BINARY_CONTENT_TYPES), "image/jpeg is recognized as a binary content type")
+expect("application/pdf".startswith(fetch.BINARY_CONTENT_TYPES), "application/pdf is recognized as a binary content type")
+expect(not "text/html".startswith(fetch.BINARY_CONTENT_TYPES), "text/html is not treated as binary")
+expect(not "application/xhtml+xml".startswith(fetch.BINARY_CONTENT_TYPES), "application/xhtml+xml is not treated as binary")
+
+# --- main() end to end: diagnostics header, binary refusal, low-content warning (fetch() monkeypatched, no network)
+out_main = run_main(["https://example.com/article"], "<html><body><article><p>Hello world.</p></article></body></html>")
+expect("bytes via stdlib" in out_main and "Hello world." in out_main, "main() reports the extraction method and still prints the extracted text")
+out_bin = run_main(["https://example.com/photo.jpg"], "ignored", ctype="image/jpeg")
+expect("binary content type, not decoded as text" in out_bin, "main() refuses a binary content type before decoding or scanning it")
+sparse_page = "<html><body><header>" + ("x " * 4000) + "</header><nav>" + ("y " * 4000) + "</nav></body></html>"
+out_sparse = run_main(["https://example.com/js-app"], sparse_page)
+expect("may need JavaScript to render" in out_sparse, "main() flags a substantial page that extracted almost nothing, instead of returning an unexplained near-empty result")
+
+# --- SCIO_EXTRACTOR pins the extractor for fleets that want identical behaviour everywhere ------------------------
+try:
+    import trafilatura as _installed_trafilatura   # noqa: F401
+    has_trafilatura = True
+except ImportError:
+    has_trafilatura = False
+env = dict(os.environ, SCIO_EXTRACTOR="trafilatura")
+r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "fetch.py")], capture_output=True, text=True, env=env)
+if has_trafilatura:
+    expect(r.returncode != 1 or "not importable" not in r.stdout, "SCIO_EXTRACTOR=trafilatura runs normally when the package is importable")
+else:
+    expect(r.returncode == 1 and "SCIO_EXTRACTOR=trafilatura" in r.stdout and "not importable" in r.stdout,
+           "SCIO_EXTRACTOR=trafilatura refuses to run when the package is missing, instead of silently falling back to stdlib")
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall extraction checks passed")
 sys.exit(1 if failures else 0)
