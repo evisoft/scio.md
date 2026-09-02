@@ -31,11 +31,11 @@ def extract(html):
     return text
 
 
-def run_main(argv, page_html, ctype="text/html"):
+def run_main(argv, page_html, ctype="text/html", raw_truncated=False):
     """Runs fetch.main() with fetch() monkeypatched to return page_html without touching the network — guard-fetch.py
     would refuse any address a local test server could bind to anyway, so this is the only way to exercise main()."""
     real_fetch, real_argv = fetch.fetch, sys.argv
-    fetch.fetch = lambda url, cap=None: ((page_html.encode(), ctype, False), None, url)
+    fetch.fetch = lambda url, cap=None: ((page_html.encode(), ctype, raw_truncated), None, url)
     sys.argv = ["fetch.py"] + argv
     buf = io.StringIO()
     try:
@@ -185,6 +185,12 @@ sparse_page = "<html><body><header>" + ("x " * 4000) + "</header><nav>" + ("y " 
 out_sparse = run_main(["https://example.com/js-app"], sparse_page)
 expect("may need JavaScript to render" in out_sparse, "main() flags a substantial page that extracted almost nothing, instead of returning an unexplained near-empty result")
 
+# --- raw truncation gets its own prominent warning, distinct from an ordinary budget truncation --------------------
+out_raw_trunc = run_main(["https://example.com/big-page"], "<html><body><article><p>Some content.</p></article></body></html>", raw_truncated=True)
+expect("WARNING" in out_raw_trunc and "may be incomplete" in out_raw_trunc, "a raw download cap triggers a standalone, stronger warning than a plain budget truncation")
+out_no_raw_trunc = run_main(["https://example.com/small-page"], "<html><body><article><p>Some content.</p></article></body></html>")
+expect("WARNING" not in out_no_raw_trunc, "no raw-truncation warning appears when the raw download was not capped")
+
 # --- SCIO_EXTRACTOR pins the extractor for fleets that want identical behaviour everywhere ------------------------
 try:
     import trafilatura as _installed_trafilatura   # noqa: F401
@@ -194,10 +200,23 @@ except ImportError:
 env = dict(os.environ, SCIO_EXTRACTOR="trafilatura")
 r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "fetch.py")], capture_output=True, text=True, env=env)
 if has_trafilatura:
-    expect(r.returncode != 1 or "not importable" not in r.stdout, "SCIO_EXTRACTOR=trafilatura runs normally when the package is importable")
+    expect(r.returncode != 1 or "not installed" not in r.stdout, "SCIO_EXTRACTOR=trafilatura runs normally when the package is importable")
 else:
-    expect(r.returncode == 1 and "SCIO_EXTRACTOR=trafilatura" in r.stdout and "not importable" in r.stdout,
+    expect(r.returncode == 1 and "SCIO_EXTRACTOR=trafilatura" in r.stdout and "not installed" in r.stdout,
            "SCIO_EXTRACTOR=trafilatura refuses to run when the package is missing, instead of silently falling back to stdlib")
+
+# --- a package present on disk but failing to import (a broken transitive dependency) is reported distinctly from
+# "not installed" — find_spec() sees it as present, so the failure must come from the import itself
+import tempfile as _tf
+fake_pkg_dir = _tf.mkdtemp()
+os.makedirs(os.path.join(fake_pkg_dir, "trafilatura"))
+with open(os.path.join(fake_pkg_dir, "trafilatura", "__init__.py"), "w") as f:
+    f.write("raise ImportError(\"No module named 'lxml.etree'\")\n")
+broken_env = dict(os.environ, SCIO_EXTRACTOR="trafilatura", PYTHONPATH=fake_pkg_dir + os.pathsep + os.environ.get("PYTHONPATH", ""))
+r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "fetch.py")], capture_output=True, text=True, env=broken_env)
+expect(r.returncode == 1 and "failed to import" in r.stdout and "not installed" not in r.stdout,
+       "a present-but-broken trafilatura install is reported as 'failed to import', distinct from 'not installed'")
+expect("ImportError" in r.stdout, "the broken-import diagnostic names the actual exception type")
 
 
 def extractor_mode(value):
@@ -236,10 +255,30 @@ expect("Site-wide legal boilerplate" not in out, "a page-level <footer> outside 
 # --- meaningful <img alt> text is kept and labelled, not silently discarded (security.md: alt text is scanned like prose)
 alt_page = '<html><body><article><p>Before.</p><img src="chart.png" alt="Revenue rose 12% year over year"><p>After.</p></article></body></html>'
 out = extract(alt_page)
-expect("[image: Revenue rose 12% year over year]" in out, "meaningful alt text is kept, labelled as an image description")
+expect("[image description: Revenue rose 12% year over year]" in out, "meaningful alt text is kept, labelled as an image description")
 expect("Before." in out and "After." in out, "surrounding text is unaffected by the alt-text capture")
 empty_alt = '<html><body><article><img src="spacer.gif" alt=""><p>Text.</p></article></body></html>'
-expect("[image:" not in extract(empty_alt), "an empty alt attribute produces no image-description line")
+expect("[image description:" not in extract(empty_alt), "an empty alt attribute produces no image-description line")
+whitespace_alt = '<html><body><article><img src="a.png" alt="  padded   \n  text  "></article></body></html>'
+expect("[image description: padded text]" in extract(whitespace_alt), "embedded whitespace in alt text is collapsed before it is emitted")
+presentation_alt = '<html><body><article><img src="deco.png" alt="decorative flourish" role="presentation"></article></body></html>'
+expect("decorative flourish" not in extract(presentation_alt), "role='presentation' images are treated as decorative, not a caption, even with alt text present")
+
+# --- a single huge alt value cannot displace the article; many small ones cannot add up to displace it either -----
+huge_alt = '<html><body><article><p>Real.</p><img src="a.png" alt="' + ("x" * 5000) + '"></article></body></html>'
+huge_out = extract(huge_alt)
+expect(huge_out.count("x") <= fetch.MAX_ALT_TEXT_CHARS, "a single oversized alt value is capped, not emitted in full")
+expect("Real." in huge_out, "the article text is unaffected by a capped oversized alt value")
+many_alts = "".join(f'<img src="a{i}.png" alt="alt number {i} padding padding padding padding">' for i in range(50))
+many_html = f'<html><body><article><p>Start.</p>{many_alts}<p>End.</p></article></body></html>'
+many_parser = fetch._Extractor()
+many_parser.feed(many_html)
+many_parser.close()
+many_out = "".join(many_parser.chunks)
+expect(many_parser.alt_budget <= 0, "50 images each well under the per-image cap still exhaust the aggregate alt-text budget")
+expect(sum(len(c) for c in many_parser.chunks if c.startswith("\n[image description: ")) < fetch.MAX_TOTAL_ALT_TEXT_CHARS * 2,
+       "the alt-text content actually emitted (labels aside) stays within a small multiple of the aggregate cap, not unbounded")
+expect("Start." in many_out and "End." in many_out, "article text before and after a run of images both survive the aggregate alt-text cap")
 
 # --- expanded binary denylist covers common archive/executable types; +xml/+json vendor types are still textual ---
 for binary_type in ("application/x-rar-compressed", "application/x-7z-compressed", "application/gzip", "application/x-executable"):
@@ -293,6 +332,14 @@ try:
     expect(captured_args["args"] == ["https://example.com", "--max-bytes", "200000"], "an oversized max_bytes request is still clamped to the 200 KB ceiling")
     scio_local.t_fetch({"url": "https://example.com", "max_bytes": 50_000})
     expect(captured_args["args"] == ["https://example.com", "--max-bytes", "50000"], "an explicit in-range max_bytes is passed through unchanged")
+    scio_local.t_fetch({"url": "https://example.com", "max_bytes": 0})
+    expect(captured_args["args"] == ["https://example.com", "--max-bytes", "1"], "an explicit max_bytes of 0 is clamped to the floor of 1, not silently swapped for the unrelated 20 KB default")
+    scio_local.t_fetch({"url": "https://example.com", "max_bytes": -50})
+    expect(captured_args["args"] == ["https://example.com", "--max-bytes", "1"], "a negative max_bytes is clamped to the floor of 1")
+    scio_local.t_fetch({"url": "https://example.com", "max_bytes": 1})
+    expect(captured_args["args"] == ["https://example.com", "--max-bytes", "1"], "the minimum boundary value 1 is passed through unchanged")
+    scio_local.t_fetch({"url": "https://example.com", "max_bytes": 200_000})
+    expect(captured_args["args"] == ["https://example.com", "--max-bytes", "200000"], "the maximum boundary value 200000 is passed through unchanged")
 finally:
     scio_local.run = real_run
 

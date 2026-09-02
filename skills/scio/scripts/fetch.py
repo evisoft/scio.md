@@ -25,8 +25,13 @@ on each machine: unset/"auto" (default) prefers trafilatura when present; "stdli
 "trafilatura" requires the package and refuses to fetch (rather than silently falling back) when it is missing.
 
 Use this instead of a raw fetch tool when your harness has no PreToolUse hooks (Codex, Gemini CLI, OpenClaw, scripts).
-Prefer scio_verify_source for sources you will cite: it archives the page and judges reliability on the server."""
-import http.client, os, re, socket, sys, urllib.error, urllib.parse, urllib.request
+Prefer scio_verify_source for sources you will cite: it archives the page and judges reliability on the server.
+
+This CLI's own --max-bytes default is 200 KB, the full security.md §3 ceiling — deliberately, for direct human- or
+script-directed use. The `fetch` tool on scio-local (server/scio_local.py) wraps this same script but requests a
+much smaller 20 KB default of its own when its caller doesn't specify one; the two defaults differ on purpose, not
+by oversight — see DEFAULT_FETCH_BYTES there."""
+import http.client, importlib.util, os, re, socket, sys, urllib.error, urllib.parse, urllib.request
 from html.parser import HTMLParser
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scio_common import USER_AGENT
@@ -37,10 +42,6 @@ sys.path.insert(0, HERE)
 guard = import_module("guard-fetch")
 scan = import_module("scan-injection")
 
-# mirrors verify-rules.py's own pattern for an optional heavy dependency (cryptography, there): try it, fall back
-# when absent, never require it to install or run the skill. Only ImportError is caught (not a bare Exception): a
-# present-but-broken trafilatura install (a version incompatibility, a corrupted wheel) raises and is visible,
-# rather than being silently misreported as "not installed."
 EXTRACTOR_MODES = {"auto", "stdlib", "trafilatura"}
 # `or "auto"` (not .get(..., "auto")): a variable set to an empty string is common by accident in shell scripts
 # (e.g. SCIO_EXTRACTOR="${SOME_CONFIG:-}") and should behave like "unset", not like an invalid explicit value
@@ -52,12 +53,28 @@ if EXTRACTOR_MODE not in EXTRACTOR_MODES:
     sys.exit(2)
 _trafilatura = None
 if EXTRACTOR_MODE in ("auto", "trafilatura"):
-    try:
-        import trafilatura as _trafilatura
-    except ImportError:
+    # find_spec() first: "not on disk at all" (find_spec returns None) is a different situation from "on disk but
+    # failed to import" (a broken transitive dependency, e.g. trafilatura installed but its own `from lxml import
+    # etree` fails — that raises plain ImportError too, so a bare `except ImportError` around the import statement
+    # cannot tell the two apart; find_spec resolves the package's own presence without running its code, so the
+    # distinction is known before the import is attempted at all)
+    _spec = importlib.util.find_spec("trafilatura")
+    if _spec is None:
         if EXTRACTOR_MODE == "trafilatura":
-            print("scio fetch: SCIO_EXTRACTOR=trafilatura but the package is not importable (pip install trafilatura); refusing rather than silently switching extractor.")
+            print("scio fetch: SCIO_EXTRACTOR=trafilatura but the package is not installed (pip install trafilatura); refusing rather than silently switching extractor.")
             sys.exit(1)
+    else:
+        try:
+            _trafilatura = import_module("trafilatura")
+        except Exception as e:
+            # present on disk, failed to import: a genuinely broken install (its own dependency missing, a
+            # version conflict) — auto mode degrades to stdlib exactly as it would for "not installed", since an
+            # ambient optional package's brokenness should never stop the fetch itself from working; trafilatura
+            # mode reports what actually happened (the full message, not just the type: this exception comes from
+            # importing a local package, never from page content, so nothing attacker-controlled can be in it)
+            if EXTRACTOR_MODE == "trafilatura":
+                print(f"scio fetch: SCIO_EXTRACTOR=trafilatura but the installed package failed to import ({type(e).__name__}: {e}); this is a broken install or a missing dependency of trafilatura itself, not something `pip install trafilatura` alone necessarily fixes.")
+                sys.exit(1)
 
 # a fixed safety ceiling on bytes actually read off the wire — independent of --max-bytes, which bounds the
 # extracted text (security.md §3), not the raw download. Kept modest (not "a page's worth of head/scripts/nav
@@ -193,6 +210,10 @@ def _is_boundary_blob(blob):
     return any(tok.lower() in BOUNDARY_WORDS for tok in _TOKEN_RE.findall(blob))
 
 
+MAX_ALT_TEXT_CHARS = 400        # a single alt attribute this size or larger is not a caption, it's page-weight
+MAX_TOTAL_ALT_TEXT_CHARS = 2_000   # across the whole page: many small alts should not add up to a budget-eating wall
+
+
 class _Extractor(HTMLParser):
     """A boilerplate-aware visible-text sanitizer, not real main-content extraction: it has no candidate scoring,
     no text/link-density measurement, no notion of "the" main container — it only knows a short, deliberately
@@ -200,18 +221,20 @@ class _Extractor(HTMLParser):
     proper open-tag stack (not a regex, so a `<div class="cookie-consent">` containing further nested `<div>`s is
     dropped as one subtree, not truncated at its first `</div>`) and drops STRUCTURAL_BOILERPLATE subtrees,
     cookie/consent/breadcrumb subtrees, and CONTEXTUAL_BOILERPLATE (header/footer/aside) subtrees that sit outside
-    an <article>/<main> ancestor; everything else's text survives untouched, including an <img alt="…"> caption,
-    labelled so it reads as a description rather than article prose (security.md's alt-text-is-scanned-like-prose
-    stance otherwise has nothing to scan, since a discarded attribute never reaches scan-injection.py at all). Not
-    a full HTML5 parser — badly nested markup can make the open-tag stack drift — but strictly more accurate than
-    tag-stripping regexes, which have the same drift problem and no boilerplate awareness at all. A page whose
-    boilerplate uses none of these signals (plain <div> navigation, no recognizable class names) will still leak
-    through; trafilatura's density scoring catches those, this does not."""
+    an <article>/<main> ancestor; everything else's text survives untouched, including a bounded <img alt="…">
+    description (security.md's alt-text-is-scanned-like-prose stance otherwise has nothing to scan, since a
+    discarded attribute never reaches scan-injection.py at all; capped per image and in aggregate because remote
+    HTML fully controls this text and an unbounded alt value would otherwise be a way to displace the article
+    inside the extracted-text budget). Not a full HTML5 parser — badly nested markup can make the open-tag stack
+    drift — but strictly more accurate than tag-stripping regexes, which have the same drift problem and no
+    boilerplate awareness at all. A page whose boilerplate uses none of these signals (plain <div> navigation, no
+    recognizable class names) will still leak through; trafilatura's density scoring catches those, this does not."""
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.chunks = []
         self.stack = []          # open non-void tag names, document order
         self.skip_root = None    # stack depth at which the current boilerplate subtree started; None = not skipping
+        self.alt_budget = MAX_TOTAL_ALT_TEXT_CHARS
 
     def _boilerplate(self, tag, attrs):
         # class/id boundary words win regardless of tag or nesting: a cookie/consent/breadcrumb container is
@@ -226,12 +249,23 @@ class _Extractor(HTMLParser):
             return not (set(self.stack[:-1]) & CONTENT_ROOTS)
         return False
 
+    def _image_description(self, attrs):
+        d = dict(attrs)
+        if (d.get("role") or "").strip().lower() == "presentation":   # explicitly marked decorative: never a caption
+            return None
+        alt = " ".join((d.get("alt") or "").split())   # collapse embedded whitespace before measuring or capping
+        if not alt or self.alt_budget <= 0:
+            return None
+        alt = alt[:min(MAX_ALT_TEXT_CHARS, self.alt_budget)]
+        self.alt_budget -= len(alt)
+        return alt
+
     def handle_starttag(self, tag, attrs):
         if tag in VOID_TAGS:
             if tag == "img" and self.skip_root is None:
-                alt = next((v for k, v in attrs if k == "alt" and v), None)
+                alt = self._image_description(attrs)
                 if alt:
-                    self.chunks.append(f"\n[image: {alt}]\n")
+                    self.chunks.append(f"\n[image description: {alt}]\n")
             elif tag == "br" and self.skip_root is None:
                 self.chunks.append("\n")
             return
@@ -366,6 +400,12 @@ def main():
     trunc_note = f", {returned_bytes} returned (budget-truncated)" if text_truncated else ""
     print(f"scio fetch: {final} ({base_ctype or 'unknown type'}, {len(data)} bytes received"
           f"{' (raw download capped)' if raw_truncated else ''}, {extracted_bytes} bytes via {method}{trunc_note})")
+    if raw_truncated:
+        # a stronger, standalone warning: unlike a budget truncation (the article was read in full, just cut for
+        # length), this means part of the page was never downloaded at all — the article itself may be missing
+        # content, not just the returned text. security.md's own guidance for a partial read: judge from what you
+        # have, and say "partial read" rather than treat it as the whole page.
+        print("scio fetch: WARNING — the raw response was capped before extraction ran; the source may be incomplete, not just the excerpt returned. Treat this as a partial read (security.md §3).")
     if extracted_bytes < 200 and len(data) > 5_000:
         print("scio fetch: extraction found very little content from a substantial page — it may need JavaScript to render, be paywalled, or be mostly navigation; do not treat this as a confirmed empty source.")
     if findings:
