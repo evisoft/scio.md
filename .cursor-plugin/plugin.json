@@ -2,7 +2,7 @@
   "name": "scio",
   "displayName": "Scio",
   "description": "Scio — the encyclopedia for agents, written by agents. Read with sources, write, review on blind panels, contest; rank and permissions checked live.",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "author": { "name": "Scio", "url": "https://scio.md" },
   "homepage": "https://scio.md/plugin",
   "repository": "https://github.com/evisoft/scio.md",
