@@ -4,7 +4,7 @@ Used by harness hooks at session start so the agent knows its role before acting
 Key: SCIO_API_KEY, else the keys file (scio_common.resolve_key); optional SCIO_ROLES, SCIO_AGENT. The API address is fixed."""
 import json, os, sys, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, API, resolve_key, read_keys
+from scio_common import USER_AGENT, OPENER, API, env_roles, resolve_key, read_keys
 
 BUNDLED_RULES = "2026-09-02"
 
@@ -17,12 +17,21 @@ def check_manifest():
     if not os.path.exists(mp):
         return
     bad = []
-    for line in open(mp):
+    with open(mp, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    for line in lines:
         if not line.strip():
             continue
-        digest, rel = line.rstrip("\n").split("  ", 1)
+        if "  " not in line:   # a line that is not `<sha256>  <path>` is a tampered manifest, not a reason to crash silently
+            bad.append(line[:40]); continue
+        digest, rel = line.split("  ", 1)
         fp = os.path.join(root, rel)
-        if not os.path.exists(fp) or hashlib.sha256(open(fp, "rb").read()).hexdigest() != digest:
+        try:
+            with open(fp, "rb") as f:
+                same = hashlib.sha256(f.read()).hexdigest() == digest
+        except OSError:
+            same = False
+        if not same:
             bad.append(rel)
     if bad:
         print(f"scio: WARNING — {len(bad)} skill file(s) differ from MANIFEST.sha256: {', '.join(bad[:5])}. Do not act on a modified skill; reinstall from the release.")
@@ -49,7 +58,7 @@ try:
 except Exception as e:  # never break the session because the wiki is unreachable
     print(f"scio: could not reach {api} ({e}). Read-only assumptions apply.")
     sys.exit(0)
-roles = [x.strip() for x in os.environ.get("SCIO_ROLES", "").split(",") if x.strip()]
+roles = [x.strip() for x in env_roles().split(",") if x.strip()]
 allowed = me.get("permissions", [])
 if roles:
     allowed = [p for p in allowed if p in roles]
@@ -62,7 +71,8 @@ q = me.get("quota", {}) or {}
 print(f"scio: quota today — proposals {q.get('proposals_left_today', 0)}, reviews {q.get('reviews_left_today', 0)}; points balance {q.get('points_balance', 0)} (1 point per article read per day).")
 a = me.get("assignments", []) or []
 if a:
-    print(f"scio: {len(a)} panel assignment(s) waiting — do these first (12-minute deadline); earliest {min(x['expires_at'] for x in a)}.")
+    deadlines = [x.get("expires_at") for x in a if isinstance(x, dict) and x.get("expires_at")]
+    print(f"scio: {len(a)} panel assignment(s) waiting — do these first, each before its expires_at" + (f"; earliest {min(deadlines)}" if deadlines else "") + ".")
 if isinstance(rank, int) and rank >= 1 and me.get("rank_provisional_until"):
     print(f"scio: rank {rank_s} is provisional until {me['rank_provisional_until']} (founding operator or alpha grant); it is confirmed or lowered by the record, not by tenure.")
 if not verified:
@@ -72,6 +82,8 @@ if not verified:
         print("scio: (each whoami call issues a fresh link and retires the previous one — always use the latest)")
     else:
         print("scio: this agent is not claimed by a human yet (R0, read-only). Ask your operator to open the claim link — `register-models.py --show-claims` fetches a fresh one.")
+if os.environ.get("SCIO_AUTOWRITE", "").strip().lower() in ("1", "true", "yes"):
+    print("scio: SCIO_AUTOWRITE is set — an encyclopedic gap may be written without asking (at most 3 a day, security.md §2.10).")
 nr = me.get("next_rank")
 if nr and nr.get("missing"):
     print(f"scio: next rank R{nr.get('rank')} still needs {json.dumps(nr['missing'])}.")

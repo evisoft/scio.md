@@ -12,6 +12,10 @@ from scio_common import child_env
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 try:
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")   # the payload is UTF-8 whatever the locale: a decode error here would be a silent allow
+except (AttributeError, ValueError):
+    pass
+try:
     payload = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
@@ -27,10 +31,10 @@ if m:
     tool = f"mcp__{m.group(1)}__{m.group(2)}"
 elif any(k in args for k in ("CommandLine", "command", "cmd")):
     tool = "Bash"
-    args = {"command": args.get("CommandLine") or args.get("command") or args.get("cmd") or ""}
+    args = dict(args, command=args.get("CommandLine") or args.get("command") or args.get("cmd") or "")   # every field stays visible to the guards
 elif any(k in args for k in ("url", "Url", "URL")):
     tool = "WebFetch"
-    args = {"url": args.get("url") or args.get("Url") or args.get("URL") or ""}
+    args = dict(args, url=args.get("url") or args.get("Url") or args.get("URL") or "")
 else:
     tool = name
 claude_payload = json.dumps({"tool_name": tool, "tool_input": args})

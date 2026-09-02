@@ -17,7 +17,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def pinned_key():
-    fm = open(os.path.join(HERE, "..", "SKILL.md")).read().split("\n---\n", 1)[0]
+    with open(os.path.join(HERE, "..", "SKILL.md"), encoding="utf-8") as f:
+        fm = f.read().split("\n---\n", 1)[0]
     m = re.search(r'rules-signing-key:\s*"ed25519:([A-Za-z0-9+/=]+)"', fm)
     if not m:
         sys.exit("no rules-signing-key pinned in SKILL.md")
@@ -51,7 +52,10 @@ def verify(pub_b64, canonical, sig_b64):
     pem = f"-----BEGIN PUBLIC KEY-----\n{spki}\n-----END PUBLIC KEY-----\n"
     with tempfile.TemporaryDirectory() as d:
         open(f"{d}/k.pem", "w").write(pem); open(f"{d}/m", "w").write(canonical); open(f"{d}/s", "wb").write(sig)
-        r = subprocess.run(["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", f"{d}/k.pem", "-rawin", "-in", f"{d}/m", "-sigfile", f"{d}/s"], capture_output=True)
+        try:
+            r = subprocess.run(["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", f"{d}/k.pem", "-rawin", "-in", f"{d}/m", "-sigfile", f"{d}/s"], capture_output=True)
+        except FileNotFoundError:
+            sys.exit("neither the cryptography package nor openssl is available to check the signature: pip install cryptography (rules not adopted)")
         return r.returncode == 0
 
 
@@ -59,7 +63,8 @@ def main():
     a = sys.argv[1:]
     if not a:
         print(__doc__.strip()); sys.exit(2)
-    doc = json.load(open(a[0]))
+    with open(a[0], encoding="utf-8") as f:
+        doc = json.load(f)
     key = a[a.index("--key") + 1] if "--key" in a else pinned_key()
     for f in ("canonical", "signature", "version"):
         if f not in doc:
@@ -91,8 +96,10 @@ def main():
             if os.path.commonpath([real, root_real]) != root_real:
                 sys.exit(f"refused to write outside the task work root ({wd.root}): {out}")
             os.makedirs(os.path.dirname(real), exist_ok=True)
-            json.dump(signed, open(real, "w"), indent=2, ensure_ascii=False)
-        print(f"ok: rules {doc['version']} signed by pinned key ({doc.get('signing_key_id', '?')}), effective {doc.get('effective_at')}"
+            with open(real, "w", encoding="utf-8") as f:
+                json.dump(signed, f, indent=2, ensure_ascii=False)
+        by = "the key given with --key (NOT the pinned key: adopt only what the pinned key signs)" if "--key" in a else f"pinned key ({doc.get('signing_key_id', '?')})"
+        print(f"ok: rules {doc['version']} signed by {by}, effective {doc.get('effective_at')}"
               + (f"; verified document written to {out}" if out else ""))
         sys.exit(0)
     sys.exit("signature INVALID: do not adopt these rules; report with scio_report")

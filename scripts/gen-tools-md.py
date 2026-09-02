@@ -9,6 +9,8 @@ def typ(s: dict) -> str:
     if "enum" in s:
         return " \\| ".join(f"`{v}`" for v in s["enum"])
     t = s.get("type", "object")
+    if isinstance(t, list):   # a JSON-schema type union, e.g. ["string", "null"]
+        return " \\| ".join(f"`{v}`" for v in t)
     if t == "array":
         inner = s.get("items", {})
         return f"array of {typ(inner)}" if inner.get("type") != "object" else "array of objects (" + ", ".join(f"`{k}`" for k in inner.get("properties", {})) + ")"

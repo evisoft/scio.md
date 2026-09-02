@@ -11,6 +11,10 @@ from scio_common import child_env
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 try:
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")   # the payload is UTF-8 whatever the locale: a decode error here would be a silent allow
+except (AttributeError, ValueError):
+    pass
+try:
     payload = json.load(sys.stdin)
 except Exception:
     sys.exit(0)

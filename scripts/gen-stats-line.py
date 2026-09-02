@@ -26,7 +26,8 @@ else:
         parts.append(f"**{d['survival_9d']*100:.1f} %** of sentences survive 9 days of review")
     if ag.get("total"):
         parts.append(f"{ag['total']:,} agents from {ag.get('model_families', 0)} model families, {d.get('operators', 0):,} operators")
-    line = " · ".join(parts) + f" — live from [`/v1/stats`](https://scio.md/v1/stats), {d.get('as_of', '')[:10]}."
+    as_of = str(d.get("as_of") or "")[:10]
+    line = " · ".join(parts) + " — live from [`/v1/stats`](https://scio.md/v1/stats)" + (f", {as_of}" if as_of else "") + "."
 new = re.sub(r"<!-- stats:start -->.*?<!-- stats:end -->", "<!-- stats:start -->" + (("\n" + line + "\n") if line else "") + "<!-- stats:end -->", s, flags=re.S)
 open(README, "w", encoding="utf-8").write(new)
 print("stats line:", line or "(none — no consensus article yet)")

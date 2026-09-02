@@ -32,15 +32,15 @@ def write_hooks_absolute(path, deny_json):
     exist — the adapter would never start and the harness would fall through to allow."""
     if not os.path.exists(path):
         return
-    txt = open(path).read()
+    txt = open(path, encoding="utf-8").read()
     def fix(m):
-        cmd = m.group(1)
+        cmd = json.loads('"' + m.group(1) + '"')   # the real command, not its JSON spelling: re-encoding an escaped string doubles every backslash
         cmd = re.sub(r"^python3 (?:\S*/)?skills/scio/scripts/(\S+?\.py)(?:\s*\|\|.*)?$", lambda mm: f'python3 "{os.path.join(ROOT, "skills", "scio", "scripts", mm.group(1))}"', cmd)
         if "hook.py" in cmd and "||" not in cmd:
             cmd += " || echo '" + deny_json.replace("'", "") + "'"
         return '"command": ' + json.dumps(cmd)
-    txt = re.sub(r'"command":\s*"((?:[^"\\]|\\.)*)"', lambda m: fix(m).replace("\\", "\\"), txt)
-    open(path, "w").write(txt)
+    txt = re.sub(r'"command":\s*"((?:[^"\\]|\\.)*)"', fix, txt)
+    open(path, "w", encoding="utf-8").write(txt)
     print(f"rewrote {path} with absolute guard paths")
 SCRIPTS = os.path.join(SKILL, "scripts")
 
@@ -49,7 +49,9 @@ def render(path, escape=None):
     """A permission snippet with the placeholder __SCIO_SCRIPTS__ replaced by the absolute scripts directory —
     escaped for the harness's pattern language (a regex in VS Code and Antigravity, a glob in OpenCode). Only the
     absolute directory is approved: a wildcard prefix would approve a planted /tmp/x/skills/scio/scripts/x.py too."""
-    txt = open(path).read()
+    if not os.path.exists(path):   # a skill-only install (npx skills add, ClawHub) carries skills/scio alone, not the repository's snippets
+        sys.exit(f"{os.path.relpath(path, ROOT)} is not here: this is a skill-only install. Clone https://github.com/evisoft/scio.md and run setup.py from it for this option, or re-run without --trust.")
+    txt = open(path, encoding="utf-8").read()
     return txt.replace("__SCIO_SCRIPTS__", escape(SCRIPTS) if escape else SCRIPTS)
 
 
@@ -82,9 +84,14 @@ def confirm(paths, extra=""):
     if input("continue? [y/N] ").strip().lower() not in ("y", "yes"):
         sys.exit("nothing written")
 
+TRUST_FILE = os.environ.get("SCIO_TRUST_FILE") or os.path.expanduser(os.path.join("~", ".config", "scio", "auto-approve"))
 if a.register:
     if not a.models:
         sys.exit("--register needs --models alias=model_version,…")
+    sys.path.insert(0, HERE)
+    from scio_common import keys_path as _keys_path
+    confirm([_keys_path()], f"(registers {a.models.count('=') or 1} agent(s) on https://scio.md as {a.register} before writing the harness config)")
+    a.yes = True   # the one question covers the files below too
     r = subprocess.run([sys.executable, os.path.join(HERE, "register-models.py"), "--name", a.register, "--family", a.family,
                         "--harness", a.harness, "--models", a.models])
     if r.returncode not in (0,):
@@ -98,13 +105,13 @@ def merge_json(path, mutate, mode=0o600):
     cfg = {}
     if os.path.exists(path):
         try:
-            cfg = json.load(open(path))
+            cfg = json.load(open(path, encoding="utf-8"))
         except ValueError:
             sys.exit(f"{path} is not valid JSON (comments?); add the servers by hand — see the snippet in the repository")
     mutate(cfg)
     tmp = path + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
     os.replace(tmp, path)
     print(f"wrote {path}")
@@ -119,7 +126,7 @@ def strip_toml_tables(text, prefixes):
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
         if stripped.startswith("[") and not stripped.startswith("[["):
-            name = stripped.strip("[]").strip().strip('"')
+            name = stripped[1:].split("]", 1)[0].replace('"', "").replace("'", "").replace(" ", "")   # [mcp_servers."scio-local"] # note
             skipping = any(name == pfx or name.startswith(pfx + ".") for pfx in prefixes)
         elif stripped.startswith("[["):
             skipping = False
@@ -154,14 +161,14 @@ elif h == "codex":
     block = f'''
 # --- Scio (written by setup.py) ---
 [mcp_servers.scio]
-command = "{PY}"
-args = ["{BRIDGE}", "--harness", "codex"]
+command = {json.dumps(PY)}
+args = [{json.dumps(BRIDGE)}, "--harness", "codex"]
 env_vars = ["SCIO_API_KEY", "SCIO_AGENT", "SCIO_KEYS_FILE", "SCIO_ROLES"]   # forwarded from the launcher's environment when set (Codex starts servers with a minimal environment); the bridge otherwise reads the keys file
 tool_timeout_sec = 120
 {approve}
 [mcp_servers.scio-local]
-command = "{PY}"
-args = ["{SERVER}"]
+command = {json.dumps(PY)}
+args = [{json.dumps(SERVER)}]
 env_vars = ["SCIO_API_KEY", "SCIO_AGENT", "SCIO_KEYS_FILE", "SCIO_WORK_DIR", "SCIO_ROLES"]   # forwarded from the launcher's environment (documented key; a literal "$VAR" in `env` is not expanded)
 tool_timeout_sec = 120
 {approve}
@@ -177,18 +184,18 @@ approval_mode = "prompt"
 # --- end Scio ---
 '''
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    cur = open(path).read() if os.path.exists(path) else ""
+    cur = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
     cur = re.sub(r"\n?# --- Scio \(written by setup\.py\) ---.*?# --- end Scio ---\n", "\n", cur, flags=re.S)
     cur = strip_toml_tables(cur, ["mcp_servers.scio", "mcp_servers.scio-local", "profiles.scio"])  # older entries, whoever wrote them
-    open(path, "w").write(cur.rstrip("\n") + "\n" + block)
+    open(path, "w", encoding="utf-8").write(cur.rstrip("\n") + "\n" + block)
     # Codex ≥ 0.150 keeps each profile in its own file, ~/.codex/<profile>.config.toml (a [profiles.x] table is refused).
-    open(prof, "w").write(f'''# Scio profile for Codex (written by setup.py): codex --profile scio
+    open(prof, "w", encoding="utf-8").write(f'''# Scio profile for Codex (written by setup.py): codex --profile scio
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 network_access = true
-writable_roots = ["{os.path.expanduser('~/.local/share/scio')}"]   # task folders only; the keys directory stays read-only
+writable_roots = [{json.dumps(os.path.expanduser('~/.local/share/scio'))}]   # task folders only; the keys directory stays read-only (JSON escaping is TOML escaping: Windows paths survive)
 ''')
     print(f"wrote {path} and {prof}; launch: codex --profile scio (scio-as <alias> codex --profile scio to pick one of several agents)")
 elif h == "gemini":
@@ -201,7 +208,8 @@ elif h == "gemini":
         env = {"SCIO_API_KEY": "$SCIO_API_KEY", "SCIO_AGENT": "$SCIO_AGENT"}
         s["scio"] = {"command": PY, "args": [BRIDGE, "--harness", "gemini-cli"], "env": env, **trust, "excludeTools": ["scio_contest", "scio_suspend"], "timeout": 120000}  # contest spends points, suspend is for arbiters: neither runs unattended
         s["scio-local"] = {"command": PY, "args": [SERVER], "env": env, **trust, "timeout": 120000}
-        cfg.setdefault("general", {}).setdefault("defaultApprovalMode", "auto_edit")
+        if a.trust:   # auto_edit is the operator's consent to fewer prompts, like the servers' trust: never without --trust
+            cfg.setdefault("general", {}).setdefault("defaultApprovalMode", "auto_edit")
     merge_json(path, m, 0o644)
     # Gemini CLI disables every MCP server in an untrusted folder: record the trust for this workspace once.
     def t(cfg):
@@ -220,15 +228,15 @@ elif h == "kimi":
     cpath = os.path.join(home, "config.toml")
     if not a.trust:
         print(f"wrote {home}/mcp.json; Kimi asks per tool (allow rules in {cpath} only with --trust). Launch: kimi"); sys.exit(0)
-    cur = open(cpath).read() if os.path.exists(cpath) else ""
-    cur = re.sub(r"\n# --- Scio \(written by setup\.py\) ---.*?# --- end Scio ---\n", "", cur, flags=re.S)
+    cur = open(cpath, encoding="utf-8").read() if os.path.exists(cpath) else ""
+    cur = re.sub(r"\n?# --- Scio \(written by setup\.py\) ---.*?# --- end Scio ---\n", "", cur, flags=re.S)
     rules = "".join(f'\n[[permission.rules]]\ndecision = "{d}"\npattern = "{pat}"\nreason = "Scio: {why}"\n' for d, pat, why in (
         ("ask", "mcp__scio__scio_contest", "spends the operator's points"),
         ("ask", "mcp__scio__scio_suspend", "arbiters only"),
         ("ask", "mcp__scio__scio_register", "creates an identity on the server"),
         ("allow", "mcp__scio__*", "the skill's own rules apply instead of a prompt"),
         ("allow", "mcp__scio-local__*", "task folders, drafts, pre-flight, guarded fetch, wait")))
-    open(cpath, "w").write(cur.rstrip("\n") + "\n\n# --- Scio (written by setup.py) ---" + rules + "# --- end Scio ---\n")
+    open(cpath, "w", encoding="utf-8").write(cur.rstrip("\n") + "\n\n# --- Scio (written by setup.py) ---" + rules + "# --- end Scio ---\n")
     print(f"wrote {cpath} permission rules; launch: kimi (scio-as <alias> kimi to pick one of several agents)")
 elif h == "kimi-cli":
     # kimi-cli reads ~/.kimi/mcp.json — written directly: both servers are local and read the key themselves, so nothing
@@ -243,7 +251,7 @@ elif h == "kimi-cli":
     print(f"wrote {home}/mcp.json; approve each server once when it offers 'always'. Launch: kimi")
 elif h in ("cursor", "windsurf"):
     path = os.path.join(".cursor", "mcp.json") if (h == "cursor" and a.workspace) else os.path.expanduser("~/.cursor/mcp.json" if h == "cursor" else "~/.codeium/windsurf/mcp_config.json")
-    confirm([path] + ([os.path.join(ROOT, "hooks", "hooks-cursor.json")] if h == "cursor" else []))
+    confirm([path] + ([os.path.join(ROOT, "hooks", "hooks-cursor.json")] if h == "cursor" else []) + ([TRUST_FILE] if a.trust and h == "cursor" else []))
     if h == "cursor":
         write_hooks_absolute(os.path.join(ROOT, "hooks", "hooks-cursor.json"), '{"permission": "deny", "agent_message": "scio guard could not run"}')
         if a.trust:
@@ -256,7 +264,10 @@ elif h in ("cursor", "windsurf"):
     merge_json(path, m, 0o644)
     print(f"launch: {h} .  (approve scio and scio-local once with 'Always allow'; scio-as <alias> {h} . to pick one of several agents)")
 elif h == "copilot":
-    path = os.path.join(".vscode", "mcp.json") if a.workspace else os.path.expanduser("~/.config/Code/User/mcp.json")
+    user_dir = (os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Code", "User") if sys.platform == "win32"
+                else os.path.expanduser("~/Library/Application Support/Code/User") if sys.platform == "darwin"
+                else os.path.expanduser("~/.config/Code/User"))   # where VS Code keeps the user-level mcp.json on each platform
+    path = os.path.join(".vscode", "mcp.json") if a.workspace else os.path.join(user_dir, "mcp.json")
     confirm([path])
     def m(cfg):
         s = cfg.setdefault("servers", {})
@@ -280,7 +291,9 @@ elif h == "opencode":
         s["scio-local"] = {"type": "local", "command": [PY, SERVER], "enabled": True, "environment": env}
         p = cfg.setdefault("permission", {}) if isinstance(cfg.get("permission"), dict) or "permission" not in cfg else None
         if p is not None and a.trust:   # without --trust OpenCode's own permission defaults apply
-            p.update({"scio_*": "allow", "scio-local_*": "allow", "scio_scio_contest": "ask", "scio_scio_suspend": "ask", "scio_scio_register": "ask"})
+            for k in ("scio_*", "scio-local_*", "scio_scio_contest", "scio_scio_suspend", "scio_scio_register"):
+                p.pop(k, None)
+            p.update({"scio_scio_contest": "ask", "scio_scio_suspend": "ask", "scio_scio_register": "ask", "scio_*": "allow", "scio-local_*": "allow"})   # first match wins: the asks go first
             bash = p.get("bash")
             if not isinstance(bash, dict):
                 bash = p["bash"] = {}
@@ -289,9 +302,9 @@ elif h == "opencode":
             ours = opencode_bash_rules()
             merged = {k: (ours.pop(k) if k in ours else v) for k, v in bash.items() if not (k == "*" or k.endswith("scio-as *"))}
             merged.update(ours)
-            for k in ("*scio-as *", "*"):
-                if k in bash or k in ours:
-                    merged[k] = "ask"
+            merged["*scio-as *"] = "ask"   # an arbitrary command behind scio-as always asks
+            if "*" in bash or "*" in ours:   # the catch-all goes last; its value stays the user's own when they had one
+                merged["*"] = bash.get("*", "ask")
             p["bash"] = merged
     merge_json(path, m, 0o644)
     print("launch: opencode  (scio-as <alias> opencode to pick one of several agents)")
@@ -310,22 +323,26 @@ elif h == "hermes":
     }
     try:
         import yaml
-        cfg = yaml.safe_load(open(cpath)) if os.path.exists(cpath) else {}
+        cfg = yaml.safe_load(open(cpath, encoding="utf-8")) if os.path.exists(cpath) else {}
         cfg = cfg or {}
         cfg.setdefault("mcp_servers", {}).update(servers)
-        open(cpath, "w").write(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
+        open(cpath, "w", encoding="utf-8").write(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
     except ImportError:
         block = "\nmcp_servers:\n" + "".join(
             f"  {n}:\n" + "".join(f"    {k}: {json.dumps(v)}\n" for k, v in s.items()) for n, s in servers.items())
-        open(cpath, "a").write(block)
-        print("pyyaml not installed: appended a mcp_servers block — merge by hand if the file already had one")
+        if os.path.exists(cpath) and re.search(r"^mcp_servers:", open(cpath, encoding="utf-8").read(), flags=re.M):
+            print(f"pyyaml not installed and {cpath} already has a mcp_servers mapping (a second one would replace it): add these entries to it by hand:\n{block}")
+        else:
+            open(cpath, "a", encoding="utf-8").write(block)
+            print("pyyaml not installed: appended a mcp_servers block")
     print(f"wrote {cpath}")
     if a.alias:  # Hermes usually runs as a service: put the key where its ${SCIO_API_KEY} resolves
         envp = os.path.join(home, ".env")
-        lines = [l for l in (open(envp).read().splitlines() if os.path.exists(envp) else []) if not l.startswith("SCIO_API_KEY=")]
+        lines = [l for l in (open(envp, encoding="utf-8").read().splitlines() if os.path.exists(envp) else []) if not l.startswith("SCIO_API_KEY=")]
         fd = os.open(envp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write("\n".join(lines + [f"SCIO_API_KEY={key_for(a.alias)}"]) + "\n")
+        os.chmod(envp, 0o600)   # the mode above applies only when the file is created; an older .env keeps its own
         print(f"wrote SCIO_API_KEY to {envp} (mode 600)")
     cmd = ["hermes", "skills", "install", "skills-sh/evisoft/scio.md/scio"]
     if shutil.which("hermes"):
@@ -348,10 +365,11 @@ elif h == "openclaw":
     os.makedirs(home, mode=0o700, exist_ok=True)
     env = {}
     if key:
-        lines = [l for l in (open(envp).read().splitlines() if os.path.exists(envp) else []) if not l.startswith("SCIO_API_KEY=")]
+        lines = [l for l in (open(envp, encoding="utf-8").read().splitlines() if os.path.exists(envp) else []) if not l.startswith("SCIO_API_KEY=")]
         fd = os.open(envp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write("\n".join(lines + [f"SCIO_API_KEY={key}"]) + "\n")
+        os.chmod(envp, 0o600)   # the mode above applies only when the file is created; an older .env keeps its own
         env = {"SCIO_API_KEY": {"source": "env", "provider": "default", "id": "SCIO_API_KEY"}}
     defs = {
         "scio": {"command": PY, "args": [BRIDGE, "--harness", "openclaw"], "env": env},
@@ -382,8 +400,8 @@ elif h == "grok":
         print("grok not on PATH; run: " + " ".join(install))
     if not a.trust:
         print("Grok itself refuses to install any plugin without its --trust consent (above); with setup.py --trust it is passed on and Scio's allow rules go to " + cpath); sys.exit(0)
-    cur = open(cpath).read() if os.path.exists(cpath) else ""
-    cur = re.sub(r"\n# --- Scio \(written by setup\.py\) ---.*?# --- end Scio ---\n", "", cur, flags=re.S)
+    cur = open(cpath, encoding="utf-8").read() if os.path.exists(cpath) else ""
+    cur = re.sub(r"\n?# --- Scio \(written by setup\.py\) ---.*?# --- end Scio ---\n", "", cur, flags=re.S)
     block = '''
 # --- Scio (written by setup.py) ---
 [[permission.rules]]
@@ -412,7 +430,7 @@ tool = "mcp"
 pattern = "scio-local__*"           # task folders, drafts, pre-flight, guarded fetch, wait
 # --- end Scio ---
 '''
-    open(cpath, "w").write(cur.rstrip("\n") + "\n" + block)
+    open(cpath, "w", encoding="utf-8").write(cur.rstrip("\n") + "\n" + block)
     print(f"wrote {cpath} permission rules; launch: grok  (the plugin's .mcp.json runs both servers; scio-as <alias> grok to pick one of several agents)")
 elif h == "antigravity":
     # Antigravity's config cannot read the environment — and no longer needs to: both servers read the keys file.
@@ -420,7 +438,7 @@ elif h == "antigravity":
     if a.alias:
         key_for(a.alias)   # fail early when the alias is unknown
     path = os.path.join(".agents", "mcp_config.json") if a.workspace else os.path.expanduser("~/.gemini/config/mcp_config.json")
-    confirm([path, os.path.join(ROOT, "hooks.json")])
+    confirm([path, os.path.join(ROOT, "hooks.json")] + ([TRUST_FILE] if a.trust else []))
     def m(cfg):
         s = cfg.setdefault("mcpServers", {})
         env = {"SCIO_AGENT": a.alias} if a.alias else {}

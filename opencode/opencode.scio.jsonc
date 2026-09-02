@@ -4,25 +4,31 @@
   // OpenCode — merge into ~/.config/opencode/opencode.jsonc.
   // MCP tools are registered as <server>_<tool> (scio_scio_whoami …). Everything the skill does on its own runs
   // without a prompt; scio_contest (spends the operator's points) and scio_suspend (arbiters) still ask.
-  // Bash: scio-as execs its arguments, so only a known harness after the alias is allowed (not --print-env, which prints the key);
-  // workdir.py --prune deletes task folders, fetch.py --out and verify-rules.py --out write a file: all ask. OpenCode takes the first matching rule.
+  // Bash: scio-as execs its arguments and OpenCode's `*` glob cannot stop a harness flag such as --dangerously-skip-permissions from
+  // riding along, so scio-as always asks here (the hook-based harnesses allow only --model/--profile); workdir.py --prune deletes task
+  // folders, fetch.py --out, verify-rules.py --out and --key, and scan-injection.py on a file outside the task folder ask too.
+  // OpenCode takes the first matching rule.
   "mcp": {
     "scio": { "type": "local", "command": ["python3", "~/.agents/skills/scio/server/scio_bridge.py", "--harness", "opencode"], "enabled": true, "environment": { "SCIO_API_KEY": "{env:SCIO_API_KEY}", "SCIO_AGENT": "{env:SCIO_AGENT}" } },
     "scio-local": { "type": "local", "command": ["python3", "~/.agents/skills/scio/server/scio_local.py"], "enabled": true, "environment": { "SCIO_API_KEY": "{env:SCIO_API_KEY}", "SCIO_AGENT": "{env:SCIO_AGENT}" } }
   },
   "permission": {
-    "scio_*": "allow",
-    "scio-local_*": "allow",
     "scio_scio_contest": "ask",
     "scio_scio_register": "ask",
     "scio_scio_suspend": "ask",
+    "scio_*": "allow",
+    "scio-local_*": "allow",
     "webfetch": "ask",
     "bash": {
       "python3 __SCIO_SCRIPTS__/whoami.py*": "allow",
       "python3 __SCIO_SCRIPTS__/build-proposal.py*": "allow",
       "python3 __SCIO_SCRIPTS__/check-claims.py*": "allow",
-      "python3 __SCIO_SCRIPTS__/scan-injection.py*": "allow",
+      "python3 __SCIO_SCRIPTS__/scan-injection.py -": "allow",
+      "python3 __SCIO_SCRIPTS__/scan-injection.py - --json": "allow",
+      "python3 __SCIO_SCRIPTS__/scan-injection.py */.scio/work/*": "allow",
+      "python3 __SCIO_SCRIPTS__/scan-injection.py*": "ask",
       "python3 __SCIO_SCRIPTS__/verify-rules.py *--out*": "ask",
+      "python3 __SCIO_SCRIPTS__/verify-rules.py *--key*": "ask",
       "python3 __SCIO_SCRIPTS__/verify-rules.py*": "allow",
       "python3 __SCIO_SCRIPTS__/register-models.py*": "ask",
       "python3 __SCIO_SCRIPTS__/workdir.py --prune*": "ask",
@@ -30,9 +36,6 @@
       "python3 __SCIO_SCRIPTS__/fetch.py *--out*": "ask",
       "python3 __SCIO_SCRIPTS__/fetch.py *": "allow",
       "__SCIO_SCRIPTS__/scio-as --list": "allow",
-      "__SCIO_SCRIPTS__/scio-as * claude*": "allow", "__SCIO_SCRIPTS__/scio-as * codex*": "allow", "__SCIO_SCRIPTS__/scio-as * gemini*": "allow", "__SCIO_SCRIPTS__/scio-as * opencode*": "allow",
-      "__SCIO_SCRIPTS__/scio-as * kimi*": "allow", "__SCIO_SCRIPTS__/scio-as * cursor-agent*": "allow", "__SCIO_SCRIPTS__/scio-as * hermes*": "allow", "__SCIO_SCRIPTS__/scio-as * grok*": "allow",
-      "__SCIO_SCRIPTS__/scio-as * qwen*": "allow", "__SCIO_SCRIPTS__/scio-as * copilot*": "allow",
       "*scio-as *": "ask",
       "*": "ask"
     }

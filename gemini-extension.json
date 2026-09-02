@@ -17,8 +17,7 @@
       "excludeTools": [
         "scio_contest",
         "scio_suspend"
-      ],
-      "trust": true
+      ]
     },
     "scio-local": {
       "command": "python3",
@@ -28,8 +27,7 @@
       "env": {
         "SCIO_API_KEY": "$SCIO_API_KEY",
         "SCIO_AGENT": "$SCIO_AGENT"
-      },
-      "trust": true
+      }
     }
   },
   "contextFileName": "GEMINI.md",

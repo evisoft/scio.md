@@ -16,7 +16,7 @@ tasks. Write everything for the task there; run check-claims.py on <dir>/proposa
 place until the outcome is known (the panel or the survival window may send you back to it)."""
 import hashlib, json, os, shutil, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import resolve_key
+from scio_common import resolve_key, env_work_dir
 
 def _default_root():
     """Inside the workspace by default — one folder the harness already trusts, so every task subfolder is covered by a
@@ -28,12 +28,13 @@ def _default_root():
         os.makedirs(base, mode=0o700, exist_ok=True)
         gi = os.path.join(base, ".gitignore")
         if not os.path.exists(gi):
-            open(gi, "w").write("*\n")
+            with open(gi, "w", encoding="utf-8") as f:
+                f.write("*\n")
         return os.path.join(base, "work")
     return os.path.expanduser("~/.local/share/scio/work")
 
 
-root = os.environ.get("SCIO_WORK_DIR") or _default_root()
+root = env_work_dir() or _default_root()
 
 
 def agent_salt():
@@ -61,7 +62,7 @@ def create(kind, ref):
         os.makedirs(os.path.join(d, sub), exist_ok=True)
     meta = os.path.join(d, "task.json")
     if not os.path.exists(meta):
-        with open(meta, "w") as f:
+        with open(meta, "w", encoding="utf-8") as f:
             json.dump({"kind": kind, "ref": ref, "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                        "started_from": os.getcwd(), "agent": agent_salt()}, f, indent=2)
     print(d)
@@ -74,9 +75,23 @@ def list_dirs():
         meta = os.path.join(root, name, "task.json")
         if not os.path.exists(meta):
             continue
-        m = json.load(open(meta))
-        age = (time.time() - os.path.getmtime(meta)) / 86400
+        with open(meta, encoding="utf-8") as f:
+            m = json.load(f)
+        age = (time.time() - last_activity(os.path.join(root, name))) / 86400
         print(f"{name}  {m.get('kind'):10} {m.get('ref')}  {age:.1f}d")
+
+
+def last_activity(d):
+    """When the task was last worked on: the newest mtime in the folder. The folder's own mtime changes only when an
+    entry is added or removed, not when draft.md is rewritten — so it alone would prune a task edited yesterday."""
+    newest = os.path.getmtime(d)
+    for dirpath, dirs, files in os.walk(d):
+        for n in dirs + files:
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(dirpath, n)))
+            except OSError:
+                pass
+    return newest
 
 
 def prune(days):
@@ -86,7 +101,7 @@ def prune(days):
     for name in os.listdir(root):
         d = os.path.join(root, name)
         # only folders this script created (they carry task.json); anything else under the root is left alone
-        if os.path.isdir(d) and os.path.exists(os.path.join(d, "task.json")) and os.path.getmtime(d) < cutoff:
+        if os.path.isdir(d) and os.path.exists(os.path.join(d, "task.json")) and last_activity(d) < cutoff:
             shutil.rmtree(d)
             print(f"pruned {name}")
 
@@ -99,7 +114,7 @@ if __name__ == "__main__":
         list_dirs()
     elif a[0] == "--prune":
         prune(int(a[1]) if len(a) > 1 else 9)
-    elif len(a) == 2:
+    elif len(a) == 2 and not a[0].startswith("-"):
         create(a[0], a[1])
     else:
         print(__doc__.strip()); sys.exit(2)

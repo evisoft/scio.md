@@ -15,8 +15,9 @@ import datetime as dt, os, re, subprocess, sys, time
 
 LIMIT_AT = re.compile(r"reset(?:s)?\s+(?:at|@)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.I)
 # "available in 2 minutes" alone is ordinary prose (an archive, a train); it counts only next to a limit word
-LIMIT_IN = re.compile(r"(?:limit|429|too many requests|quota|overloaded)[^\n]{0,80}?(?:reset(?:s)?|try again|retry|available)\s+in\s+(?:about\s+)?(\d+)\s*(second|sec|minute|min|hour|hr|h|m|s)s?\b"
-                      r"|(?:reset(?:s)?|try again|retry)\s+in\s+(?:about\s+)?(\d+)\s*(second|sec|minute|min|hour|hr|h|m|s)s?\b[^\n]{0,80}?(?:limit|429|too many requests|quota)", re.I)
+UNIT = r"(millisecond|ms|second|sec|minute|min|hour|hr|h|m|s)"   # `ms` before `m`: "500ms" is half a second, not 500 minutes
+LIMIT_IN = re.compile(r"(?:limit|429|too many requests|quota|overloaded)[^\n]{0,80}?(?:reset(?:s)?|try again|retry|available)\s+in\s+(?:about\s+)?(\d+)\s*" + UNIT + r"s?\b"
+                      r"|(?:reset(?:s)?|try again|retry)\s+in\s+(?:about\s+)?(\d+)\s*" + UNIT + r"s?\b[^\n]{0,80}?(?:limit|429|too many requests|quota)", re.I)
 LIMIT_WORDS = re.compile(r"usage limit|rate limit(?:ed)?|too many requests|(?:error|status|http)\W{0,3}429\b|\b429\W{0,3}too many|quota (?:exceeded|reached)|(?:at|over|out of) capacity|capacity (?:limit|exceeded|reached)", re.I)
 BACKOFF = [60, 120, 240, 480, 960, 1920, 3600]
 
@@ -26,6 +27,8 @@ def parse_wait(text):
     m = LIMIT_IN.search(text)
     if m:
         n, unit = int(m.group(1) or m.group(3)), (m.group(2) or m.group(4)).lower()
+        if unit in ("ms", "millisecond"):
+            return max(1, n // 1000) + 30
         return n * (3600 if unit.startswith("h") else 60 if unit.startswith("m") else 1) + 30
     m = LIMIT_AT.search(text)
     if m:
@@ -49,12 +52,17 @@ def main():
     if "--" not in a:
         print(__doc__.strip()); sys.exit(2)
     opts, cmd = a[: a.index("--")], a[a.index("--") + 1:]
+    try:
+        sys.stdout.reconfigure(errors="replace")   # the harness's output is echoed whatever the terminal's codec can show
+    except (AttributeError, ValueError):
+        pass
     max_restarts = int(opts[opts.index("--max-restarts") + 1]) if "--max-restarts" in opts else 10**9
-    log = open(opts[opts.index("--log") + 1], "a") if "--log" in opts else None
+    log = open(opts[opts.index("--log") + 1], "a", encoding="utf-8") if "--log" in opts else None
     restarts, fails = 0, 0
     while True:
         tail = []
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        # a harness prints UTF-8 whatever the locale; one undecodable byte must not end the supervisor (errors=replace)
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, encoding="utf-8", errors="replace")
         for line in p.stdout:
             sys.stdout.write(line); sys.stdout.flush()
             if log:

@@ -25,11 +25,17 @@ def keys_path():
     return os.environ.get("SCIO_KEYS_FILE") or os.path.expanduser(os.path.join("~", ".config", "scio", "keys"))
 
 
+def env_work_dir():
+    """SCIO_WORK_DIR, or "" when unset or left unexpanded by the harness (`${SCIO_WORK_DIR:-}`)."""
+    v = os.environ.get("SCIO_WORK_DIR", "")
+    return "" if _PLACEHOLDER.match(v) else v.strip()
+
+
 def read_keys():
     """The keys file, parsed: {alias: key} in file order, {alias: model_version}, {alias: claim_url}, the default alias."""
     keys, models, claims, default = {}, {}, {}, None
     try:
-        with open(keys_path(), encoding="utf-8") as f:
+        with open(keys_path(), encoding="utf-8", errors="replace") as f:   # a byte that is not UTF-8 is not a reason to stop every server
             lines = f.read().splitlines()
     except OSError:
         return keys, models, claims, default
@@ -54,6 +60,12 @@ def read_keys():
 def agent_env():
     """SCIO_AGENT, or "" when unset or left unexpanded by the harness."""
     v = os.environ.get("SCIO_AGENT", "")
+    return "" if _PLACEHOLDER.match(v) else v.strip()
+
+
+def env_roles():
+    """SCIO_ROLES, or "" when unset or left unexpanded by the harness (`$SCIO_ROLES`, `{env:SCIO_ROLES}`)."""
+    v = os.environ.get("SCIO_ROLES", "")
     return "" if _PLACEHOLDER.match(v) else v.strip()
 
 
@@ -132,7 +144,8 @@ class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
     to another host is where a bearer header would leak (the header is added unredirected too — belt and braces)."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         a, b = urlparse(req.full_url), urlparse(newurl)
-        if (a.scheme, a.hostname, a.port) != (b.scheme, b.hostname, b.port):
+        port = lambda u: u.port or (443 if u.scheme == "https" else 80)   # an explicit :443 is the same place as none
+        if (a.scheme, a.hostname, port(a)) != (b.scheme, b.hostname, port(b)):
             raise urllib.error.HTTPError(newurl, code, f"refused cross-host redirect to {b.hostname}", headers, fp)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -154,6 +167,8 @@ def child_env(**extra):
     """An explicit allowlist of the parent's environment for a helper subprocess, plus `extra`."""
     env = {k: v for k, v in os.environ.items() if k in _CHILD_ENV_EXACT or k.startswith(_CHILD_ENV_PREFIX)}
     env.pop("GITHUB_TOKEN", None)   # listed above only to be explicit that it is NOT forwarded
+    env["PYTHONIOENCODING"] = "utf-8"   # the pipes to a child are UTF-8 on our side whatever the locale (Windows: cp1252)
+    env["PYTHONUTF8"] = "1"   # and so are the child's argv, file names and default file encoding (a non-ASCII ref hashes the same everywhere)
     env.update({k: v for k, v in extra.items() if v is not None})
     return env
 

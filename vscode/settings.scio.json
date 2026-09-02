@@ -1,11 +1,12 @@
 {
-  "_comment": "VS Code / GitHub Copilot agent mode — merge into settings.json. __SCIO_SCRIPTS__ is a placeholder: run `setup.py --harness copilot`, which prints this file with the absolute path of skills/scio/scripts (a wildcard prefix would approve a planted /tmp/x/skills/scio/scripts/whoami.py just the same — so no absolute path, no approval). MCP tool confirmations are not configurable per tool in settings: on the first scio_* prompt choose 'Always allow' for the session/workspace (never for scio_contest). Terminal and URL auto-approval below cover the skill's scripts and scio.md — scio-as only in front of a known harness binary (it execs its arguments), workdir.py only `<kind> <ref>` (not --prune), fetch.py and verify-rules.py never with --out, fetch.py --max-bytes only up to 200000, and never `--print-env` (it prints the key).",
+  "_comment": "VS Code / GitHub Copilot agent mode — merge into settings.json. __SCIO_SCRIPTS__ is a placeholder: run `setup.py --harness copilot`, which prints this file with the absolute path of skills/scio/scripts (a wildcard prefix would approve a planted /tmp/x/skills/scio/scripts/whoami.py just the same — so no absolute path, no approval). MCP tool confirmations are not configurable per tool in settings: on the first scio_* prompt choose 'Always allow' for the session/workspace (never for scio_contest). Terminal and URL auto-approval below cover the skill's scripts and scio.md — scio-as only in front of a known harness binary (it execs its arguments), workdir.py only `<kind> <ref>` (not --prune), scan-injection.py only on stdin or a file under the task work root (it prints excerpts of whatever it is given), fetch.py and verify-rules.py never with --out, verify-rules.py never with --key, fetch.py --max-bytes only up to 200000, scio-as only with --model/--profile after the harness (any other harness flag asks), and never `--print-env` (it prints the key).",
   "chat.tools.terminal.autoApprove": {
-    "/^python3 __SCIO_SCRIPTS__\\/(whoami|build-proposal|check-claims|scan-injection)\\.py(?: [\\w.\\-\\/:=@+,%]+)*$/": true,
-    "/^python3 __SCIO_SCRIPTS__\\/verify-rules\\.py(?: (?!--out\\b)[\\w.\\-\\/:=@+,%]+)*$/": true,
+    "/^python3 __SCIO_SCRIPTS__\\/(whoami|build-proposal|check-claims)\\.py(?: [\\w.\\-\\/:=@+,%]+)*$/": true,
+    "/^python3 __SCIO_SCRIPTS__\\/scan-injection\\.py(?: (?:-|--json|[\\w.\\-\\/:=@+,%]*\\/\\.scio\\/work\\/[\\w.\\-\\/:=@+,%]+))*$/": true,
+    "/^python3 __SCIO_SCRIPTS__\\/verify-rules\\.py(?: (?!--out\\b)(?!--key\\b)[\\w.\\-\\/:=@+,%]+)*$/": true,
     "/^python3 __SCIO_SCRIPTS__\\/workdir\\.py (?:write|review|translate|maintain|gap|contest|request|loop) [\\w.\\-\\/:=@+,%]+$/": true,
     "/^python3 __SCIO_SCRIPTS__\\/fetch\\.py(?: (?!--out\\b)(?!--max-bytes\\b)[\\w.\\-\\/:=@+,%]+| --max-bytes (?:[1-9]\\d{0,4}|1\\d{5}|200000))+$/": true,
-    "/^__SCIO_SCRIPTS__\\/scio-as (?:--list|[A-Za-z0-9_\\-]+ (?:--supervise )?(?:claude|codex|gemini|opencode|kimi|cursor-agent|hermes|grok|qwen|copilot)(?: [\\w.\\-\\/:=@+,%]+){0,12})$/": true
+    "/^__SCIO_SCRIPTS__\\/scio-as (?:--list|[A-Za-z0-9_\\-]+ (?:--supervise )?(?:claude|codex|gemini|opencode|kimi|cursor-agent|hermes|grok|qwen|copilot)(?: (?:--model|--profile) [A-Za-z0-9_\\-]+| \\.)*)$/": true
   },
   "chat.tools.urls.autoApprove": ["https://scio.md/"]
 }

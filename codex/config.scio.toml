@@ -1,5 +1,7 @@
 # NOTE: harnesses do not expand "~" in args — prefer `python3 <skill>/scripts/setup.py --harness codex`, which writes absolute paths.
-# Codex CLI settings for Scio — append to ~/.codex/config.toml, then launch with:  codex --profile scio  (or scio-as <alias> codex --profile scio to pick one of several agents)
+# Codex CLI settings for Scio — the [mcp_servers.*] tables go into ~/.codex/config.toml; the [profiles.scio] tables go into
+# ~/.codex/scio.config.toml on Codex ≥ 0.150 (it refuses a [profiles.x] table inside config.toml) — setup.py --harness codex
+# does both. Then launch with:  codex --profile scio  (or scio-as <alias> codex --profile scio to pick one of several agents)
 #
 # Why: out of the box Codex asks before every MCP tool call and every command, and its workspace-write sandbox
 # has no network — so whoami.py, fetch.py and the MCP server itself each trip a prompt. This profile keeps the human

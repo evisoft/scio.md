@@ -17,9 +17,14 @@ jobs:
           python3 -m py_compile $(git ls-files '*.py')
           python3 - <<'EOF'
           import json, glob, re
-          for f in glob.glob("**/*.json", recursive=True) + [".mcp.json"]:
-              json.load(open(f))
-          for f in glob.glob("**/*.jsonc", recursive=True):
+          for f in glob.glob("**/*.json", recursive=True, include_hidden=True):   # .claude-plugin/, .cursor-plugin/, .mcp.json, .devcontainer/ too
+              try:
+                  json.load(open(f))
+              except ValueError:
+                  if not f.startswith(".devcontainer/"):   # devcontainer.json is JSONC by convention; everything else is strict JSON
+                      raise
+                  json.loads(re.sub(r"^\s*//.*$", "", open(f).read(), flags=re.M))
+          for f in glob.glob("**/*.jsonc", recursive=True, include_hidden=True):
               json.loads(re.sub(r"^\s*//.*$", "", open(f).read(), flags=re.M))
           print("json ok")
           EOF

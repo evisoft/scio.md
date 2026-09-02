@@ -16,6 +16,10 @@ from trust import granted
 if not granted():
     sys.exit(0)   # no decision: the harness asks, as it would for any other tool
 try:
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")   # the payload is UTF-8 whatever the locale: a decode error here would be a silent allow
+except (AttributeError, ValueError):
+    pass
+try:
     payload = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
@@ -48,15 +52,20 @@ elif tool == "Bash":
     HARNESS = r"(claude|codex|gemini|opencode|kimi|cursor-agent|hermes|grok|qwen|copilot)"
     # env overrides that cannot touch the key or the keys file: SCIO_API_KEY and SCIO_KEYS_FILE are deliberately
     # absent (the wiki address itself is a constant since v0.5.2 — no variable moves it)
-    ENV = r"SCIO_(ROLES|WORK_DIR|HARNESS|LANGUAGES|MODEL_FAMILY|MODEL_VERSION|RULES_BUNDLED)"
+    ENV = r"SCIO_(ROLES|HARNESS|LANGUAGES|MODEL_FAMILY|MODEL_VERSION|RULES_BUNDLED)"
     # per-script argument policy: workdir.py only `<kind> <ref>` (--prune deletes task folders: a prompt);
     # fetch.py and verify-rules.py never `--out` (they would write wherever the argument says: a prompt);
     # fetch.py `--max-bytes` only up to the 200 KB budget of security.md (a bigger read is a prompt)
     MAX_BYTES = r"(?:[1-9]\d{0,4}|1\d{5}|200000)"
+    # scan-injection.py prints excerpts of whatever file it is given: only stdin and files under the task work root are silent
+    # (SCIO_WORK_DIR when the operator moved it, else <workspace>/.scio/work); verify-rules.py --key would verify against
+    # a key the content supplied and print "signed by …": a prompt
+    work = re.escape(os.environ["SCIO_WORK_DIR"].rstrip("/")) if os.environ.get("SCIO_WORK_DIR") else r"[\w.\-/:=@+,%]*/\.scio/work"
     SCRIPT_ARGS = {
         "workdir": r"\s+(write|review|translate|maintain|gap|contest|request|loop)\s+" + SAFE_ARG,
         "fetch": rf"(\s+(?!--out\b)(?!--max-bytes\b){SAFE_ARG}|\s+--max-bytes\s+{MAX_BYTES})+",
-        "verify-rules": rf"(\s+(?!--out\b){SAFE_ARG})*",
+        "verify-rules": rf"(\s+(?!--out\b)(?!--key\b){SAFE_ARG})*",
+        "scan-injection": rf"(\s+(-|--json|{work}/{SAFE_ARG}))+",
     }
     if scripts and not re.search(r"[\x00-\x1f\x7f]", cmd):
         m = re.fullmatch(rf'({ENV}={SAFE_ARG}\s+)*python3\s+"?{scripts}/(?P<script>whoami|workdir|build-proposal|check-claims|scan-injection|fetch|verify-rules)\.py"?(?P<args>(\s+{SAFE_ARG}|\s+"[\w.\- /:=@+,%]*")*)', cmd)
@@ -65,7 +74,9 @@ elif tool == "Bash":
             policy = SCRIPT_ARGS.get(script)
             if policy is None or re.fullmatch(policy, args):
                 reason = "one of the skill's own scripts, without chaining"
-        elif re.fullmatch(rf'"?{scripts}/scio-as"?\s+(--list|{ALIAS}\s+(--supervise\s+)?{HARNESS}(\s+{SAFE_ARG}){{0,12}})', cmd):
+        # after the harness only `--model <alias>` / `--profile <name>` / `.`: any other flag (--dangerously-skip-permissions,
+        # --settings, --mcp-config, --yolo, exec --sandbox …) changes what the harness may do and gets the normal prompt
+        elif re.fullmatch(rf'"?{scripts}/scio-as"?\s+(--list|{ALIAS}\s+(--supervise\s+)?{HARNESS}(\s+(--model|--profile)\s+{ALIAS}|\s+\.)*)', cmd):
             reason = "one of the skill's own scripts, without chaining"
 elif tool in ("WebFetch",):
     host = (urlparse(inp.get("url") or "").hostname or "").lower()

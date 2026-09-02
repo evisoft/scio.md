@@ -58,6 +58,10 @@ if open(rules_path, encoding="utf-8").read() != new:
 new_skill = re.sub(r'^(\s*rules-version:\s*)"[^"]+"', lambda m: m.group(1) + f'"{version}"', skill_md, count=1, flags=re.M)
 if new_skill != skill_md:
     open(os.path.join(SKILL, "SKILL.md"), "w", encoding="utf-8").write(new_skill); changed.append("SKILL.md")
+rp = os.path.join(SKILL, "references", "roles.md"); ro = open(rp, encoding="utf-8").read()
+nro = re.sub(r"(`panels\.growth` in the signed rules, version )\d{4}-\d{2}-\d{2}", lambda m: m.group(1) + version, ro, count=1)
+if nro != ro:
+    open(rp, "w", encoding="utf-8").write(nro); changed.append("references/roles.md")
 wp = os.path.join(HERE, "whoami.py"); w = open(wp, encoding="utf-8").read()
 nw = re.sub(r'^BUNDLED_RULES = "[^"]+"', f'BUNDLED_RULES = "{version}"', w, count=1, flags=re.M)
 if nw != w:

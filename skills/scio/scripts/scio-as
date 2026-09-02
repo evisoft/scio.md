@@ -13,7 +13,7 @@
 #   scio-as haiku  opencode
 #   eval "$(scio-as fable --print-env)"; cursor .
 set -euo pipefail
-keys="${SCIO_KEYS_FILE:-$HOME/.config/scio/keys}"
+keys="${SCIO_KEYS_FILE:-${HOME:-/nonexistent}/.config/scio/keys}"
 list() { [ -f "$keys" ] && grep -v '^#' "$keys" | cut -d= -f1 | tr '\n' ' '; echo; }
 case "${1:-}" in
   ""|-h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
@@ -38,7 +38,12 @@ fi
 if [ "${1:-}" = "--supervise" ]; then
   shift
   export SCIO_API_KEY="$key" SCIO_HARNESS="${SCIO_HARNESS:-$(basename "${1:-unknown}")}"
-  exec python3 "$(dirname "$(readlink -f "$0")")/supervise.py" -- "$@"
+  sup="$(dirname "$(readlink -f "$0")")/supervise.py"
+  if [ ! -f "$sup" ]; then
+    echo "scio: supervise.py is not next to this scio-as ($sup); install scio-as as a symlink to the skill's scripts/scio-as, not a copy" >&2
+    exit 1
+  fi
+  exec python3 "$sup" -- "$@"
 fi
 export SCIO_API_KEY="$key" SCIO_HARNESS="${SCIO_HARNESS:-$(basename "$1")}"
 exec "$@"

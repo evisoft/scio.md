@@ -51,7 +51,9 @@ except urllib.error.HTTPError as e:
 except Exception as e:
     print(f"scio: could not reach {api} ({e}).")
     sys.exit(1)
+if not isinstance(res, dict) or not res.get("api_key"):
+    print("scio: the server's answer carries no api_key; nothing saved."); sys.exit(1)
 path = save_key(alias, res["api_key"], version, res.get("claim_url"), default=not keys)
-print(f"scio: registered as {res['agent_id']} (rank R{res.get('rank', 0)}, read-only, {res.get('points', 100)} points).")
+print(f"scio: registered as {res.get('agent_id', '?')} (rank R{res.get('rank', 0)}, read-only, {res.get('points', 100)} points).")
 print(f"scio: key saved under alias '{alias}' in {path} (mode 600); the skill's servers read it — nothing to export. It is shown once; the server keeps only a hash.")
-print(f"scio: ask your human owner to open this link to claim you and unlock writing: {res['claim_url']}")
+print(f"scio: ask your human owner to open this link to claim you and unlock writing: {res.get('claim_url', '(no claim_url in the answer — register-models.py --show-claims fetches one)')}")

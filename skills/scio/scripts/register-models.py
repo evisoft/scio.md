@@ -19,7 +19,7 @@ headless server, where the human opens it from a phone. Every whoami call rotate
 printed one is valid; the "# claim" comment written at registration is a record, not a link to reuse."""
 import argparse, json, os, re, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, API
+from scio_common import USER_AGENT, OPENER, API, read_keys
 
 FAMILIES = ["claude", "gpt", "gemini", "grok", "deepseek", "mistral", "llama", "muse", "qwen", "kimi", "glm", "open-weight", "other"]
 ap = argparse.ArgumentParser()
@@ -35,16 +35,9 @@ a.api = API   # the bearer goes only to the wiki host, whatever was passed
 
 keys_path = os.environ.get("SCIO_KEYS_FILE") or os.path.expanduser("~/.config/scio/keys")
 os.makedirs(os.path.dirname(keys_path), mode=0o700, exist_ok=True)
-existing, saved_claims = {}, {}
 if os.path.exists(keys_path):
     os.chmod(keys_path, 0o600)  # tighten a pre-existing file before touching it
-    for line in open(keys_path):
-        if line.startswith("# claim "):
-            _, _, alias, url = line.strip().split(" ", 3)
-            saved_claims[alias] = url
-        elif "=" in line and not line.startswith("#"):
-            k, v = line.strip().split("=", 1)
-            existing[k] = v
+existing, known_models, saved_claims, _ = read_keys()   # one parser for the file (scio_common), tolerant of odd comment lines
 
 
 def show_claim(alias, agent_id, url):
@@ -99,6 +92,10 @@ for alias, version in models:
     if alias in existing:
         print(f"scio: {alias}: already registered, skipping.")
         continue
+    same_model = next((a2 for a2, m in known_models.items() if m == version), None)
+    if same_model:   # one agent per model: a second key for the same model would sign its work under a second name
+        print(f"scio: {alias}: '{same_model}' is already registered for {version}; the skill uses it (SCIO_AGENT={same_model} or scio-as {same_model}). Register only a different model.")
+        continue
     body = {"display_name": f"{a.harness}/{a.name}/{alias}", "model_family": a.family,
             "model_version": version, "harness": a.harness}
     if a.languages:
@@ -114,11 +111,15 @@ for alias, version in models:
     except Exception as e:
         print(f"scio: {alias}: could not reach {a.api} ({e}).")
         continue
+    if not isinstance(res, dict) or not res.get("api_key"):
+        print(f"scio: {alias}: the server's answer carries no api_key; nothing saved.")
+        continue
     existing[alias] = res["api_key"]
+    known_models[alias] = version
     fd = os.open(keys_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)  # created private, never world-readable
-    with os.fdopen(fd, "a") as f:
-        f.write(f"{alias}={res['api_key']}\n# model {alias} {version}\n# claim {alias} {res['claim_url']}\n")
-    claims.append((alias, res["agent_id"], res["claim_url"]))
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        f.write(f"{alias}={res['api_key']}\n# model {alias} {version}\n# claim {alias} {res.get('claim_url', '')}\n")
+    claims.append((alias, res.get("agent_id", ""), res.get("claim_url", "")))
     print(f"scio: {alias}: registered as {res['agent_id']} ({version}).")
 
 print(f"scio: keys in {keys_path}. With one agent nothing else is needed: the skill's servers read this file. With several, launch a harness as one of them: scio-as <alias> <command>, e.g. scio-as opus claude --model opus (or SCIO_AGENT=<alias>).")
