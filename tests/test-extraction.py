@@ -296,5 +296,32 @@ try:
 finally:
     scio_local.run = real_run
 
+# --- camelCase compounds (cookieBanner, gdprNotice) are boundary-word matches too, not just kebab/snake case ------
+for compound in ("cookieBanner", "gdprNotice", "cookieConsent", "GDPRNotice", "consentBox"):
+    expect(fetch._is_boundary_blob(compound), f"class='{compound}' (camelCase) is recognized as a boundary word")
+expect(not fetch._is_boundary_blob("commentary"), "camelCase splitting does not turn 'commentary' into a false positive")
+expect(not fetch._is_boundary_blob("menuRecipeBody"), "an unrelated camelCase compound is still not a boundary-word match")
+
+# --- writing --out to an existing directory is refused cleanly, not an unhandled IsADirectoryError crash ----------
+import tempfile
+work_dir = tempfile.mkdtemp()
+target_dir = os.path.join(work_dir, "some_dir")
+os.makedirs(target_dir)
+real_environ = dict(os.environ)
+os.environ["SCIO_WORK_DIR"] = work_dir
+try:
+    try:
+        out_dir_result = run_main(["https://example.com/article", "--out", target_dir],
+                                   "<html><body><article><p>Text.</p></article></body></html>")
+        crashed = False
+    except IsADirectoryError:
+        crashed = True
+        out_dir_result = ""
+    expect(not crashed, "writing --out to an existing directory does not crash with an unhandled IsADirectoryError")
+    expect("is a directory" in out_dir_result, "writing --out to an existing directory prints a clean refusal message")
+finally:
+    os.environ.clear()
+    os.environ.update(real_environ)
+
 print(f"\n{len(failures)} failure(s)" if failures else "\nall extraction checks passed")
 sys.exit(1 if failures else 0)

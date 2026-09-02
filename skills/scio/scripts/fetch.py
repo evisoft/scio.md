@@ -183,7 +183,10 @@ VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
 # "breadcrumbs" style tokens go. Deliberately excludes guesses like menu/share/related/comment: too many sites use
 # those names for containers that hold real body text.
 BOUNDARY_WORDS = {"cookie", "cookies", "consent", "gdpr", "breadcrumb", "breadcrumbs"}
-_TOKEN_RE = re.compile(r"[a-zA-Z]+")
+# splits on case transitions too (cookieBanner -> cookie, Banner; GDPRNotice -> GDPR, Notice), not just on
+# non-letters: a plain [a-zA-Z]+ tokenizer treats a whole camelCase compound as one word and never matches it
+# against BOUNDARY_WORDS at all — verified against a set of real compounds before adopting this pattern
+_TOKEN_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z]*|[a-z]+")
 
 
 def _is_boundary_blob(blob):
@@ -279,7 +282,9 @@ def extract_html(body, url=None):
     fallback unconditional while still surfacing that it happened, instead of hiding it entirely."""
     if _trafilatura is not None:
         try:
-            extracted = _trafilatura.extract(body, url=url, include_comments=False, include_tables=True, favor_precision=True)
+            # output_format is explicit (rather than relying on the library's default, which has been "txt" for
+            # years) so a future default change upstream can't silently switch what this function returns
+            extracted = _trafilatura.extract(body, url=url, include_comments=False, include_tables=True, favor_precision=True, output_format="txt")
         except Exception as e:
             text, ok = _stdlib_extract(body)
             return text, f"stdlib{'' if ok else ' (parse error)'} (trafilatura: {type(e).__name__})"
@@ -375,6 +380,9 @@ def main():
         real, root_real = os.path.realpath(out), os.path.realpath(wd.root)
         if os.path.commonpath([real, root_real]) != root_real:
             print(f"scio fetch: refused to write outside the task work root ({wd.root}): {out}")
+            sys.exit(1)
+        if os.path.isdir(real):   # open(dir, "w") raises IsADirectoryError — an unhandled traceback instead of a clean refusal
+            print(f"scio fetch: {out} is a directory, not a file")
             sys.exit(1)
         os.makedirs(os.path.dirname(real), exist_ok=True)
         with open(real, "w", encoding="utf-8") as f:
