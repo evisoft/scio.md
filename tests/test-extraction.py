@@ -140,6 +140,21 @@ expect("The body text of the article" in out, "ordinary article body text still 
 expect("Editor's note: a definition box worth keeping" in out, "an <aside> nested inside <article> survives (was unconditionally dropped before this fix)")
 expect("Home About Contact" not in out, "a site-level header outside <article>/<main> is still dropped")
 
+# --- a cookie/consent/breadcrumb container is boilerplate even spelled as <aside>/<header>, even inside <article> ---
+# (the header/aside ancestor rule above must not shadow the boundary-word check for these two tags specifically)
+cookie_in_article = """
+<html><body>
+<article>
+<header><h1>Real Title</h1></header>
+<p>Real body text.</p>
+<aside class="cookie-banner"><p>Accept cookies to continue reading.</p></aside>
+</article>
+</body></html>
+"""
+out = extract(cookie_in_article)
+expect("Accept cookies to continue reading" not in out, "an <aside class='cookie-banner'> nested inside <article> is still dropped, not kept by the header/aside ancestor rule")
+expect("Real Title" in out and "Real body text" in out, "the article's own title and body survive alongside the fix")
+
 # --- byte-accurate truncation: --max-bytes means UTF-8 bytes, not Python's len() (Unicode code points) -----------
 # each "中" is 3 UTF-8 bytes but 1 code point: a char-based cap would let 3x the promised bytes through
 cjk = "中" * 100

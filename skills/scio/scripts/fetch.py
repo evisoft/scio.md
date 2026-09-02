@@ -153,7 +153,8 @@ def fetch(url, cap=RAW_DOWNLOAD_CAP):
 STRUCTURAL_BOILERPLATE = {"script", "style", "noscript", "svg", "iframe", "nav", "footer", "form", "dialog"}
 CONTENT_ROOTS = {"article", "main"}
 BLOCK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "td", "th", "dt", "dd",
-              "section", "article", "main", "header", "aside", "pre", "blockquote", "figure", "figcaption"}
+              "section", "article", "main", "header", "aside", "pre", "blockquote", "figure", "figcaption",
+              "address", "details", "summary"}
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 # class/id boundary words for the one class of boilerplate that regularly sits in a plain <div>: cookie/consent
 # banners and breadcrumb trails. Matched as whole alphabetic tokens (split on anything else), never a substring —
@@ -186,12 +187,17 @@ class _Extractor(HTMLParser):
         self.skip_root = None    # stack depth at which the current boilerplate subtree started; None = not skipping
 
     def _boilerplate(self, tag, attrs):
-        if tag in ("header", "aside"):   # boilerplate only outside the identified content region — see CONTENT_ROOTS
-            return not (set(self.stack[:-1]) & CONTENT_ROOTS)
+        # class/id boundary words win regardless of tag or nesting: a cookie/consent/breadcrumb container is
+        # boilerplate even when it happens to be spelled <aside class="cookie-banner"> inside <article> — checked
+        # first so the header/aside ancestor rule below (which returns on tag alone) can never shadow it
+        blob = " ".join(v for k, v in attrs if k in ("class", "id") and v)
+        if blob and _is_boundary_blob(blob):
+            return True
         if tag in STRUCTURAL_BOILERPLATE:
             return True
-        blob = " ".join(v for k, v in attrs if k in ("class", "id") and v)
-        return bool(blob) and _is_boundary_blob(blob)
+        if tag in ("header", "aside"):   # boilerplate only outside the identified content region — see CONTENT_ROOTS
+            return not (set(self.stack[:-1]) & CONTENT_ROOTS)
+        return False
 
     def handle_starttag(self, tag, attrs):
         if tag in VOID_TAGS:
@@ -243,6 +249,7 @@ def extract_html(body, url=None):
             return _stdlib_extract(body), f"stdlib (trafilatura: {type(e).__name__})"
         if extracted and extracted.strip():
             return extracted, "trafilatura"
+        return _stdlib_extract(body), "stdlib (trafilatura: no article content detected)"
     return _stdlib_extract(body), "stdlib"
 
 
