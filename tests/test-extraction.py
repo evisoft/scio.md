@@ -92,12 +92,15 @@ big_header = "<header>" + ("nav link " * 40_000) + "</header>"   # ~360 KB of ra
 page2 = f"<html><body>{big_header}<article><p>The real article sentence survives a huge header.</p></article></body></html>"
 raw = page2.encode()
 expect(len(raw) > 300_000, "sanity: the synthetic header is larger than the 200 KB fetch budget")
-text = fetch.to_text(raw, "text/html")
+text, method = fetch.to_text(raw, "text/html")
 expect("real article sentence survives a huge header" in text, "extraction reaches content past 300 KB of dropped header (the ordering-fix regression case)")
 expect(len(text) < 1000, "the header contributes ~0 extracted chars regardless of its raw size")
+expect(method in ("trafilatura", "stdlib"), "to_text reports which extractor ran")
 
 # --- non-HTML content is passed through, not run through the extractor -----------------------------------------
-expect(fetch.to_text(b"plain text, no markup here", "text/plain") == "plain text, no markup here", "plain text is untouched")
+plain, plain_method = fetch.to_text(b"plain text, no markup here", "text/plain")
+expect(plain == "plain text, no markup here", "plain text is untouched")
+expect(plain_method == "text", "non-HTML content is reported as method='text', not run through either extractor")
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall extraction checks passed")
 sys.exit(1 if failures else 0)
