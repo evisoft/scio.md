@@ -524,7 +524,7 @@ expect("harness_vocabulary" in out and "shell_command" in out and "zero_width_ch
 expect(hook("guard-fetch.py", "WebFetch", {"url": "http://127.0.0.1\\@example.com/"}) == "deny", "G10: a backslash in the URL (read as a slash by WHATWG fetchers) is denied")
 expect(json.loads(subprocess.run([PY, os.path.join(HERE, "agy-hook.py")], input=json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": "ls", "extra": "REDTEAM_KEY_0123456789"}}}), capture_output=True, text=True, env=aenv).stdout)["decision"] == "deny", "G11: the Antigravity adapter shows the guards every argument field, not only the command")
 oc_perm = list(json.loads("\n".join(l for l in oc.splitlines() if not l.strip().startswith("//")))["permission"])
-expect(oc_perm.index("scio_scio_contest") < oc_perm.index("scio_*"), "G12: OpenCode's ask rules for contest/register/suspend precede the wildcard allow (first match wins)")
+expect(oc_perm.index("scio_scio_contest") > oc_perm.index("scio_*"), "G12: OpenCode's sensitive-tool exceptions follow the wildcard allow (last match wins)")
 outp, r = local([{"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "wait", "arguments": {"seconds": 0}}}, {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": [1]},
                  {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "wait", "arguments": [1]}}, {"jsonrpc": "2.0", "id": 3, "method": "ping"}])
 expect([m.get("id") for m in outp] == [1, 2, 3] and all("error" in m for m in outp[:2]) and "Traceback" not in r.stderr, "L8: scio-local ignores a notification and answers malformed params/arguments with errors instead of dying")
@@ -559,7 +559,7 @@ with tempfile.TemporaryDirectory() as d:
     expect(outp and outp[0]["result"].get("isError") and "work root" in outp[0]["result"]["content"][0]["text"], "C3: a proposal_file outside the task work root is refused")
     outp, r = bridge([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}], SCIO_KEYS_FILE=kf)
     expect(any("proposal_file" in (t.get("inputSchema") or {}).get("properties", {}) for t in outp[0]["result"]["tools"] if t.get("name") == "scio_propose_edit") or not any(t.get("name") == "scio_propose_edit" for t in outp[0]["result"]["tools"]), "C3: tools/list advertises proposal_file on scio_propose_edit")
-    r = subprocess.run([PY, os.path.join(HERE, "check-claims.py")], input=json.dumps({"tool_name": "mcp__plugin_scio_scio__scio_propose_edit", "tool_input": {"proposal_file": os.path.join(td, "proposal.json")}}), capture_output=True, text=True, env=aenv)
+    r = subprocess.run([PY, os.path.join(HERE, "check-claims.py")], input=json.dumps({"tool_name": "mcp__plugin_scio_scio__scio_propose_edit", "tool_input": {"proposal_file": os.path.join(td, "proposal.json")}}), capture_output=True, text=True, env=dict(aenv, SCIO_WORK_DIR=wd))
     expect("Traceback" not in r.stderr and "deny" not in r.stdout, "C3: the pre-flight hook reads a proposal_file instead of judging an empty input")
 # C4/C5: a custom keys file in a shared directory protects the file, not the directory; prose that spells the directory touches nothing
 expect(hook("guard-secrets.py", "Bash", {"command": "ls /tmp/foo"}, {"SCIO_KEYS_FILE": "/tmp/keys"}) is None and hook("guard-secrets.py", "Bash", {"command": "cat /tmp/keys"}, {"SCIO_KEYS_FILE": "/tmp/keys"}) == "deny"
@@ -580,7 +580,7 @@ with tempfile.TemporaryDirectory() as d:
     json.dump({"permission": {"bash": {"git *": "allow", "*": "allow"}}}, open(os.path.join(d, ".config", "opencode", "opencode.json"), "w"))
     subprocess.run([PY, os.path.join(HERE, "setup.py"), "--harness", "opencode", "--trust", "--yes"], capture_output=True, text=True, env=h, cwd=d)
     b = json.load(open(os.path.join(d, ".config", "opencode", "opencode.json")))["permission"]["bash"]
-    expect(b.get("*") == "allow" and list(b)[-1] == "*" and b.get("*scio-as *") == "ask", "S2: setup.py --harness opencode --trust keeps the user's own '*' rule (last), scio-as asks")
+    expect(b.get("*") == "allow" and list(b)[0] == "*" and b.get("*scio-as *") == "ask", "S2: setup.py --harness opencode --trust keeps the user's default first, scio-as asks")
     class R(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
             self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -635,5 +635,9 @@ with tempfile.TemporaryDirectory() as d:
 
 mcp.shutdown()
 
+review = subprocess.run([PY, os.path.join(TESTS, "test-review.py")], capture_output=True, text=True)
+expect(review.returncode == 0, "September review: boundary, protocol, credential and effective-permission regressions")
+if review.returncode:
+    print(review.stdout + review.stderr)
 print(f"\n{len(failures)} failure(s)")
 sys.exit(1 if failures else 0)

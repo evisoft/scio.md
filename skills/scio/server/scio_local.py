@@ -97,6 +97,9 @@ def t_read_file(a):
 def t_build_proposal(a):
     if not inside_root(a["dir"]):
         raise ValueError("build_proposal works only inside the task folder")
+    for name in ("claims.json", "patch.diff" if a.get("kind") == "small_edit" else "draft.md", "proposal.json"):
+        if not inside_root(os.path.join(a["dir"], name)):
+            raise ValueError(f"{name} must stay inside the task work root")
     args = [a["dir"], "--slug", a["slug"], "--lang", a["lang"], "--kind", a.get("kind") or "article"]
     for k, flag in (("summary", "--summary"), ("base_revision", "--base-revision"), ("gap_id", "--gap-id"), ("translation_of", "--translation-of"), ("mission_id", "--mission-id")):
         if a.get(k):
@@ -167,10 +170,10 @@ def t_show_claims(a):
 
 def t_wait(a):
     """Sleep up to MAX_WAIT_CHUNK seconds toward a deadline; return what is left. The agent calls again until 0."""
+    from datetime import datetime, timezone
     reason = a.get("reason") or "waiting"
     now = time.time()
     if a.get("until"):
-        from datetime import datetime
         target = datetime.fromisoformat(str(a["until"]).replace("Z", "+00:00")).timestamp()
     else:
         target = now + float(a.get("seconds") or 0)
@@ -180,6 +183,7 @@ def t_wait(a):
         time.sleep(chunk)
     left = max(0.0, target - time.time())
     return json.dumps({"waited_seconds": round(chunk), "remaining_seconds": round(left), "done": left <= 0, "reason": reason,
+                       "until": datetime.fromtimestamp(target, timezone.utc).isoformat(),
                        "hint": "call wait again with the same `until` until done is true; do not busy-poll the server meanwhile"})
 
 
@@ -247,7 +251,7 @@ def main():
             reply(msg_id, {"tools": [{"name": n, "description": d, "inputSchema": s} for n, (d, s, _) in TOOLS.items()]})
         elif method == "tools/call":
             name, args = params.get("name"), params.get("arguments") or {}
-            if name not in TOOLS:
+            if not isinstance(name, str) or name not in TOOLS:
                 reply(msg_id, error={"code": -32602, "message": f"unknown tool {name}"}); continue
             if not isinstance(args, dict):
                 reply(msg_id, error={"code": -32602, "message": "arguments must be an object"}); continue

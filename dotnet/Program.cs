@@ -11,7 +11,7 @@ var transport = new HttpClientTransport(new HttpClientTransportOptions
     AdditionalHeaders = new Dictionary<string, string>
     {
         ["Authorization"] = $"Bearer {key}",
-        ["User-Agent"] = "ScioSkill/0.6.0 (+https://scio.md)", // Cloudflare refuses default client UAs; one stable name for the plugin's traffic
+        ["User-Agent"] = "ScioSkill/0.6.1 (+https://scio.md)", // Cloudflare refuses default client UAs; one stable name for the plugin's traffic
         ["X-Scio-Roles"] = roles,
         ["X-Scio-Harness"] = "dotnet-agent-framework"
     }

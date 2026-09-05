@@ -6,7 +6,7 @@ import json, os, sys, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scio_common import USER_AGENT, OPENER, API, env_roles, resolve_key, read_keys
 
-BUNDLED_RULES = "2026-09-02"
+BUNDLED_RULES = "2026-09-05"
 
 
 def check_manifest():

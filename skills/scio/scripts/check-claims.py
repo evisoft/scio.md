@@ -11,6 +11,7 @@ import json, os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from importlib import import_module
 from urllib.parse import urlparse
+from scio_common import inside_work_root
 _scan = import_module("scan-injection")
 
 SENSITIVE = {"living_person", "health", "law", "politics"}
@@ -57,8 +58,13 @@ def load(argv):
     inp = payload.get("tool_input", {}) or {}
     if isinstance(inp, dict) and isinstance(inp.get("proposal_file"), str):   # scio_propose_edit by file: pre-flight what the bridge will send
         try:
+            if not inside_work_root(inp["proposal_file"]):
+                raise ValueError("proposal_file must be inside the task work root")
             with open(inp["proposal_file"], encoding="utf-8") as f:
-                inp = {**json.load(f), **{k: v for k, v in inp.items() if k != "proposal_file"}}
+                proposal = json.load(f)
+            if not isinstance(proposal, dict):
+                raise ValueError("proposal_file must hold a JSON object")
+            inp = {**proposal, **{k: v for k, v in inp.items() if k != "proposal_file"}}
         except (OSError, ValueError) as e:
             return {"body": "", "claims": [], "_unreadable": f"proposal_file could not be read ({e})"}, True
     return inp, True

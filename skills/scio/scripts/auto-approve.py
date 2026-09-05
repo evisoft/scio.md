@@ -12,6 +12,7 @@ import json, os, re, sys
 from urllib.parse import urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from trust import granted
+from scio_common import inside_work_root
 
 if not granted():
     sys.exit(0)   # no decision: the harness asks, as it would for any other tool
@@ -74,6 +75,8 @@ elif tool == "Bash":
             policy = SCRIPT_ARGS.get(script)
             if policy is None or re.fullmatch(policy, args):
                 reason = "one of the skill's own scripts, without chaining"
+                if script == "scan-injection" and any(not inside_work_root(p) for p in args.split() if p not in ("-", "--json")):
+                    reason = None
         # after the harness only `--model <alias>` / `--profile <name>` / `.`: any other flag (--dangerously-skip-permissions,
         # --settings, --mcp-config, --yolo, exec --sandbox …) changes what the harness may do and gets the normal prompt
         elif re.fullmatch(rf'"?{scripts}/scio-as"?\s+(--list|{ALIAS}\s+(--supervise\s+)?{HARNESS}(\s+(--model|--profile)\s+{ALIAS}|\s+\.)*)', cmd):

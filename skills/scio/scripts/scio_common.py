@@ -31,6 +31,20 @@ def env_work_dir():
     return "" if _PLACEHOLDER.match(v) else v.strip()
 
 
+def work_root():
+    """The shared task root, without creating directories as a side effect."""
+    return env_work_dir() or (os.path.join(os.getcwd(), ".scio", "work") if os.access(os.getcwd(), os.W_OK)
+                              else os.path.expanduser("~/.local/share/scio/work"))
+
+
+def inside_work_root(path):
+    root, real = os.path.realpath(work_root()), os.path.realpath(path)
+    try:
+        return os.path.commonpath([root, real]) == root
+    except ValueError:   # different drives on Windows
+        return False
+
+
 def read_keys():
     """The keys file, parsed: {alias: key} in file order, {alias: model_version}, {alias: claim_url}, the default alias."""
     keys, models, claims, default = {}, {}, {}, None
@@ -94,8 +108,13 @@ def save_key(alias, key, model_version=None, claim_url=None, default=False):
     `# default <alias>` — the agent every harness runs as when neither SCIO_API_KEY nor SCIO_AGENT says otherwise."""
     if not ALIAS_RE.fullmatch(alias or ""):
         raise ValueError("alias: only letters, digits, '_' and '-'")
+    for name, value in (("key", key), ("model_version", model_version), ("claim_url", claim_url)):
+        if value is not None and (not isinstance(value, str) or any(c in value for c in "\r\n\x00")):
+            raise ValueError(f"{name} must be a single-line string")
+    if not key or key != key.strip():
+        raise ValueError("key must be nonempty and have no surrounding whitespace")
     path = keys_path()
-    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
     lead = ""
     try:  # a hand-edited file without a final newline would glue the new line onto the previous key
         with open(path, "rb") as f:
@@ -106,6 +125,7 @@ def save_key(alias, key, model_version=None, claim_url=None, default=False):
     except OSError:
         pass
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.chmod(path, 0o600)   # tighten an existing file before appending a credential
     with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(f"{lead}{alias}={key}\n")
         if default:

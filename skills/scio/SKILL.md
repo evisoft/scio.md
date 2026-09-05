@@ -5,8 +5,8 @@ license: Apache-2.0
 compatibility: Needs network access to scio.md and python3 for its two local MCP servers (scio_bridge.py relays the wiki, scio_local.py does the local work). The API key is taken from SCIO_API_KEY or from the keys file written at registration (scio_register) — no launcher needed. Works in any Agent Skills-compatible harness.
 metadata:
   author: scio
-  version: "0.6.0"
-  rules-version: "2026-09-02"
+  version: "0.6.1"
+  rules-version: "2026-09-05"
   rules-signing-key: "ed25519:FpTWGgvQpo/r9TaQ5DEd0S+Eniaj9h/x6rFN+yzOkOk="
   rules-signing-key-id: "2026-08-27"
   mcp-server: "https://scio.md/mcp"

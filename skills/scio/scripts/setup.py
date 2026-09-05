@@ -56,7 +56,7 @@ def render(path, escape=None):
 
 
 def opencode_bash_rules():
-    """The bash permission rules of opencode/opencode.scio.jsonc with absolute paths, as a dict (first match wins)."""
+    """The bash permission rules of opencode/opencode.scio.jsonc with absolute paths (last match wins)."""
     txt = "\n".join(l for l in render(os.path.join(ROOT, "opencode", "opencode.scio.jsonc")).splitlines() if not l.strip().startswith("//"))
     return json.loads(txt)["permission"]["bash"]
 
@@ -163,7 +163,7 @@ elif h == "codex":
 [mcp_servers.scio]
 command = {json.dumps(PY)}
 args = [{json.dumps(BRIDGE)}, "--harness", "codex"]
-env_vars = ["SCIO_API_KEY", "SCIO_AGENT", "SCIO_KEYS_FILE", "SCIO_ROLES"]   # forwarded from the launcher's environment when set (Codex starts servers with a minimal environment); the bridge otherwise reads the keys file
+env_vars = ["SCIO_API_KEY", "SCIO_AGENT", "SCIO_KEYS_FILE", "SCIO_WORK_DIR", "SCIO_ROLES"]   # the bridge and scio-local must share the same proposal work root
 tool_timeout_sec = 120
 {approve}
 [mcp_servers.scio-local]
@@ -293,18 +293,19 @@ elif h == "opencode":
         if p is not None and a.trust:   # without --trust OpenCode's own permission defaults apply
             for k in ("scio_*", "scio-local_*", "scio_scio_contest", "scio_scio_suspend", "scio_scio_register"):
                 p.pop(k, None)
-            p.update({"scio_scio_contest": "ask", "scio_scio_suspend": "ask", "scio_scio_register": "ask", "scio_*": "allow", "scio-local_*": "allow"})   # first match wins: the asks go first
+            p.update({"scio_*": "allow", "scio-local_*": "allow", "scio_scio_contest": "ask", "scio_scio_suspend": "ask", "scio_scio_register": "ask"})   # last match wins: exceptions follow the wildcard
             bash = p.get("bash")
             if not isinstance(bash, dict):
                 bash = p["bash"] = {}
-            # absolute script paths only; existing rules keep their place (OpenCode takes the first match) — a rule of
-            # ours already there is replaced in place, new ones go before any catch-all
+            # The user's catch-all is the default; specific existing rules keep their relative order.
+            # Reinsert our rules in canonical order so an upgrade also repairs older reversed precedence.
             ours = opencode_bash_rules()
-            merged = {k: (ours.pop(k) if k in ours else v) for k, v in bash.items() if not (k == "*" or k.endswith("scio-as *"))}
+            merged = {"*": bash.get("*", ours.pop("*", "ask"))}
+            ours.pop("*", None)
+            obsolete = f"python3 {SCRIPTS}/scan-injection.py */.scio/work/*"
+            merged.update({k: v for k, v in bash.items() if k not in ("*", obsolete) and k not in ours and not k.endswith("scio-as *")})
             merged.update(ours)
             merged["*scio-as *"] = "ask"   # an arbitrary command behind scio-as always asks
-            if "*" in bash or "*" in ours:   # the catch-all goes last; its value stays the user's own when they had one
-                merged["*"] = bash.get("*", "ask")
             p["bash"] = merged
     merge_json(path, m, 0o644)
     print("launch: opencode  (scio-as <alias> opencode to pick one of several agents)")

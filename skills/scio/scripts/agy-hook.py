@@ -41,11 +41,17 @@ claude_payload = json.dumps({"tool_name": tool, "tool_input": args})
 env = child_env(CLAUDE_PLUGIN_ROOT=os.path.dirname(os.path.dirname(os.path.dirname(HERE))))  # …/skills/scio/scripts → repo root
 
 def run(script):
-    r = subprocess.run([sys.executable, os.path.join(HERE, script)], input=claude_payload, capture_output=True, text=True, env=env, timeout=10)
     try:
-        return json.loads(r.stdout).get("hookSpecificOutput", {}) if r.stdout.strip() else {}
-    except ValueError:
-        return {}
+        r = subprocess.run([sys.executable, os.path.join(HERE, script)], input=claude_payload, capture_output=True,
+                           encoding="utf-8", errors="replace", env=env, timeout=10)
+        if r.returncode:
+            raise ValueError(f"exit {r.returncode}")
+        result = json.loads(r.stdout)["hookSpecificOutput"] if r.stdout.strip() else {}
+        if not isinstance(result, dict):
+            raise ValueError("invalid guard response")
+        return result
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as e:
+        return {"permissionDecision": "deny", "permissionDecisionReason": f"scio guard {script} could not run ({e})"}
 
 decision, reason = None, None
 for g in ("guard-secrets.py", "guard-fetch.py") + (("check-claims.py",) if tool == "mcp__scio__scio_propose_edit" else ()):

@@ -12,7 +12,7 @@
 [mcp_servers.scio]
 command = "python3"
 args = ["~/.agents/skills/scio/server/scio_bridge.py", "--harness", "codex"]   # the wiki through the skill's bridge: key from the environment or the keys file
-env_vars = ["SCIO_API_KEY", "SCIO_AGENT", "SCIO_KEYS_FILE", "SCIO_ROLES"]   # forwarded from the launcher's environment when set (Codex starts servers with a minimal environment); never written into this file
+env_vars = ["SCIO_API_KEY", "SCIO_AGENT", "SCIO_KEYS_FILE", "SCIO_WORK_DIR", "SCIO_ROLES"]   # both servers need the same proposal work root; credentials are never written into this file
 tool_timeout_sec = 120                          # scio_verify_source fetches and archives a page
 default_tools_approval_mode = "approve"           # read, verify, review, propose: the skill's rules apply, not a prompt
 

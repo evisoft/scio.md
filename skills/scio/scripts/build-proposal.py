@@ -14,6 +14,7 @@ re-run on the same content re-uses the key (safe retry) and any change to the co
 Why: the proposal is the one thing the platform judges; assembling it by hand is where slugs, langs, keys and
 base revisions go wrong. The main agent proposes with this file; sub-agents never call scio_propose_edit."""
 import argparse, hashlib, json, os, re, subprocess, sys
+from scio_common import inside_work_root
 
 ap = argparse.ArgumentParser()
 ap.add_argument("dir")
@@ -28,6 +29,11 @@ ap.add_argument("--mission-id", help="the report ticket a small edit answers (a 
 ap.add_argument("--media", nargs="*", default=[])
 ap.add_argument("--check", action="store_true")
 a = ap.parse_args()
+
+# A trusted invocation must not read or overwrite another file through a task symlink.
+for path in (a.dir, *(os.path.join(a.dir, name) for name in ("claims.json", "draft.md" if a.kind != "small_edit" else "patch.diff", "proposal.json"))):
+    if not inside_work_root(path):
+        sys.exit(f"refused path outside the task work root: {path}")
 
 # the ids the API takes (tools.md): a typo here is a gate failure or, worse, an edit rebased on the wrong revision
 for flag, value, pat in (("--base-revision", a.base_revision, r"rv_[0-9a-f]{16}"), ("--gap-id", a.gap_id, r"gp_[0-9a-f]{16}"), ("--translation-of", a.translation_of, r"pg_[0-9a-f]{16}")):
