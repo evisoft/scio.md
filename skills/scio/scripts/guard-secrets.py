@@ -3,9 +3,9 @@
 keys file, or the keys file path — whatever the tool. The key travels only in the Authorization header the skill's
 bridge (or a launcher) sets; if it appears in a tool argument, something (a page, a discussion, a task) has steered the
 agent into exfiltration (security.md §2.2). Reads the hook payload on stdin; silent when nothing matches."""
-import json, os, re, sys
+import json, os, re, shlex, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import env_key
+from scio_common import env_key, read_keys
 
 try:
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")   # the payload is UTF-8 whatever the locale: a decode error here would be a silent allow
@@ -22,14 +22,7 @@ if k and len(k) >= 12:
     secrets.add(k)
 DEFAULT_DIR = os.path.expanduser(os.path.join("~", ".config", "scio"))
 keys_path = os.environ.get("SCIO_KEYS_FILE") or os.path.join(DEFAULT_DIR, "keys")
-try:
-    for line in open(keys_path):
-        if "=" in line and not line.startswith("#"):
-            v = line.strip().split("=", 1)[1]
-            if len(v) >= 12:
-                secrets.add(v)
-except OSError:
-    pass
+secrets.update(value for value in read_keys()[0].values() if len(value) >= 12)
 hit = next((s for s in secrets if s in blob), None)
 reason = None
 HOME = os.path.expanduser("~")
@@ -61,41 +54,58 @@ def mentioned(path):
     return bool(p) and re.search(re.escape(p) + r"(?![\w.-])", nblob) is not None
 
 
-def path_values(node):
-    """Every string in the arguments that looks like a path (Read, Grep, Glob and friends name the file directly)."""
+def path_values(node, field=""):
+    """Explicit file fields may contain spaces or basenames; prose is not a path."""
     if isinstance(node, dict):
-        for v in node.values():
-            yield from path_values(v)
+        for key, value in node.items():
+            yield from path_values(value, key.lower())
     elif isinstance(node, list):
-        for v in node:
-            yield from path_values(v)
-    elif isinstance(node, str) and ("/" in node or "\\" in node) and not re.search(r"\s", node.strip()):   # one token: a path, not prose with a slash in it
-        yield node
+        for value in node:
+            yield from path_values(value, field)
+    elif isinstance(node, str):
+        explicit = field in {"path", "paths", "dir", "directory", "root", "cwd"} or field.endswith("_path")
+        path_shaped = ("/" in node or "\\" in node) and not re.search(r"\s", node.strip())
+        if explicit or path_shaped:
+            yield node
 
 
-def names_keys_dir(value):
-    p = os.path.normpath(os.path.expanduser(normalise(value)))
-    return any(p == d or p.startswith(d + "/") for d in (CFG_DIR, KEYS_DIR) if d)
+def names_credential_path(value):
+    p = os.path.realpath(os.path.expanduser(normalise(value)))
+    key = os.path.realpath(os.path.expanduser(normalise(keys_path)))
+    if p == key:
+        return True
+    for directory in (CFG_DIR, KEYS_DIR):
+        if directory:
+            real = os.path.realpath(directory)
+            if p == real or p.startswith(real + os.sep):
+                return True
+    return False
 
 
 cmd = payload.get("tool_input", {}).get("command") if isinstance(payload.get("tool_input"), dict) else None
 # the path rules look where a path can act: a Bash command line and the path-shaped values of any tool. Prose that merely
 # spells the directory (an Edit of the README, a sub-agent's prompt) touches nothing — the key-value check above covers it
-nblob = normalise("\n".join(([cmd] if isinstance(cmd, str) else []) + list(path_values(payload.get("tool_input", {})))))
+paths = list(path_values(payload.get("tool_input", {})))
+nblob = normalise("\n".join(([cmd] if isinstance(cmd, str) else []) + paths))
+if isinstance(cmd, str):
+    try:
+        paths.extend(shlex.split(cmd))   # inspect quoted basenames without executing shell syntax
+    except ValueError:
+        pass   # retain the textual checks when the command is not valid shell syntax
 if hit:
     reason = "an API key appears in the tool arguments; keys travel only in the Authorization header the skill's bridge sets"
 elif (mentioned(keys_path) or mentioned(DEFAULT_DIR) or (KEYS_DIR and mentioned(KEYS_DIR))
       or re.search(r"(?<![\w.-])" + re.escape(CFG_REL) + r"(?![\w.-])", nblob)
       or (re.search(r"\.config/[^\s/]*[*?\[]", nblob) and re.search(r"\b(keys|scio)\b", nblob))   # a glob under .config reaching for the file
       or re.search(r"\bfind\b[^\n;|&]*\.config\b[^\n;|&]*\bkeys\b", nblob)
-      or any(names_keys_dir(v) for v in path_values(payload.get("tool_input", {})))):
+      or any(names_credential_path(v) for v in paths)):
     # every tool, no exception for Read/Bash: `head`, a concatenated path or a custom SCIO_KEYS_FILE without the word
     # "keys" in it were all ways past the old `cat `/`keys` test — this is the last defence when prompts are off
     reason = "the tool call touches the keys file or its directory; only the skill's own servers and scripts read it (the bridge, scio-as, the register scripts) — never a tool call"
-elif tool == "Bash" and isinstance(cmd, str) and re.search(r"\$\{?SCIO_API_KEY\b|\bprintenv\b[^\n;|&]*\bSCIO_API_KEY\b|['\"]SCIO_API_KEY['\"]", cmd):
+elif tool == "Bash" and isinstance(cmd, str) and re.search(r"\$\{?SCIO_(?:API_KEY|KEYS_FILE)\b|\bprintenv\b[^\n;|&]*\bSCIO_API_KEY\b|['\"]SCIO_API_KEY['\"]", cmd):
     # a command that reads the key by name — `curl -d "$SCIO_API_KEY"`, `printenv SCIO_API_KEY`, os.environ["SCIO_API_KEY"] — is the
     # exfiltration of §2.2 by another spelling (the launcher exports it; no command needs to read it back)
-    reason = "the command reads SCIO_API_KEY; the key is used only by the skill's own servers and launcher, never read or sent by a command"
+    reason = "the command reads a Scio credential variable; credentials are used only by the skill's own servers and launcher"
 elif tool == "Bash" and isinstance(cmd, str) and k and re.search(r"(?:^|[;&|(]\s*|\bsudo\s+)(?:env|printenv|export\s+-p|declare\s+-x|set)\s*(?:$|[;&|>)])", cmd.strip()):
     reason = "the command dumps the whole environment, which holds SCIO_API_KEY in this session"
 if reason:

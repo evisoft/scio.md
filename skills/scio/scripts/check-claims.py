@@ -50,12 +50,13 @@ def load(argv):
     if len(argv) > 1:
         with open(argv[1], encoding="utf-8") as f:
             data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("proposal must be a JSON object")
         return data.get("tool_input", data), False
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        return None, True
-    inp = payload.get("tool_input", {}) or {}
+    payload = json.load(sys.stdin)
+    if not isinstance(payload, dict):
+        raise ValueError("hook payload must be a JSON object")
+    inp = payload.get("tool_input", {})
     if isinstance(inp, dict) and isinstance(inp.get("proposal_file"), str):   # scio_propose_edit by file: pre-flight what the bridge will send
         try:
             if not inside_work_root(inp["proposal_file"]):
@@ -68,6 +69,26 @@ def load(argv):
         except (OSError, ValueError) as e:
             return {"body": "", "claims": [], "_unreadable": f"proposal_file could not be read ({e})"}, True
     return inp, True
+
+
+def type_errors(value, schema, path):
+    """Check types before content rules perform string operations or arithmetic."""
+    expected = schema.get("type")
+    types = {"object": dict, "array": list, "string": str, "integer": int}
+    if expected in types and type(value) is not types[expected]:
+        article = "a" if expected == "string" else "an"
+        return [f"{path}: must be {article} {expected} (claim.schema.json)"]
+    errors = []
+    if expected == "object":
+        for name, child_schema in schema.get("properties", {}).items():
+            if name in value:
+                errors.extend(type_errors(value[name], child_schema, f"{path}.{name}"))
+    elif expected == "array":
+        for index, item in enumerate(value):
+            errors.extend(type_errors(item, schema.get("items", {}), f"{path}[{index}]"))
+    elif expected == "integer" and "minimum" in schema and value < schema["minimum"]:
+        errors.append(f"{path}: must be at least {schema['minimum']} (claim.schema.json)")
+    return errors
 
 
 def source_host(url):
@@ -120,9 +141,22 @@ def prose_only(body):
 
 def check(inp):
     problems, warnings = [], []
+    if not isinstance(inp, dict):
+        return ["proposal must be a JSON object"], []
     if inp.get("_unreadable"):
         return [inp["_unreadable"]], []
-    claims = inp.get("claims") or []
+    for field in ("body", "patch", "summary"):
+        if field in inp and not isinstance(inp[field], str):
+            problems.append(f"{field} must be a string")
+    if problems:
+        return problems, []
+    claims = inp.get("claims", [])
+    if not isinstance(claims, list):
+        return ["claims must be a list (claim.schema.json)"], []
+    for index, claim in enumerate(claims):
+        problems.extend(type_errors(claim, _SCHEMA, f"claim {index}"))
+    if problems:
+        return problems, []
     text = str(inp.get("body") or inp.get("patch") or "").replace("\r\n", "\n")   # a CRLF draft is the same draft
     if inp.get("patch"):
         prose = "\n".join(l[1:] for l in text.splitlines() if l.startswith("+") and not l.startswith("+++")
@@ -137,13 +171,7 @@ def check(inp):
 
     # --- claims ---------------------------------------------------------------
     by_ordinal = {}
-    if not isinstance(claims, list):
-        problems.append("claims must be a list (claim.schema.json)")
-        claims = []
     for i, c in enumerate(claims):
-        if not isinstance(c, dict):
-            problems.append(f"claim {i}: must be an object, not {type(c).__name__} (claim.schema.json)")
-            continue
         if isinstance(c.get("ordinal"), int):
             if c["ordinal"] in by_ordinal:
                 problems.append(f"claim {i}: ordinal {c['ordinal']} is used twice — every claim its own number (markdown.md §2)")
@@ -327,15 +355,15 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
-    inp, hook_mode = load(sys.argv)
-    if inp is None:
-        sys.exit(0)
+    hook_mode = len(sys.argv) == 1
+    try:
+        inp, _ = load(sys.argv)
+        problems, warnings = check(inp)
+    except Exception as e:
+        problems = [f"pre-flight could not check this proposal ({type(e).__name__}: {e}); fix the proposal shape"]
+        warnings = []
     if hook_mode:
-        # the hook must answer: a crash would print nothing, and a silent hook is an allow in some harnesses
-        try:
-            problems, warnings = check(inp)
-        except Exception as e:
-            problems, warnings = [f"pre-flight could not check this proposal ({type(e).__name__}: {e}); fix the proposal shape"], []
+        # Loading failures must produce a denial too; silent hook failures may allow a call.
         if problems:
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                               "permissionDecisionReason": "scio: fix before proposing — " + "; ".join(problems[:8])}}))
@@ -343,7 +371,6 @@ def main():
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                               "additionalContext": "scio pre-flight warnings (not blocking): " + "; ".join(warnings[:6])}}))
         sys.exit(0)
-    problems, warnings = check(inp)
     for p in problems:
         print(f"ERROR   {p}")
     for w in warnings:

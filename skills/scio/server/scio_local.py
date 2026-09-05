@@ -22,7 +22,7 @@ for _stream in (sys.stdin, sys.stdout):   # JSON-RPC over stdio is UTF-8 whateve
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(os.path.dirname(HERE), "scripts")
 sys.path.insert(0, SCRIPTS)
-from scio_common import USER_AGENT, child_env, env_work_dir  # noqa: E402
+from scio_common import USER_AGENT, child_env, inside_work_root as inside_root, work_root  # noqa: E402
 
 PROTOCOL = "2025-06-18"
 MAX_WAIT_CHUNK = 50  # seconds per call: under every harness's tool timeout; the agent calls again for the rest
@@ -38,16 +38,6 @@ def run(script, args=(), stdin=None, timeout=120, **env_extra):
                        encoding="utf-8", errors="replace", timeout=timeout,
                        env=child_env(CLAUDE_PLUGIN_ROOT=os.path.dirname(os.path.dirname(os.path.dirname(HERE))), **env_extra))
     return r.returncode, (r.stdout + (("\n" + r.stderr) if r.stderr.strip() else "")).strip()
-
-
-def work_root():
-    return env_work_dir() or (os.path.join(os.getcwd(), ".scio", "work") if os.access(os.getcwd(), os.W_OK) else os.path.expanduser("~/.local/share/scio/work"))
-
-
-def inside_root(path):
-    root = os.path.realpath(work_root())
-    real = os.path.realpath(path)
-    return real == root or real.startswith(root + os.sep)
 
 
 # ----------------------------------------------------------------------------------------------- tools

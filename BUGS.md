@@ -147,3 +147,108 @@ and exact bundle match. This is bundle drift, separate from BUG-011's check defe
 - Python compilation, JSON parsing with duplicate-key rejection, Bash syntax, and `git diff --check`: passed.
 - Manifest regenerated and all 42 installable file hashes verified.
 - Package metadata synchronized to 0.6.1. No release was published during this review.
+
+## Follow-up security review — baseline 9f9992e (v0.6.1)
+
+The following findings were reproduced in disposable directories before fixes.
+All test names refer to `tests/test-hardening.py`; no real credentials were used.
+
+### BUG-012 — High: task creation escapes through symlinks
+
+Status: Fixed. The named regression test below now passes; work-root validation is shared.
+
+`scripts/workdir.py:61` trusts a pre-existing task directory. Replacing that path
+with a symlink causes `create` to write notes, sources, and task metadata outside
+the work root. Validate every path before creating anything and share one root
+policy between CLI helpers and MCP servers.
+
+Evidence: `test_workdir_rejects_task_symlink_before_creating_external_files` fails.
+
+### BUG-013 — High: pruning deletes unrelated projects
+
+Status: Fixed. The named regression test below now passes; pruning validates task ownership.
+
+`scripts/workdir.py:100` treats the existence of `task.json` as ownership proof.
+An unrelated folder with that common filename is recursively deleted by
+`--prune 0`. Require valid Scio metadata and a matching generated directory name;
+skip symlinks and malformed metadata.
+
+Evidence: `test_prune_preserves_unrelated_folders_with_task_json` loses notes.txt.
+
+### BUG-014 — High: secret guard misses file aliases and crashes on decoding
+
+Status: Fixed. All three named regression tests below now pass.
+
+`scripts/guard-secrets.py:68` ignores basename-only paths and paths containing
+spaces; its directory comparison never resolves symlinks to the credential file.
+An invalid UTF-8 byte also crashes the separate key parser at line 26. Recognize
+explicit path fields, compare resolved paths, and reuse the shared key parser.
+
+Evidence: `test_secret_guard_denies_basename_spaces_and_symlink_paths` and
+`test_secret_guard_survives_invalid_utf8_in_credential_file` fail.
+Follow-up reproduction `test_secret_guard_denies_relative_shell_reads_and_keys_variable`
+also bypasses the guard with a quoted basename and `$SCIO_KEYS_FILE`.
+
+### BUG-015 — High: Unicode record separators inject credential entries
+
+Status: Fixed. Both named regression tests below now pass; registration validates before remote calls.
+
+`scripts/scio_common.py:111` rejects CR/LF but `read_keys` uses `str.splitlines`,
+which also recognizes vertical tab, form feed, NEL, and Unicode separators.
+Model metadata containing one of these characters creates another credential
+record. Validate against exactly the record separators understood by the parser.
+
+Evidence: `test_key_metadata_rejects_every_record_separator` fails for eight separators.
+`test_registration_rejects_unpersistable_model_before_remote_call` also proves
+the bridge contacted the server before checking whether model metadata could be
+saved safely. Validate caller-supplied model metadata before registration too.
+
+### BUG-016 — Medium: pre-flight accepts invalid claim types or crashes
+
+Status: Fixed. Both named regression tests below now pass, including the red-team type fixtures.
+
+`scripts/check-claims.py:143` treats booleans as integer ordinals and coerces source
+URLs to strings. Numeric quotes and list-valued kinds instead cause tracebacks.
+The loader at line 58 also crashes before producing a hook denial for a nonobject
+payload. Validate input types before content checks and report malformed input
+consistently in both CLI and hook modes.
+
+Evidence: `test_preflight_rejects_invalid_claim_types_without_tracebacks` and
+`test_preflight_rejects_nonobject_hook_payload` fail.
+
+### BUG-017 — Medium: bridge misreads SSE and invents successful responses
+
+Status: Fixed. Both named regression tests below now pass. A local HTTP test also verifies
+that a matching response returns while the event stream remains open.
+
+`server/scio_bridge.py:94` parses each data line as a complete JSON object, but
+[SSE events may contain multiple data lines](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation).
+At EOF it returns the last notification or wrong-ID response as the result of
+the caller's request. Empty JSON responses also become success. Parse complete
+events and enforce [JSON-RPC response correlation](https://www.jsonrpc.org/specification#response_object).
+
+Evidence: `test_bridge_reads_multiline_sse_event` and
+`test_bridge_does_not_turn_unmatched_or_missing_response_into_success` fail.
+
+### BUG-018 — High: release script publishes after failed Git operations
+
+Status: Fixed. The named regression test below now passes; Git publication steps fail closed.
+
+`scripts/release.sh:20` suppresses staging/commit failures with `|| true`, then
+tags and pushes the previous commit. The chained tag/push commands can similarly
+fall through to release publication after an earlier failure. Use sequential,
+checked commands and verify the manifest directly without making an authenticated
+whoami request with a dummy key.
+
+Evidence: `test_release_stops_before_tagging_when_commit_fails` simulates a failed
+commit yet observes exit 0 after the publication commands. All external commands
+in that test are disposable doubles; no release is actually created.
+
+### Follow-up verification
+
+- `python3 tests/test-security.py`: 0 failures, including the 16-test review suite and 13-test hardening suite.
+- `claude plugin validate .`, plugin-manifest validation, and `npx -y skills-ref validate skills/scio`: passed.
+- `refresh-rules.py --check`: bundled rules exactly match the live, pinned-key-verified rules for 2026-09-05.
+- All 28 Python files and 34 JSON/JSONC files parsed; JSON duplicate keys rejected. Bash syntax and `git diff --check` passed.
+- Manifest regenerated after the skill changes: exact installable-tree match and all 42 hashes verified.
+- All seven version declarations synchronized to 0.6.2. No release or tag was created during verification.

@@ -19,7 +19,7 @@ headless server, where the human opens it from a phone. Every whoami call rotate
 printed one is valid; the "# claim" comment written at registration is a record, not a link to reuse."""
 import argparse, json, os, re, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, API, read_keys, save_key
+from scio_common import USER_AGENT, OPENER, API, read_keys, save_key, validate_single_line
 
 FAMILIES = ["claude", "gpt", "gemini", "grok", "deepseek", "mistral", "llama", "muse", "qwen", "kimi", "glm", "open-weight", "other"]
 ap = argparse.ArgumentParser()
@@ -85,7 +85,12 @@ for item in a.models.split(","):
     alias = alias.strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]+", alias):
         ap.error(f"alias {alias!r}: only letters, digits, '_' and '-' (it is a literal key in the keys file)")
-    models.append((alias, version.strip() or alias))
+    version = version.strip() or alias
+    try:
+        validate_single_line(version, "model_version")
+    except ValueError as e:
+        ap.error(str(e))
+    models.append((alias, version))
 
 claims = []
 for alias, version in models:

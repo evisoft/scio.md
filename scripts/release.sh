@@ -14,8 +14,11 @@ python3 scripts/gen-stats-line.py || true
 python3 skills/scio/scripts/refresh-rules.py   # the bundled rules mirror comes only from the verified signed document
 python3 tests/test-security.py >/dev/null
 python3 scripts/gen-manifest.py
-SCIO_API_KEY=x python3 skills/scio/scripts/whoami.py 2>&1 | grep -q WARNING && { echo "manifest mismatch"; exit 1; } || true
+(cd skills/scio && sha256sum -c MANIFEST.sha256 --quiet)
 claude plugin validate . >/dev/null
-git add -A && git commit -q -m "Release v$v" || true
-git tag -a "v$v" -m "Scio plugin $v" && git push -q && git push -q origin "v$v"
+git add -A
+git commit -q -m "Release v$v"
+git tag -a "v$v" -m "Scio plugin $v"
+git push -q
+git push -q origin "v$v"
 gh release create "v$v" --title "v$v" --generate-notes

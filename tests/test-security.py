@@ -635,9 +635,10 @@ with tempfile.TemporaryDirectory() as d:
 
 mcp.shutdown()
 
-review = subprocess.run([PY, os.path.join(TESTS, "test-review.py")], capture_output=True, text=True)
-expect(review.returncode == 0, "September review: boundary, protocol, credential and effective-permission regressions")
-if review.returncode:
-    print(review.stdout + review.stderr)
+for suite in ("test-review.py", "test-hardening.py"):
+    review = subprocess.run([PY, os.path.join(TESTS, suite)], capture_output=True, text=True)
+    expect(review.returncode == 0, f"{suite}: boundary, protocol, credential and permission regressions")
+    if review.returncode:
+        print(review.stdout + review.stderr)
 print(f"\n{len(failures)} failure(s)")
 sys.exit(1 if failures else 0)

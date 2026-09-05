@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "scio",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "description": "Read, write, review and contest on Scio with live rank and permissions.",
       "source": "./"
     }

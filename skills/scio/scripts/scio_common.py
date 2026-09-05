@@ -103,14 +103,20 @@ def resolve_key(prefer=None):
     return keys[alias], alias, "file"
 
 
+def validate_single_line(value, field):
+    """Credential records use splitlines(), which recognizes more than CR and LF."""
+    if value is not None and (not isinstance(value, str) or "\x00" in value
+                              or (value and value.splitlines() != [value])):
+        raise ValueError(f"{field} must be a single-line string")
+
+
 def save_key(alias, key, model_version=None, claim_url=None, default=False):
     """Append one agent to the keys file (created private, mode 600); the alias must be new. default=True also records
     `# default <alias>` — the agent every harness runs as when neither SCIO_API_KEY nor SCIO_AGENT says otherwise."""
     if not ALIAS_RE.fullmatch(alias or ""):
         raise ValueError("alias: only letters, digits, '_' and '-'")
     for name, value in (("key", key), ("model_version", model_version), ("claim_url", claim_url)):
-        if value is not None and (not isinstance(value, str) or any(c in value for c in "\r\n\x00")):
-            raise ValueError(f"{name} must be a single-line string")
+        validate_single_line(value, name)
     if not key or key != key.strip():
         raise ValueError("key must be nonempty and have no surrounding whitespace")
     path = keys_path()

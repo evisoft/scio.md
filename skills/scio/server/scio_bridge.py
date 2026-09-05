@@ -25,7 +25,7 @@ Register (stdio):  python3 <skill>/server/scio_bridge.py [--harness <name>]   �
 SCIO_AGENT (alias to use from the keys file), SCIO_ROLES. The wiki address is fixed (scio_common.MCP).
 The key still goes only to the wiki host: the `Authorization` header is never copied onto a redirect elsewhere.
 """
-import json, os, subprocess, sys, threading, urllib.error, urllib.request
+import io, json, os, subprocess, sys, threading, urllib.error, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 for _stream in (sys.stdin, sys.stdout):   # JSON-RPC over stdio is UTF-8 whatever the locale (Windows: cp1252 otherwise)
@@ -36,7 +36,10 @@ for _stream in (sys.stdin, sys.stdout):   # JSON-RPC over stdio is UTF-8 whateve
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
-from scio_common import USER_AGENT, OPENER, ALIAS_RE, MCP, alias_from_model, child_env, env_roles, read_keys, resolve_key, save_key  # noqa: E402
+from scio_common import (  # noqa: E402
+    USER_AGENT, OPENER, ALIAS_RE, MCP, alias_from_model, child_env, env_roles,
+    inside_work_root, read_keys, resolve_key, save_key, validate_single_line, work_root,
+)
 
 REMOTE = MCP   # fixed: no environment variable or argument moves the bearer key
 PROTOCOL = "2025-06-18"
@@ -94,28 +97,14 @@ def forward(req, anonymous=False):
         with OPENER.open(r, timeout=120) as resp:
             ctype = resp.headers.get("Content-Type", "")
             if "text/event-stream" in ctype:
-                # return as soon as the response to *this* request arrives: the spec lets the server keep the stream
-                # open after it, and waiting for EOF would tie every call to that hold time
-                last = None
-                for raw_line in resp:
-                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-                    if not line.startswith("data:"):
-                        continue
-                    try:
-                        obj = json.loads(line[5:].strip())
-                    except ValueError:
-                        continue
-                    last = obj
-                    if isinstance(obj, dict) and obj.get("id") == req.get("id") and ("result" in obj or "error" in obj):
-                        return envelope(obj)
-                return envelope(last) if isinstance(last, dict) else {"error": {"code": -32002, "message": "empty event stream from scio.md"}}
+                return sse_response(resp, req["id"])
             raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", errors="replace")[:2000]
         try:  # only a real JSON-RPC envelope is relayed as one; a REST-style {"error": "…"} body is not
             parsed = json.loads(raw)
             if isinstance(parsed, dict) and parsed.get("jsonrpc") == "2.0" and (isinstance(parsed.get("error"), dict) or "result" in parsed):
-                return parsed
+                return envelope(parsed, req["id"])
         except ValueError:
             pass
         data = {"http_status": e.code}
@@ -133,12 +122,37 @@ def forward(req, anonymous=False):
     except Exception as e:
         return {"error": {"code": -32001, "message": f"scio.md unreachable ({type(e).__name__}: {e})"}}
     try:
-        return envelope(json.loads(raw)) if raw.strip() else {"result": {}}
+        return envelope(json.loads(raw), req["id"])
     except ValueError:
         return {"error": {"code": -32002, "message": "unparseable answer from scio.md"}}
 
 
-def envelope(obj):
+def sse_response(response, request_id):
+    """Join data lines until an event boundary; stop at this request's response."""
+    data_lines = []
+    # Universal newlines handle CR, LF and CRLF; SSE permits a leading UTF-8 BOM.
+    with io.TextIOWrapper(response, encoding="utf-8-sig", errors="replace", newline=None) as stream:
+        for raw_line in stream:
+            line = raw_line.rstrip("\r\n")
+            if line:
+                field, separator, value = line.partition(":")
+                if field == "data":
+                    data_lines.append(value.removeprefix(" ") if separator else "")
+                continue
+            if not data_lines:
+                continue
+            data = "\n".join(data_lines)
+            data_lines.clear()
+            try:
+                obj = json.loads(data)
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and obj.get("id") == request_id and ("result" in obj or "error" in obj):
+                return envelope(obj, request_id)
+    return {"error": {"code": -32002, "message": "event stream ended without a matching response from scio.md"}}
+
+
+def envelope(obj, request_id):
     """A JSON-RPC response object, whatever the server sent: a list, a scalar or a REST-style {"error": "…"} would
     otherwise reach the harness as a malformed reply (or raise on a worker thread, which answers nothing)."""
     if not isinstance(obj, dict):
@@ -147,6 +161,12 @@ def envelope(obj):
         obj = {k: v for k, v in obj.items() if k != "error"}   # `error: null` beside a result is a result
     if "error" in obj and not isinstance(obj["error"], dict):
         return {"error": {"code": -32000, "message": f"scio.md answered an error: {str(obj['error'])[:300]}"}}
+    if (obj.get("jsonrpc") != "2.0" or "id" not in obj or isinstance(obj["id"], bool)
+            or obj["id"] != request_id or (("result" in obj) == ("error" in obj))):
+        return {"error": {"code": -32002, "message": "invalid or mismatched JSON-RPC response from scio.md"}}
+    error = obj.get("error")
+    if error is not None and (type(error.get("code")) is not int or not isinstance(error.get("message"), str)):
+        return {"error": {"code": -32002, "message": "invalid JSON-RPC error from scio.md"}}
     return obj
 
 
@@ -201,12 +221,6 @@ def with_scan_envelope(name, result):
     return result
 
 
-def work_root():
-    """The task work root scio-local uses (scio_local.work_root): the only place a proposal_file may come from."""
-    from scio_common import env_work_dir
-    return env_work_dir() or (os.path.join(os.getcwd(), ".scio", "work") if os.access(os.getcwd(), os.W_OK) else os.path.expanduser("~/.local/share/scio/work"))
-
-
 def expand_proposal_file(req):
     """scio_propose_edit with proposal_file: the file's fields become the arguments (a field given alongside wins)."""
     params = req.get("params") or {}
@@ -215,7 +229,7 @@ def expand_proposal_file(req):
         return req, None
     path = args["proposal_file"]
     root = os.path.realpath(work_root()); real = os.path.realpath(path)
-    if not (real == root or real.startswith(root + os.sep)):
+    if not inside_work_root(path):
         return req, f"proposal_file must be inside the task work root ({root}): {path}"
     try:
         with open(real, encoding="utf-8") as f:
@@ -285,8 +299,11 @@ def _register(req):
     if not isinstance(params.get("arguments", {}), dict):
         reply(req.get("id"), {"content": [{"type": "text", "text": "arguments must be an object"}], "isError": True}); return
     args = dict(params.get("arguments") or {})
-    if args.get("model_version") is not None and not isinstance(args.get("model_version"), str):
-        reply(req.get("id"), {"content": [{"type": "text", "text": "model_version must be a string (the exact model id)"}], "isError": True}); return
+    try:
+        validate_single_line(args.get("model_version"), "model_version")
+    except ValueError as e:
+        reply(req.get("id"), {"content": [{"type": "text", "text": str(e)}], "isError": True})
+        return
     alias = args.pop("alias", None) or alias_from_model(args.get("model_version"))
     if not isinstance(alias, str) or not ALIAS_RE.fullmatch(alias):
         reply(req.get("id"), {"content": [{"type": "text", "text": "alias: a string of letters, digits, '_' and '-'"}], "isError": True}); return

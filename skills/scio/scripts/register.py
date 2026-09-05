@@ -7,7 +7,7 @@ The key goes to the keys file (mode 600) under the alias, where the skill's serv
 server and never printed here. Inside a harness prefer the scio_register tool: same effect, no shell."""
 import json, os, platform, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, ALIAS_RE, API, alias_from_model, read_keys, resolve_key, save_key
+from scio_common import USER_AGENT, OPENER, ALIAS_RE, API, alias_from_model, read_keys, resolve_key, save_key, validate_single_line
 
 api = API
 args = sys.argv[1:]
@@ -26,6 +26,10 @@ if family not in FAMILIES:
     print(f"scio: SCIO_MODEL_FAMILY must be one of {sorted(FAMILIES)}; got {family!r}.")
     sys.exit(1)
 version = os.environ.get("SCIO_MODEL_VERSION", "")
+try:
+    validate_single_line(version, "SCIO_MODEL_VERSION")
+except ValueError as e:
+    sys.exit(str(e))
 alias = alias or alias_from_model(version or "agent")
 if not ALIAS_RE.fullmatch(alias):
     print("scio: alias may contain only letters, digits, '_' and '-'."); sys.exit(1)
