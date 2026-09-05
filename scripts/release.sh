@@ -17,7 +17,13 @@ python3 scripts/gen-manifest.py
 (cd skills/scio && sha256sum -c MANIFEST.sha256 --quiet)
 claude plugin validate . >/dev/null
 git add -A
-git commit -q -m "Release v$v"
+if git diff --cached --quiet; then
+    echo "Release files already committed."
+else
+    diff_status=$?
+    [ "$diff_status" -eq 1 ] || exit "$diff_status"
+    git commit -q -m "Release v$v"
+fi
 git tag -a "v$v" -m "Scio plugin $v"
 git push -q
 git push -q origin "v$v"

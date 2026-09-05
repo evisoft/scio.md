@@ -252,3 +252,99 @@ in that test are disposable doubles; no release is actually created.
 - All 28 Python files and 34 JSON/JSONC files parsed; JSON duplicate keys rejected. Bash syntax and `git diff --check` passed.
 - Manifest regenerated after the skill changes: exact installable-tree match and all 42 hashes verified.
 - All seven version declarations synchronized to 0.6.2. No release or tag was created during verification.
+
+## Completion audit — baseline d570cfe (v0.6.2)
+
+### BUG-019 — High: shell operators hide credential file arguments
+
+Status: Fixed. All five operator cases and the benign counterparts pass.
+
+`skills/scio/scripts/guard-secrets.py:100` uses `shlex.split` without shell
+punctuation handling. With an absolute custom keys path in the current directory,
+`cat 'private credentials';true` produces a single `private credentials;true`
+token. The guard does not resolve that as the credential file and emits no denial.
+Redirections, pipelines, subshells, and `&&` have the same effect. Split shell
+operators separately before checking literal path tokens; do not execute or expand
+the command. Python documents this distinction in
+[shlex shell compatibility](https://docs.python.org/3/library/shlex.html#improved-compatibility-with-shells).
+
+Evidence: `test_secret_guard_recognizes_paths_next_to_shell_operators` fails for
+all five cases in `tests/redteam/15-shell-credential-paths.json`. The benign
+compound-command test passes. Reproduction only sends tool payloads to the guard;
+none of these shell commands is executed.
+
+### BUG-020 — Medium: relative trust-file override cannot be granted
+
+Status: Fixed. The grant/status/revoke regression passes, including private file permissions.
+
+`skills/scio/scripts/trust.py:38` calls `os.makedirs("")` when
+`SCIO_TRUST_FILE=local-trust`. The documented path override works for status and
+revocation but crashes during grant, preventing the operator from enabling the
+approval policy. Treat an empty parent path as the current directory, as the
+shared credential writer already does.
+
+Evidence: `test_trust_grant_and_revoke_support_relative_file` fails with
+`FileNotFoundError` before creating the grant. The test uses a temporary current
+directory and disables environment-only approval.
+
+### BUG-021 — Medium: release cannot tag an already committed version
+
+Status: Fixed. The empty-index release and all failure-path regressions pass.
+
+`scripts/release.sh:20` now stops on every commit failure, including Git's normal
+exit 1 when there is nothing to commit. If version metadata and regenerated files
+are already committed, the first tag and release never happen. Check the staged
+diff explicitly: skip the commit for exit 0, commit for exit 1, and abort for
+inspection errors. Genuine commit, tag, and push failures must still abort.
+
+Evidence: `test_release_tags_already_committed_files_without_empty_commit` fails
+on the empty-commit step. `test_release_stops_when_staged_diff_cannot_be_read`
+also fails because the index is not inspected. Existing commit-failure and new
+tag/push-failure tests pass. All publication commands run against disposable
+doubles, never GitHub or the real checkout.
+
+### BUG-022 — High: transport diagnostics reveal malformed bearer keys
+
+Status: Fixed. All four credential-error regression tests pass without exposing the dummy key.
+
+`skills/scio/scripts/scio_common.py:20` preserves surrounding CR/LF from
+`SCIO_API_KEY`. A CRLF keys file passed through `scio-as` is a realistic source:
+its AWK extraction retains CR. urllib rejects the resulting header and embeds
+the full bearer value in the exception. `server/scio_bridge.py:123` and
+`scripts/whoami.py:59` return that exception text to the model. The authenticated
+`register-models.py --show-claims` path also prints raw transport exceptions.
+Strip surrounding environment-key whitespace consistently with the file parser;
+report exception types without raw details on authenticated transport failures.
+
+Evidence: the CRLF-launcher test fails, and bridge/whoami regressions expose the
+dummy credential through real urllib header validation with socket connections
+blocked. `test_show_claims_does_not_echo_credentials_from_transport_exception`
+reproduces the same diagnostic leak using a transport-exception double. No real
+credentials or external requests are involved.
+
+## Completion evidence
+
+The review covered the plugin's scripts and MCP servers, credential and filesystem
+boundaries, hook/permission adapters, claim pre-flight, signed-rules verification,
+generated configuration, and release workflow. An independent reviewer checked
+the completed changes and then rechecked the release and credential-error fixes;
+no remaining blockers were reported. The stale README rules badge now matches the
+verified September 5 bundle; the dated statistics snapshot was not rewritten.
+
+| Requirement | Evidence |
+|---|---|
+| Review bugs and security | BUG-001 through BUG-022 record root causes, impact, and reproductions; the completion audit added shell-operator, trust-path, release, and credential-error cases beyond the earlier green baseline. |
+| Fix confirmed defects | All 22 findings are marked Fixed. The full `python3 tests/test-security.py` run exits 0, including 16 review tests and 24 hardening tests. |
+| Keep code understandable | Shared work-root and credential helpers replace duplicate policies; validation runs before content operations; SSE parsing is isolated; Git steps distinguish clean state from failure; comments explain the credential-safe diagnostics. |
+| Verify the deliverable | Both Claude plugin validations and Agent Skills validation pass; pinned-key verification confirms an exact live rules match; 28 Python and 35 JSON/JSONC files parse, Bash syntax and whitespace checks pass, and all 42 manifest entries exactly match the installable tree. |
+
+Package metadata is synchronized to 0.6.3. At the completion of this audit, its
+changes were local and uncommitted; the preceding requested push was d570cfe. No
+release, registration, or production mutation was performed during the audit.
+
+Limits: this is a source review with automated behavioral tests, not a guarantee
+against every possible attack. The hosted platform is a separate repository;
+live end-to-end testing of every harness and native Windows execution was not
+performed. Hook text checks supplement harness permissions and do not constitute
+a sandbox for arbitrary shell programs. Git publication tests use command doubles
+so failure paths can be exercised without publishing anything.

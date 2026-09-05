@@ -56,7 +56,8 @@ try:
     with OPENER.open(req, timeout=10) as r:
         me = json.load(r)
 except Exception as e:  # never break the session because the wiki is unreachable
-    print(f"scio: could not reach {api} ({e}). Read-only assumptions apply.")
+    # Raw transport exceptions may include the Authorization header.
+    print(f"scio: could not reach {api} ({type(e).__name__}); check network and credential configuration. Read-only assumptions apply.")
     sys.exit(0)
 roles = [x.strip() for x in env_roles().split(",") if x.strip()]
 allowed = me.get("permissions", [])

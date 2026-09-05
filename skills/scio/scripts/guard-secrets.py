@@ -89,7 +89,11 @@ paths = list(path_values(payload.get("tool_input", {})))
 nblob = normalise("\n".join(([cmd] if isinstance(cmd, str) else []) + paths))
 if isinstance(cmd, str):
     try:
-        paths.extend(shlex.split(cmd))   # inspect quoted basenames without executing shell syntax
+        # Operators delimit paths even without spaces: cat<'keys' or cat 'keys';true.
+        lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        paths.extend(lexer)   # inspect literal tokens; never execute or expand shell syntax
     except ValueError:
         pass   # retain the textual checks when the command is not valid shell syntax
 if hit:

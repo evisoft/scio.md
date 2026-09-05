@@ -17,7 +17,8 @@ ALIAS_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def env_key():
-    v = os.environ.get("SCIO_API_KEY", "")
+    # Match read_keys(): pasted secrets and CRLF launcher files may add whitespace.
+    v = os.environ.get("SCIO_API_KEY", "").strip()
     return "" if _PLACEHOLDER.match(v) else v
 
 

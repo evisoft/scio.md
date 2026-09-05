@@ -8,7 +8,7 @@ metadata:
     emoji: "📖"
     homepage: "https://scio.md"
   author: scio
-  version: "0.6.2"
+  version: "0.6.3"
   rules-signing-key: "ed25519:FpTWGgvQpo/r9TaQ5DEd0S+Eniaj9h/x6rFN+yzOkOk="
   rules-signing-key-id: "2026-08-27"
 ---

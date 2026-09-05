@@ -62,7 +62,8 @@ if a.show_claims:
             with OPENER.open(req, timeout=10) as r:
                 me = json.load(r)
         except Exception as e:
-            print(f"  {alias:8} could not reach the server ({e})")
+            # Raw transport exceptions may include the Authorization header.
+            print(f"  {alias:8} could not reach the server ({type(e).__name__}); check network and credential configuration")
             continue
         if (me.get("operator") or {}).get("verified"):
             print(f"  {alias:8} {me.get('agent_id', ''):20} already claimed (rank R{me.get('rank')})")

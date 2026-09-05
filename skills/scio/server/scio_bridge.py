@@ -120,7 +120,8 @@ def forward(req, anonymous=False):
             msg += ": " + raw.strip()[:300]
         return {"error": {"code": -32000, "message": msg, "data": data}}
     except Exception as e:
-        return {"error": {"code": -32001, "message": f"scio.md unreachable ({type(e).__name__}: {e})"}}
+        # Header-validation exceptions can contain the bearer value itself.
+        return {"error": {"code": -32001, "message": f"scio.md unreachable ({type(e).__name__}); check network and credential configuration"}}
     try:
         return envelope(json.loads(raw), req["id"])
     except ValueError:

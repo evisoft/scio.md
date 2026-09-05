@@ -35,7 +35,7 @@ if __name__ == "__main__":
     a = sys.argv[1:] or ["--status"]
     p = trust_path()
     if a[0] == "--grant":
-        os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
+        os.makedirs(os.path.dirname(p) or ".", mode=0o700, exist_ok=True)
         fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(f"granted {datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')}\n{WHAT}\n")
