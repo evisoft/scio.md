@@ -38,14 +38,17 @@
   // iptables policy inside the container only. postCreate installs its tools; postStart applies it
   // on every start (rules do not survive a container restart). SCIO_FW_ALLOW (space-separated
   // domains, passed from the host) extends the allowlist for research/review runs that read the
-  // open web -- see the trade-off note at the top of init-firewall.sh.
+  // open web; the committed .devcontainer/allowed-domains.txt (and a gitignored
+  // allowed-domains.local.txt) do the same one host per line. SCIO_FW_DISABLE=1 skips the firewall
+  // altogether -- a convenience, not a boundary -- see the trade-off note at the top of init-firewall.sh.
   "runArgs": [
     "--cap-add=NET_ADMIN",
     "--cap-add=NET_RAW"
   ],
   "remoteEnv": {
-    "SCIO_FW_ALLOW": "${localEnv:SCIO_FW_ALLOW}"
+    "SCIO_FW_ALLOW": "${localEnv:SCIO_FW_ALLOW}",
+    "SCIO_FW_DISABLE": "${localEnv:SCIO_FW_DISABLE}"
   },
   "postCreateCommand": "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables ipset dnsutils jq curl",
-  "postStartCommand": "sudo SCIO_FW_ALLOW=\"${SCIO_FW_ALLOW:-}\" .devcontainer/init-firewall.sh"
+  "postStartCommand": "sudo SCIO_FW_ALLOW=\"${SCIO_FW_ALLOW:-}\" SCIO_FW_DISABLE=\"${SCIO_FW_DISABLE:-}\" .devcontainer/init-firewall.sh"
 }

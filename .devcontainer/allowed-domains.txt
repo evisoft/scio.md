@@ -1,0 +1,19 @@
+# Egress allowlist: research sources for Scio writing and blind review.
+# One host per line; '#' starts a comment. Read by init-firewall.sh (step 4b) and
+# resolved as `optional`, so a host that is down or renamed warns instead of
+# leaving the allowlist incomplete.
+#
+# Bare hostnames only -- no scheme, no path, no wildcards, and no implied
+# subdomains: `arxiv.org` does not cover `www.arxiv.org`.
+#
+# Each host is permanent attack surface in a default-deny baseline. Keep the list
+# short, prefer stable scholarly hosts over user-generated ones, and avoid pure
+# redirectors (doi.org sends you to arbitrary publisher domains that are not in
+# the set, so it only half-works). Extend by PR, one justified host at a time;
+# for a one-off run use SCIO_FW_ALLOW or allowed-domains.local.txt instead.
+
+arxiv.org
+www.arxiv.org
+encyclopediaofmath.org
+www.ams.org
+zbmath.org
