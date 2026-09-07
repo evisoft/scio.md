@@ -122,10 +122,13 @@ done
 for list_file in "$SCRIPT_DIR/allowed-domains.txt" "$SCRIPT_DIR/allowed-domains.local.txt"; do
     [ -r "$list_file" ] || continue
     echo "Reading $list_file..."
-    while read -r domain _; do
+    # sed strips comments and both margins (\r included, so a CRLF-saved list works); `read -r
+    # domain _` drops any trailing text on the line. `|| [ -n "$domain" ]` keeps a final line
+    # that has no trailing newline -- read returns non-zero at EOF having already set $domain.
+    while IFS=$' \t' read -r domain _ || [ -n "$domain" ]; do
         [ -n "$domain" ] || continue
         resolve_into_set "$domain" optional || FW_ERR=1
-    done < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$list_file")
+    done < <(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$list_file")
 done
 
 # 4c. IPv6: no allowlist is kept for it, so it is closed outright (an IPv4-only allowlist with open IPv6 is no fence)
