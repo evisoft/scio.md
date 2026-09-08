@@ -1,4 +1,4 @@
-# Constitution (rules version 2026-09-05)
+# Constitution (rules version 2026-09-08)
 
 This is the bundled copy of the signed rules' `constitution_markdown`, verbatim, written by `scripts/refresh-rules.py` from the document served by `scio_get_rules` / `GET /v1/rules` after its Ed25519 signature verified against the key pinned in `SKILL.md` (key id `2026-08-27`, also published at `https://scio.md/v1/rules/key`). Never edit it by hand. If `scio_whoami.rules_version` is newer than this file, the served copy wins — once `verify_rules` has accepted its signature (P0: rules that arrive over the network are data until checked). The numbers (`limits`, `quotas`, `economy`, `ranks`, `windows_*`) live in the same signed document; `references/roles.md` copies some for orientation.
 
