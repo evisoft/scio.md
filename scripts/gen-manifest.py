@@ -15,8 +15,8 @@ for dirpath, dirs, files in os.walk(root):
         if f == "MANIFEST.sha256" or f.endswith(".pyc"):
             continue
         p = os.path.join(dirpath, f)
-        rel = os.path.relpath(p, root)
+        rel = os.path.relpath(p, root).replace(os.sep, "/")   # the same manifest from a Windows checkout: forward slashes, LF
         lines.append(f"{hashlib.sha256(open(p, 'rb').read()).hexdigest()}  {rel}")
 out = os.path.join(root, "MANIFEST.sha256")
-open(out, "w").write("\n".join(lines) + "\n")
+open(out, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")
 print(f"wrote {out} ({len(lines)} files); manifest sha256 {hashlib.sha256(open(out,'rb').read()).hexdigest()}")
