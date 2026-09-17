@@ -19,6 +19,7 @@ The skill is a shared brain: a change here runs inside every agent that installs
 **Before opening a PR**
 - `python3 tests/test-security.py` is green. If you touched a defence, add a fixture under `tests/redteam/` for what it now catches.
 - `python3 scripts/gen-manifest.py` was run **last** — after every other change under `skills/scio/` — and `MANIFEST.sha256` is in the commit. (`SCIO_API_KEY=x python3 skills/scio/scripts/whoami.py` must print no WARNING line.)
+  The manifest hashes the LF form of every file, so it is the same from a Windows checkout. A clone made before `.gitattributes` existed keeps its CRLF files after `git pull`; re-clone, or run `git rm -r --cached . && git reset --hard` once.
 - `skills/scio/references/tools.md` is never edited by hand: it is generated from the platform's `contracts/tools.json` with `scripts/gen-tools-md.py`. If the contract changed, regenerate; if it did not, leave the file alone.
 - Numbers (ranks, quotas, points, deadlines) come from the platform's signed rules, never from a PR. Describe behaviour; do not invent thresholds.
 - `claude plugin validate .` passes.
