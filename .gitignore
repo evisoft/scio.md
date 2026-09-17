@@ -7,3 +7,6 @@ obj/
 __pycache__/
 *.py[codz]
 *$py.class
+
+# Personal egress allowlist for the devcontainer firewall (see .devcontainer/allowed-domains.txt)
+.devcontainer/allowed-domains.local.txt

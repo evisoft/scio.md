@@ -6,16 +6,30 @@
 # What stays reachable: DNS (to the configured resolvers), localhost, the host network, GitHub (its published meta ranges: git/api/web),
 # scio.md (the wiki - resolved at start; it sits behind Cloudflare, so re-run this script if its IPs rotate),
 # api.anthropic.com + statsig/sentry (Claude Code itself), registry.npmjs.org (npx skills), and every domain
-# listed in SCIO_FW_ALLOW (space-separated). Everything else is REJECTed.
+# listed in SCIO_FW_ALLOW (space-separated) or in .devcontainer/allowed-domains.txt (committed) and
+# allowed-domains.local.txt (gitignored), one host per line. Everything else is REJECTed.
 #
 # The honest trade-off: Scio research and blind review open arbitrary web sources (rule 8 - a reviewer reads the
 # source, not the snapshot). Under this firewall those fetches fail; the agent can still read the platform's
 # archived copies, but independent verification is degraded. For a research/review run either extend
-# SCIO_FW_ALLOW with the sources' hosts, or run without the firewall and keep the harness prompts on instead.
+# SCIO_FW_ALLOW with the sources' hosts, or run without the firewall (SCIO_FW_DISABLE=1) and keep the harness
+# prompts on instead.
 set -euo pipefail
 IFS=$'\n\t'
 
 SCIO_FW_ALLOW="${SCIO_FW_ALLOW:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 0. Kill switch, deliberately BEFORE the fail-closed trap below: past that point any exit slams egress
+# shut, which is the opposite of what disabling means. Leaves whatever policy the container already has
+# (a fresh container: open) rather than tearing down rules a previous run installed — re-run without the
+# variable to restore default-deny. This is a convenience for a run that must read the open web, not a
+# security boundary: anything able to set it and restart the container can turn the firewall off.
+if [ "${SCIO_FW_DISABLE:-0}" = 1 ]; then
+    echo "WARNING: SCIO_FW_DISABLE=1 — egress firewall NOT applied; this container can reach ANY host."
+    echo "         Keep the harness permission prompts on, and unset it to restore default-deny."
+    exit 0
+fi
 
 # Fail closed: an error before the default-deny below (GitHub meta unreachable, ipset missing, a bad CIDR) must not leave
 # the ACCEPT policies of step 1 in place — `set -e` would exit with the container wide open. Until FW_DONE=1 any exit
@@ -98,7 +112,26 @@ for domain in statsig.anthropic.com statsig.com sentry.io; do
     resolve_into_set "$domain" optional || FW_ERR=1
 done
 
-# 4b. IPv6: no allowlist is kept for it, so it is closed outright (an IPv4-only allowlist with open IPv6 is no fence)
+# 4b. Research sources, one host per line, '#' comments and blanks ignored:
+#   allowed-domains.txt        committed - the hosts this project reads (extend by PR)
+#   allowed-domains.local.txt  gitignored - your own, not shared
+# Optional, not required: Scio research and blind review need arbitrary sources (rule 8 - a
+# reviewer reads the source, not the snapshot), but a source host that is down or renamed must
+# not leave the allowlist incomplete the way a missing scio.md would. Same A-record-once caveat
+# as every named host above: CDN-fronted sources whose IPs rotate need a re-run.
+for list_file in "$SCRIPT_DIR/allowed-domains.txt" "$SCRIPT_DIR/allowed-domains.local.txt"; do
+    [ -r "$list_file" ] || continue
+    echo "Reading $list_file..."
+    # sed strips comments and both margins (\r included, so a CRLF-saved list works); `read -r
+    # domain _` drops any trailing text on the line. `|| [ -n "$domain" ]` keeps a final line
+    # that has no trailing newline -- read returns non-zero at EOF having already set $domain.
+    while IFS=$' \t' read -r domain _ || [ -n "$domain" ]; do
+        [ -n "$domain" ] || continue
+        resolve_into_set "$domain" optional || FW_ERR=1
+    done < <(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$list_file")
+done
+
+# 4c. IPv6: no allowlist is kept for it, so it is closed outright (an IPv4-only allowlist with open IPv6 is no fence)
 if command -v ip6tables >/dev/null; then
     ip6tables -F 2>/dev/null || true
     ip6tables -A INPUT -i lo -j ACCEPT 2>/dev/null || true
