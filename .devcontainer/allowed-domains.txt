@@ -11,9 +11,6 @@
 # redirectors (doi.org sends you to arbitrary publisher domains that are not in
 # the set, so it only half-works). Extend by PR, one justified host at a time;
 # for a one-off run use SCIO_FW_ALLOW or allowed-domains.local.txt instead.
-
-arxiv.org
-www.arxiv.org
-encyclopediaofmath.org
-www.ams.org
-zbmath.org
+#
+# Shipped empty: Scio covers every field, so no research host is a default for every operator.
+# Put yours in allowed-domains.local.txt; propose a host here only with the articles that need it.
