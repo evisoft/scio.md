@@ -154,6 +154,18 @@ text = fetch.to_text(raw, "text/html")
 expect("real article sentence survives a huge header" in text, "extraction reaches content past 300 KB of dropped header (the ordering-fix regression case)")
 expect(len(text) < 1000, "the header contributes ~0 extracted chars regardless of its raw size")
 
+# --- hostile markup must stay linear: a stray closing tag against a deep open-tag stack (§2.7 resource attacks) ----
+import time
+hostile = "<a>" * 83_000 + "</b>" * 50_000   # 449 KB, under the raw cap; a linear scan per end tag took 24 s here
+started = time.perf_counter()
+extract(hostile)
+elapsed = time.perf_counter() - started
+expect(elapsed < 5, f"stray end tags against a deep stack finish in linear time ({elapsed:.1f}s; a membership scan of the stack per end tag is quadratic)")
+
+# --- XHTML-style <br/> is a line break like <br> -----------------------------------------------------------------
+expect(fetch.to_text(b"<html><body><p>line one<br/>line two<br>line three</p></body></html>", "text/html") == "line one\nline two\nline three",
+       "a self-closed <br/> breaks the line like <br>")
+
 # --- non-HTML content is passed through, not run through the extractor -----------------------------------------
 expect(fetch.to_text(b"plain text, no markup here", "text/plain") == "plain text, no markup here", "plain text is untouched")
 mixed_case = fetch.to_text(b"<html><body><article><p>Cased content type.</p></article></body></html>", "Text/HTML; Charset=UTF-8")

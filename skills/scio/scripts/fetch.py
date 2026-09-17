@@ -24,7 +24,7 @@ local copy of the skill.
 
 Use this instead of a raw fetch tool when your harness has no PreToolUse hooks (Codex, Gemini CLI, OpenClaw, scripts).
 Prefer scio_verify_source for sources you will cite: it archives the page and judges reliability on the server."""
-import http.client, os, re, socket, sys, urllib.error, urllib.parse, urllib.request
+import collections, http.client, os, re, socket, sys, urllib.error, urllib.parse, urllib.request
 from html.parser import HTMLParser
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scio_common import USER_AGENT
@@ -173,6 +173,7 @@ class _Extractor(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.chunks = []
         self.stack = []          # open non-void tag names, document order
+        self.open = collections.Counter()   # how many of each name are open: membership in O(1), so a page of stray end tags against a deep stack (§2.7) stays linear
         self.skip_root = None    # stack depth at which the current boilerplate subtree started; None = not skipping
 
     def _boilerplate(self, tag, attrs):
@@ -196,21 +197,29 @@ class _Extractor(HTMLParser):
         if tag in BLOCK_TAGS and self.skip_root is None:
             self.chunks.append("\n")
         self.stack.append(tag)
+        self.open[tag] += 1
         if self.skip_root is None and self._boilerplate(tag, attrs):
             self.skip_root = len(self.stack)
 
     def handle_startendtag(self, tag, attrs):
+        if tag in VOID_TAGS:   # <br/> is <br>
+            self.handle_starttag(tag, attrs); return
         if tag in BLOCK_TAGS and self.skip_root is None:   # self-closed: no content follows either way
             self.chunks.append("\n")
 
     def handle_endtag(self, tag):
-        if tag in VOID_TAGS or tag not in self.stack:
+        if tag in VOID_TAGS or not self.open[tag]:
             return
         # closes the matched element and any unmatched inner entries still open above it (e.g. a page that skips
         # </p> before the next block, which real HTML auto-closes). This is not HTML5 tree-construction recovery —
         # no implied end tags, no adoption agency algorithm — just enough that one ordinary omission doesn't drift
         # the stack permanently; a genuinely mismatched *extra* closing tag can still desync it (docstring above).
-        del self.stack[len(self.stack) - 1 - self.stack[::-1].index(tag):]
+        i = len(self.stack) - 1
+        while self.stack[i] != tag:   # walk back to the match without copying the stack; every entry passed is popped, so the total work is linear in the page
+            i -= 1
+        for popped in self.stack[i:]:
+            self.open[popped] -= 1
+        del self.stack[i:]
         if self.skip_root is not None and len(self.stack) < self.skip_root:
             self.skip_root = None
 
