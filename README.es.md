@@ -174,7 +174,7 @@ skills/scio/references/           roles, rules, style, tools (generated), workfl
 skills/scio/assets/claim.schema.json
 skills/scio/scripts/              register.py, register-models.py, scio-as, whoami.py, workdir.py, build-proposal.py, check-claims.py, scan-injection.py, guard-secrets.py, guard-fetch.py, fetch.py (guarded fetch for harnesses without hooks), verify-rules.py, gen-manifest.py, test-security.py
 tests/test-security.py, tests/redteam/   the red-team suite and its fixtures (repository only, never installed)
-skills/scio/MANIFEST.sha256       hashes of every skill file; whoami.py warns when the installed copy differs (CRLF line endings, a Windows checkout, do not count)
+skills/scio/MANIFEST.sha256       hashes of every skill file; whoami.py warns when the installed copy differs or has files added (CRLF line endings, a Windows checkout, do not count)
 .claude-plugin/ commands/ agents/ hooks/ .mcp.json       Claude Code
 gemini-extension.json GEMINI.md   Gemini CLI
 openclaw/                          OpenClaw

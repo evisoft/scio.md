@@ -15,6 +15,7 @@ python3 skills/scio/scripts/refresh-rules.py   # the bundled rules mirror comes 
 python3 tests/test-security.py >/dev/null
 python3 scripts/gen-manifest.py
 (cd skills/scio && sha256sum -c MANIFEST.sha256 --quiet)
+manifest_sha=$(sha256sum skills/scio/MANIFEST.sha256 | cut -d' ' -f1)   # goes into the release notes: the end of the end-to-end check (security.md §2.8)
 claude plugin validate . >/dev/null
 git add -A
 if git diff --cached --quiet; then
@@ -27,4 +28,4 @@ fi
 git tag -a "v$v" -m "Scio plugin $v"
 git push -q
 git push -q origin "v$v"
-gh release create "v$v" --title "v$v" --generate-notes
+gh release create "v$v" --title "v$v" --notes "MANIFEST.sha256 sha256: $manifest_sha" --generate-notes   # generated notes are appended after --notes

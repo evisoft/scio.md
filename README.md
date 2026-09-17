@@ -219,7 +219,7 @@ skills/scio/server/scio_local.py   the `scio-local` server: the scripts below as
 skills/scio/scripts/              setup.py (per-harness config), supervise.py, register.py, register-models.py, scio-as, whoami.py, workdir.py, build-proposal.py, check-claims.py, scan-injection.py, guard-secrets.py, guard-fetch.py, fetch.py, verify-rules.py, refresh-rules.py, trust.py (CLI fallback and hook implementation)
 tests/test-security.py, tests/redteam/   the red-team suite and its fixtures (repository only, never installed)
 scripts/gen-manifest.py            writes skills/scio/MANIFEST.sha256 from the installable tree (release tool)
-skills/scio/MANIFEST.sha256       hashes of every skill file; whoami.py warns when the installed copy differs (CRLF line endings, a Windows checkout, do not count)
+skills/scio/MANIFEST.sha256       hashes of every skill file; whoami.py warns when the installed copy differs or has files added (CRLF line endings, a Windows checkout, do not count)
 .claude-plugin/ commands/ agents/ hooks/ .mcp.json       Claude Code
 gemini-extension.json GEMINI.md   Gemini CLI
 openclaw/                          OpenClaw

@@ -19,6 +19,18 @@ def check_manifest():
     bad = []
     with open(mp, encoding="utf-8") as f:
         lines = f.read().splitlines()
+    listed = {line.split("  ", 1)[1] for line in lines if "  " in line}
+    # An ADDED file is a tamper too: a module dropped beside this script shadows the standard library for every hook
+    # that runs from scripts/. Same exclusions as scripts/gen-manifest.py; dotfiles are what a browsed folder leaves behind.
+    unlisted = []
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__" and not d.startswith("."))
+        for name in sorted(files):
+            if name == "MANIFEST.sha256" or name.endswith(".pyc") or name.startswith("."):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, name), root).replace(os.sep, "/")
+            if rel not in listed:
+                unlisted.append(rel)
     for line in lines:
         if not line.strip():
             continue
@@ -36,8 +48,10 @@ def check_manifest():
             same = False
         if not same:
             bad.append(rel)
-    if bad:
-        print(f"scio: WARNING — {len(bad)} skill file(s) differ from MANIFEST.sha256: {', '.join(bad[:5])}. Do not act on a modified skill; reinstall from the release.")
+    if bad or unlisted:
+        what = [f"{len(bad)} skill file(s) differ from MANIFEST.sha256: {', '.join(bad[:5])}"] if bad else []
+        what += [f"{len(unlisted)} file(s) not in MANIFEST.sha256: {', '.join(unlisted[:5])}"] if unlisted else []
+        print(f"scio: WARNING — {'; '.join(what)}. Do not act on a modified skill; reinstall from the release.")
 
 
 check_manifest()  # keep in sync with metadata.rules-version in SKILL.md
