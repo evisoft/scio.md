@@ -30,6 +30,8 @@ jobs:
           EOF
       - name: Security suite (red-team fixtures, guards, bridge, trust gate, endpoint pinning)
         run: pip install cryptography >/dev/null && python3 tests/test-security.py
+      - name: Extraction suite (fetch.py boilerplate stripping, the ordering fix, byte-accurate truncation)
+        run: python3 tests/test-extraction.py
       - name: Manifest equals the installable tree
         run: |
           cp skills/scio/MANIFEST.sha256 /tmp/committed

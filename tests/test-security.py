@@ -635,9 +635,11 @@ with tempfile.TemporaryDirectory() as d:
 
 mcp.shutdown()
 
-for suite in ("test-review.py", "test-hardening.py"):
+for suite, what in (("test-review.py", "boundary, protocol, credential and permission regressions"),
+                    ("test-hardening.py", "boundary, protocol, credential and permission regressions"),
+                    ("test-extraction.py", "fetch.py extraction: boilerplate, the budget ordering, byte-accurate truncation, linear time on hostile markup")):
     review = subprocess.run([PY, os.path.join(TESTS, suite)], capture_output=True, text=True)
-    expect(review.returncode == 0, f"{suite}: boundary, protocol, credential and permission regressions")
+    expect(review.returncode == 0, f"{suite}: {what}")
     if review.returncode:
         print(review.stdout + review.stderr)
 print(f"\n{len(failures)} failure(s)")
