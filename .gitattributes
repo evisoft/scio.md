@@ -1,0 +1,3 @@
+# Check text out with LF on every platform. The skill ships with MANIFEST.sha256 of its LF bytes; a CRLF checkout
+# (git core.autocrlf=true, the Windows default) changed every hash and made whoami.py report a tampered skill.
+* text=auto eol=lf

@@ -28,7 +28,10 @@ def check_manifest():
         fp = os.path.join(root, rel)
         try:
             with open(fp, "rb") as f:
-                same = hashlib.sha256(f.read()).hexdigest() == digest
+                data = f.read()
+            # the manifest hashes the LF form (scripts/gen-manifest.py, one rule on both sides): a CRLF checkout — git core.autocrlf,
+            # the Windows default — is the released file; any other byte, a lone CR included, is not
+            same = hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest() == digest
         except OSError:
             same = False
         if not same:
