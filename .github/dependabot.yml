@@ -1,0 +1,14 @@
+# The skill itself has no third-party dependencies (stdlib only), so the only thing here that goes stale is the set of
+# actions the workflows call. One grouped pull request a week keeps them current; Dependabot *alerts* are a repository
+# setting and do not depend on this file.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

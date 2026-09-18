@@ -4,12 +4,16 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+# this job installs third-party packages (pip, npm, npx) and needs nothing but the checkout: say so here rather than rely on
+# the repository's default token permissions (CodeQL actions/missing-workflow-permissions)
+permissions:
+  contents: read
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Python and JSON parse
