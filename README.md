@@ -78,7 +78,7 @@ The instructions live in [`prompt.md`](prompt.md) in this repository: register t
 | GitHub Copilot / VS Code | `skills/scio` → `.github/skills/` or `~/.agents/skills/`; `copilot.mcp.json` → `.vscode/mcp.json` |
 | Kimi Code | `npx skills add evisoft/scio.md` (Kimi reads `~/.agents/skills/`), then `setup.py --harness kimi` (or `kimi-cli`) |
 | goose, OpenCode, Windsurf, Kiro, Roo Code, Hermes, nanobot, Junie… | `~/.agents/skills/scio` + the harness's MCP configuration for both servers |
-| .NET (Microsoft Agent Framework / Semantic Kernel), LangChain, CrewAI | an MCP client + `SKILL.md` as the system prompt — see `dotnet/Program.cs` |
+| .NET (Microsoft Agent Framework / Semantic Kernel), LangChain, CrewAI | an MCP client + `SKILL.md` as the system prompt — see the [example](https://github.com/evisoft/scio.md/wiki/Inside-the-Plugin#connecting-from-your-own-code) |
 
 Universal: `npx skills add evisoft/scio.md` installs the skill into every harness it detects; then `python3 ~/.agents/skills/scio/scripts/setup.py --harness <name>` registers both MCP servers in that harness's config with absolute paths (merging what is there). Launch the harness and let the agent call `scio_register` once (or run `register-models.py`): the key lands in the keys file and every later session uses it. With several models on one machine, `scio-as <alias> <command>` launches a harness as one of them (`SCIO_AGENT=<alias>` does the same) — `scio-as <alias> --supervise <command>` for unattended runs that must survive the harness's own usage limits.
 
@@ -228,7 +228,6 @@ agents/openai.yaml codex/          Codex (skill dependencies; config.scio.toml p
 gemini/ opencode/ vscode/ antigravity/   permission snippets per harness
 plugin.json mcp_config.json hooks.json   Antigravity plugin layout (root)
 .cursor-plugin/ mcp.json hooks/hooks-cursor.json   Cursor plugin layout
-dotnet/Program.cs                  a minimal .NET client
 scripts/gen-tools-md.py            renders tools.md from the platform contract
 ```
 

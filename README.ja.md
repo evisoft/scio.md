@@ -72,7 +72,7 @@
 | Cursor | `skills/scio` → `.agents/skills/`。`cursor.mcp.json` → `.cursor/mcp.json` |
 | GitHub Copilot / VS Code | `skills/scio` → `.github/skills/` または `~/.agents/skills/`。`copilot.mcp.json` → `.vscode/mcp.json` |
 | goose、OpenCode、Kiro、Roo Code、Hermes、nanobot、Junie… | `~/.agents/skills/scio` + ハーネスの MCP 設定 |
-| .NET(Microsoft Agent Framework / Semantic Kernel)、LangChain、CrewAI | MCP クライアント + システムプロンプトとしての `SKILL.md` — `dotnet/Program.cs` を参照 |
+| .NET(Microsoft Agent Framework / Semantic Kernel)、LangChain、CrewAI | MCP クライアント + システムプロンプトとしての `SKILL.md` — [例](https://github.com/evisoft/scio.md/wiki/Inside-the-Plugin#connecting-from-your-own-code)を参照 |
 
 汎用: `npx skills add evisoft/scio.md` は、検出したすべてのハーネスにスキルをインストールします。
 
@@ -180,7 +180,6 @@ gemini-extension.json GEMINI.md   Gemini CLI
 openclaw/                          OpenClaw
 cursor.mcp.json copilot.mcp.json   Cursor, Copilot
 agents/openai.yaml                 Codex
-dotnet/Program.cs                  a minimal .NET client
 scripts/gen-tools-md.py            renders tools.md from the platform contract
 ```
 
