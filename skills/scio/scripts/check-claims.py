@@ -119,8 +119,10 @@ def front_matter(text):
 FENCE = re.compile(r"^(```|~~~).*?^\1[ \t]*$", re.M | re.S)
 MATH_BLOCK = re.compile(r"^\$\$.*?\$\$[ \t]*$", re.M | re.S)
 # a line that is not a sentence and carries no claim of its own (markdown.md §4-§6): a transclusion, a media embed, a
-# callout title, the working inside a [!demonstration] callout, a list item that is only wikilinks
-NOT_A_SENTENCE = re.compile(r"^\s*(?:>\s*)?(?:!\[\[[^\]]+\]\]|!\[[^\]]*\]\(media:[^)]*\)|\[!\w+\][^\n]*|(?:[-*+]|\d+[.)])\s*(?:\[\[[^\]]+\]\]\s*[,;]?\s*)+)\s*$")
+# callout title, the working inside a [!demonstration] callout, a list item that is only wikilinks. The separator after a
+# link is `(?:\s*[,;])?\s*`, never `\s*[,;]?\s*`: two optional-whitespace runs around an optional comma let every space
+# match two ways, and a line of n links that then fails to match costs 2^n steps (26 links: 6 s) — security.md §2.3
+NOT_A_SENTENCE = re.compile(r"^\s*(?:>\s*)?(?:!\[\[[^\]]+\]\]|!\[[^\]]*\]\(media:[^)]*\)|\[!\w+\][^\n]*|(?:[-*+]|\d+[.)])\s*(?:\[\[[^\]]+\]\](?:\s*[,;])?\s*)+)\s*$")
 
 
 def prose_only(body):

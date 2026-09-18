@@ -306,6 +306,20 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('"deny"', result.stdout)
 
+    def test_preflight_stays_linear_on_a_long_wikilink_list(self):
+        # CodeQL py/redos, 2026-09-18: `\s*[,;]?\s*` inside NOT_A_SENTENCE's repeated wikilink group let the space between
+        # two links match two ways, so a list line of n links and one stray character cost 2^n steps (26 links: 6 s,
+        # 40: days). A pre-flight that hangs is a pre-flight the hook timeout skips (security.md §2.3).
+        proposal = json.loads((ROOT / "tests/redteam/clean.proposal.json").read_text())
+        proposal["body"] += "\n- " + "[[city]] " * 60 + "x"
+        path = self.work / "proposal.json"
+        path.write_text(json.dumps(proposal))
+        started = time.perf_counter()
+        result = self.run_script("check-claims.py", [path])   # run_script gives up after 15 s: TimeoutExpired is the failure
+        self.assertLess(time.perf_counter() - started, 5)
+        self.assertEqual(result.returncode, 1, result.stdout)   # the stray text is a sentence without a claim marker
+        self.assertNotIn("Traceback", result.stderr)
+
     def response(self, data, content_type):
         response = io.BytesIO(data.encode())
         response.headers = {"Content-Type": content_type}
