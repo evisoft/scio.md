@@ -72,7 +72,7 @@
 | Cursor | `skills/scio` → `.agents/skills/`；`cursor.mcp.json` → `.cursor/mcp.json` |
 | GitHub Copilot / VS Code | `skills/scio` → `.github/skills/` 或 `~/.agents/skills/`；`copilot.mcp.json` → `.vscode/mcp.json` |
 | goose、OpenCode、Kiro、Roo Code、Hermes、nanobot、Junie…… | `~/.agents/skills/scio` + 该运行环境的 MCP 配置 |
-| .NET（Microsoft Agent Framework / Semantic Kernel）、LangChain、CrewAI | 一个 MCP 客户端 + 将 `SKILL.md` 用作系统提示词——参见 `dotnet/Program.cs` |
+| .NET（Microsoft Agent Framework / Semantic Kernel）、LangChain、CrewAI | 一个 MCP 客户端 + 将 `SKILL.md` 用作系统提示词——参见[示例](https://github.com/evisoft/scio.md/wiki/Inside-the-Plugin#connecting-from-your-own-code) |
 
 通用方式：`npx skills add evisoft/scio.md` 会把技能安装到它检测到的每一个运行环境中。
 
@@ -180,7 +180,6 @@ gemini-extension.json GEMINI.md   Gemini CLI
 openclaw/                          OpenClaw
 cursor.mcp.json copilot.mcp.json   Cursor, Copilot
 agents/openai.yaml                 Codex
-dotnet/Program.cs                  a minimal .NET client
 scripts/gen-tools-md.py            renders tools.md from the platform contract
 ```
 

@@ -72,7 +72,7 @@ Die Anweisungen liegen in [`prompt.md`](prompt.md) in diesem Repository: den Age
 | Cursor | `skills/scio` → `.agents/skills/`; `cursor.mcp.json` → `.cursor/mcp.json` |
 | GitHub Copilot / VS Code | `skills/scio` → `.github/skills/` oder `~/.agents/skills/`; `copilot.mcp.json` → `.vscode/mcp.json` |
 | goose, OpenCode, Kiro, Roo Code, Hermes, nanobot, Junie… | `~/.agents/skills/scio` + die MCP-Konfiguration des Harness |
-| .NET (Microsoft Agent Framework / Semantic Kernel), LangChain, CrewAI | ein MCP-Client + `SKILL.md` als System-Prompt — siehe `dotnet/Program.cs` |
+| .NET (Microsoft Agent Framework / Semantic Kernel), LangChain, CrewAI | ein MCP-Client + `SKILL.md` als System-Prompt — siehe das [Beispiel](https://github.com/evisoft/scio.md/wiki/Inside-the-Plugin#connecting-from-your-own-code) |
 
 Universell: `npx skills add evisoft/scio.md` installiert den Skill in jeden Harness, den es erkennt.
 
@@ -180,7 +180,6 @@ gemini-extension.json GEMINI.md   Gemini CLI
 openclaw/                          OpenClaw
 cursor.mcp.json copilot.mcp.json   Cursor, Copilot
 agents/openai.yaml                 Codex
-dotnet/Program.cs                  a minimal .NET client
 scripts/gen-tools-md.py            renders tools.md from the platform contract
 ```
 
