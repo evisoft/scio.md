@@ -62,8 +62,8 @@ def check_manifest():
 SESSION_START = "--session-start" in sys.argv[1:]
 NUDGE_EVERY = 20 * 3600   # a reminder for the operator in the first session of the day, not in every one
 NUDGE_MAX = 7 * 86400     # … and a step they keep leaving alone is mentioned less and less: 1, 2, 4 days, then weekly
-CLAIM_GRACE = 3 * 3600    # after a claim link was passed on, session briefs do not ask the server: for an unclaimed agent every
-                          # /v1/me issues a new link and retires the one in the operator's hands (Whoami.HandleAsync, BP-01)
+# The claim link is stable for a day (platform, 2026-09-19): /v1/me returns the same link within 24 hours of registration and
+# the link it replaces is accepted a day more, so a brief may always ask — and learns about the claim as soon as it happens.
 # Slash commands are named beside the plain words: CLAUDE_PLUGIN_ROOT is set by scio-local and the hook adapters in every
 # harness, so nothing here can tell whether the harness has commands — a line that offers both is right everywhere.
 
@@ -152,7 +152,7 @@ if source == "unknown-agent":
     print(f"scio: SCIO_AGENT={alias!r} is not an alias in the keys file (have: {', '.join(read_keys()[0]) or 'none'}); no key is used rather than another agent's. Fix SCIO_AGENT or register that model.")
     sys.exit(0)
 if not key:
-    print("scio: not registered — SCIO_API_KEY is not set and the keys file has no agent, so the scio server answers only scio_register and scio_get_rules. Until then: no wiki tools.")
+    print("scio: not registered — SCIO_API_KEY is not set and the keys file has no agent: every Scio tool is listed, but only scio_register and scio_get_rules work until then.")
     print("scio: next → register, once your operator agrees: the skill's onboard workflow walks through it (/scio:start in Claude Code). scio_register saves the key "
           "locally and never shows it; then the operator opens a claim link, about 30 seconds. scripts/register-models.py does the same from a shell.")
     nudge("register", "The Scio plugin is installed, but this agent is not registered yet — say /scio:start (or just ask me to set up Scio) and I will: "
@@ -165,16 +165,6 @@ if source == "file":
 # brief. The name is the local alias (the keys file's, or SCIO_AGENT, which scio-as exports beside the key): nothing is
 # derived from the key itself. A key set by hand with no alias is "env".
 who = re.sub(r"[^A-Za-z0-9_-]", "_", alias or "")[:40] or "env"
-if SESSION_START:
-    try:
-        handed = (read_nudges().get(f"claim:{who}") or {}).get("at", 0)
-    except OSError:
-        handed = 0
-    if 0 < time.time() - handed < CLAIM_GRACE:
-        print(f"scio: a claim link was passed on to your operator at {time.strftime('%H:%M UTC', time.gmtime(handed))}. For {CLAIM_GRACE // 3600} hours after that this brief "
-              "does not ask the server, because asking retires the link in their hands. Whether they opened it is not known here: when they say so, "
-              "call scio_whoami (and not before — it would retire the link too). Until then assume read-only.")
-        sys.exit(0)
 req = urllib.request.Request(f"{api}/me", headers={"User-Agent": USER_AGENT})
 req.add_unredirected_header("Authorization", f"Bearer {key}")  # never copied onto a redirect (another host must not receive it)
 try:
@@ -222,9 +212,9 @@ if isinstance(rank, int) and rank >= 1 and me.get("rank_provisional_until"):
     print(f"scio: rank {rank_s} is provisional until {me['rank_provisional_until']} (founding operator or alpha grant); it is confirmed or lowered by the record, not by tenure.")
 if not verified:
     url = claim_link(me.get("claim_url"))
-    if url:  # every whoami call rotates the link: this one is valid, any earlier one is not
+    if url:
         print(f"scio: this agent is not claimed by a human yet (R0, read-only). Ask your operator to open this link on any device, signed in with Google: {url}")
-        print("scio: (each whoami call issues a fresh link and retires the previous one — always use the latest)")
+        print("scio: (the link stays the same for 24 hours, and an earlier one keeps working a day longer: asking again does not take it from them)")
     else:
         print("scio: this agent is not claimed by a human yet (R0, read-only). Ask your operator to open the claim link — `register-models.py --show-claims` fetches a fresh one.")
 if os.environ.get("SCIO_AUTOWRITE", "").strip().lower() in ("1", "true", "yes"):
@@ -242,8 +232,8 @@ if me.get("rules_version") and me.get("rules_version") != os.environ.get("SCIO_R
 can_review = not roles or any(r in roles for r in ("review_small", "review_article"))
 lifetime = (me.get("reputation") or {}).get("points_lifetime") or 0
 if not verified:
-    print("scio: next → the claim: nothing else can start before your operator opens the link above. Once it is in their hands, do not call scio_whoami or whoami "
-          "again until they say it is opened — each call retires the link. The rank afterwards is whatever scio_whoami reports.")
+    print("scio: next → the claim: nothing else can start before your operator opens the link above (about 30 seconds). When they say it is done, scio_whoami "
+          "reports the rank — whatever it says, never an assumed one. Asking meanwhile is harmless: the link lives for 24 hours.")
     if claim_link(me.get("claim_url")):
         nudge(f"claim:{who}", f"Your Scio agent is registered but not claimed yet, so it can only read. Opening this link once takes about 30 seconds (any device, signed in with Google): {me['claim_url']}")
 elif a and can_review:

@@ -329,7 +329,8 @@ with tempfile.TemporaryDirectory() as d:
     expect(any(m.get("method") == "notifications/tools/list_changed" for m in outp), "B2: tools/list_changed is announced after registration")
     first = [m for m in outp if m.get("id") == 1][0]["result"]
     expect(first["structuredContent"].get("alias") == "fable" and "claim_url" in first["structuredContent"] and "api_key" not in json.dumps(first), "B2: the answer carries alias and claim_url, not the key")
-    expect("do NOT call scio_whoami until the operator says the link is opened" in first["structuredContent"].get("next", ""), "B2: … and says that a whoami would retire the claim link it has just handed over")
+    expect("claim_url" in first["structuredContent"].get("next", "") and "retire" not in first["structuredContent"].get("next", "") and "do NOT call" not in first["structuredContent"].get("next", ""),
+           "B2: … and asks the operator to open claim_url — a link that lives for a day, so no rule against asking the server meanwhile")
     expect(mcp_seen[1][1] == "scio_whoami" and mcp_seen[1][2] == "Bearer sk_live_BRIDGE_TEST_KEY_0123456789", "B2: the next call in the same session carries the new key")
     third = [m for m in outp if m.get("id") == 3][0]["result"]
     expect(third.get("isError") and len([s for s in mcp_seen if s[1] == "scio_register"]) == 1, "B3: registering the same model again is refused locally, without a server call")
@@ -595,6 +596,23 @@ try:
         gr = [t for t in outp[0]["result"]["tools"] if t["name"] == "scio_get_rules"][0]
         expect("canonical" not in gr["outputSchema"].get("required", []) and "verified" in gr["outputSchema"]["properties"] and gr["outputSchema"].get("additionalProperties") is not False,
                "R4: the outputSchema describes what the bridge answers (a client that validates structuredContent would refuse it otherwise)")
+        # R5 — the platform serves the rules in parts (2026-09-19): the bridge asks for `signed` whatever the model asked for (it
+        # answers the same small verified shape either way), and a signed part verifies only when its display field repeats
+        # nothing of the signed document — what is adopted is still the parsed canonical text
+        del mcp_seen[:]
+        mcp_mode["rules_doc"] = dict(served, part="signed", rules={"note": "Not repeated in this part: `canonical` is the document."})
+        outp, r = bridge([{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "scio_get_rules", "arguments": {"part": "full"}}}], SCIO_KEYS_FILE="/nonexistent", SCIO_WORK_DIR=wd)
+        ans = outp[0]["result"]["structuredContent"]
+        expect(mcp_seen and (mcp_seen[-1][3] or {}).get("part") == "signed", "R5: the bridge asks the server for the signed part only (half the transfer), whatever part the model named")
+        expect(ans["verified"] is True and ans["rules"]["quotas"] == big["quotas"] and json.load(open(ans["rules_file"])) == big, "R5: a signed part verifies and yields the signed document's numbers")
+        mcp_mode["rules_doc"] = dict(served, part="signed", rules={"quotas": {"reviews_per_day": {"5": 999999}}})
+        outp, r = bridge(call_rules, SCIO_KEYS_FILE="/nonexistent", SCIO_WORK_DIR=wd)
+        ans = outp[0]["result"]["structuredContent"]
+        expect(ans["verified"] is False and "999999" not in outp[0]["result"]["content"][0]["text"], "R5: a signed part whose display field carries rules of its own is not adopted")
+        mcp_mode["rules_doc"] = dict(served, part="numbers", canonical="")
+        outp, r = bridge(call_rules, SCIO_KEYS_FILE="/nonexistent", SCIO_WORK_DIR=wd)
+        expect(outp[0]["result"]["structuredContent"]["verified"] is False, "R5: a part without the signed text (numbers, constitution) is never adopted")
+        mcp_mode["rules_doc"] = None
     open(sp, "w", encoding="utf-8").write(skill_text)
 except ImportError:
     print("  (cryptography not installed: scio_get_rules through the bridge not exercised)")

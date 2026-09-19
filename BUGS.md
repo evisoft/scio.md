@@ -455,6 +455,9 @@ No release, registration, push or production mutation was performed: the changes
 ## BUG-018 — High: the plugin retired the claim link it had just handed over
 
 Status: Fixed on the plugin's side; the cause is the platform's to decide (brief sent to the platform agent, 2026-09-19).
+Resolved at the cause on 2026-09-19 (evisoft/scio@5eaccda): the link is stable for 24 hours from registration and the one it
+replaces is accepted a day longer. Plugin v0.7.5 dropped the workaround below — the "ask nothing until opened" rule and the
+brief's three-hour silence — so a brief asks again and learns about the claim as soon as it happens.
 For an unclaimed agent every `scio_whoami` / `GET /v1/me` mints a new claim token and overwrites the old one
 (`Whoami.HandleAsync`, BP-01), and the human holding the old link lands on "Nothing to claim". The plugin made that
 the normal case: `/scio:register` told the agent to call `scio_whoami` "to confirm" before showing the link, the

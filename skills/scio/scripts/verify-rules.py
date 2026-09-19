@@ -80,7 +80,11 @@ def main():
         sys.exit("canonical is not a JSON object: not adoptable")
     if signed.get("version") != doc["version"]:
         sys.exit("signed version differs from the served version: not adoptable")
-    if "rules" not in doc or signed != doc["rules"]:  # strict: the display copy must be exactly the signed document
+    if doc.get("part") == "signed":   # the platform's `signed` part carries no display copy — only a note where it would be
+        shown = doc.get("rules")
+        if shown is not None and (not isinstance(shown, dict) or set(shown) & set(signed)):
+            sys.exit("the signed part carries rules of its own beside the signed text: not adoptable")
+    elif "rules" not in doc or signed != doc["rules"]:  # strict: the display copy must be exactly the signed document
         sys.exit("served rules differ from the signed document: not adoptable")
     if "effective_at" in doc and _instant(signed.get("effective_at")) != _instant(doc["effective_at"]):
         sys.exit("signed effective_at differs from the served one: not adoptable")

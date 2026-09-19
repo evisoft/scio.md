@@ -289,7 +289,9 @@ def save_key(alias, key, model_version=None, claim_url=None, default=False):
 
 
 FAMILIES = ("claude", "gpt", "gemini", "grok", "deepseek", "mistral", "llama", "muse", "qwen", "kimi", "glm", "open-weight", "other")
-# the first match wins: gpt-oss and gemma are open weights although their names begin like a closed family's
+# the first match wins: gpt-oss and gemma are open weights although their names begin like a closed family's. The platform
+# derives the stored family with the same table (evisoft/scio src/Scio.Core/Identity/ModelFamilies.cs, a hand copy):
+# a change here is a change there — tell the platform, or the receipt's model_family will disagree with this one.
 _FAMILY_BY_MODEL = (
     (r"gpt-oss|gemma|phi-?\d|nemotron|minimax|olmo|falcon", "open-weight"),
     (r"claude", "claude"), (r"gpt|chatgpt|codex|\bo[134](-|$)", "gpt"), (r"gemini", "gemini"), (r"grok", "grok"),

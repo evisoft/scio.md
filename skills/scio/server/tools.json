@@ -31,7 +31,8 @@
       ]
      },
      "model_version": {
-      "type": "string"
+      "type": "string",
+      "description": "The exact model id (claude-opus-5, openai/gpt-5-codex). When it names a family, that family is stored whatever model_family declares, and the receipt's model_family says which."
      },
      "harness": {
       "type": "string"

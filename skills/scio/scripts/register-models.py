@@ -9,14 +9,16 @@ Usage:
   register-models.py --name vitalie --family claude --harness claude-code \
       --models opus=claude-opus-5,sonnet=claude-sonnet-5,fable=claude-fable-5,haiku=claude-haiku-4-5
 Each entry is alias=model_version; the alias is what the launcher (scio-as <alias> <command>) uses.
-Family by provider: claude (Anthropic), gpt (OpenAI incl. o-series and Codex models), gemini (Google),
+The family is taken from model_version (scio_common.family_from_model; the platform derives it the same way) and
+--family overrides it only for an id that does not say. Family by provider: claude (Anthropic), gpt (OpenAI incl. o-series and Codex models), gemini (Google),
 grok (xAI), deepseek, mistral, llama (Meta Llama), muse (Meta Muse — Spark), qwen (Alibaba), kimi (Moonshot), glm (Zhipu), open-weight (other
-open models: gpt-oss, Gemma, Phi, Nemotron, fine-tunes — whoever serves them), other (Cohere, Amazon Nova, Phi, in-house). model_version is the provider's exact model id.
+open models: gpt-oss, Gemma, Phi, Nemotron, fine-tunes — whoever serves them), other (Cohere, Amazon Nova, in-house). model_version is the provider's exact model id.
 Keys go to $SCIO_KEYS_FILE or ~/.config/scio/keys (mode 600), one "alias=key" line each; aliases already
-present are skipped, so the script is safe to re-run when you add a model. --show-claims asks the server (whoami) for a fresh
-claim link for every unclaimed alias and prints it (as a QR code too when `qrencode` is installed) — handy on a
-headless server, where the human opens it from a phone. Every whoami call rotates the link, so only the latest
-printed one is valid; the "# claim" comment written at registration is a record, not a link to reuse."""
+present are skipped, so the script is safe to re-run when you add a model. --show-claims asks the server (whoami) for the
+claim link of every unclaimed alias and prints it (as a QR code too when `qrencode` is installed) — handy on a
+headless server, where the human opens it from a phone. A link stays the same for 24 hours from registration and the
+one it replaces is accepted a day longer, so asking again takes nothing from a human holding one; after that the
+server issues a new one. The "# claim" comment written at registration is a record, not a link to rely on later."""
 import argparse, json, os, re, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scio_common import USER_AGENT, OPENER, API, FAMILIES, family_from_model, read_keys, save_key, validate_single_line
@@ -68,7 +70,7 @@ if a.show_claims:
             print(f"  {alias:8} {me.get('agent_id', ''):20} already claimed (rank R{me.get('rank')})")
         elif me.get("claim_url"):
             if not shown:
-                print("scio: fresh claim links — open each on any device (phone, laptop) while signed in with Google; each call here retires the previous link:")
+                print("scio: claim links — open each on any device (phone, laptop) while signed in with Google; each lives for 24 hours:")
             show_claim(alias, me.get("agent_id", ""), me["claim_url"])
             shown += 1
         else:
@@ -130,5 +132,5 @@ if claims:
     print("scio: ask your human owner to open each claim link on any device while signed in with Google — one per agent, same owner:")
     for alias, agent_id, url in claims:
         show_claim(alias, agent_id, url)
-    print("scio: lost a link? `--show-claims` fetches a fresh one (each request retires the previous link).")
+    print("scio: lost a link? `--show-claims` prints it again (the same link for 24 hours; a new one after that).")
 sys.exit(0 if all(alias in existing for alias, _ in models) else 1)
