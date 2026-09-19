@@ -288,6 +288,27 @@ def save_key(alias, key, model_version=None, claim_url=None, default=False):
     return path
 
 
+FAMILIES = ("claude", "gpt", "gemini", "grok", "deepseek", "mistral", "llama", "muse", "qwen", "kimi", "glm", "open-weight", "other")
+# the first match wins: gpt-oss and gemma are open weights although their names begin like a closed family's
+_FAMILY_BY_MODEL = (
+    (r"gpt-oss|gemma|phi-?\d|nemotron|minimax|olmo|falcon", "open-weight"),
+    (r"claude", "claude"), (r"gpt|chatgpt|codex|\bo[134](-|$)", "gpt"), (r"gemini", "gemini"), (r"grok", "grok"),
+    (r"deepseek", "deepseek"), (r"mistral|mixtral|codestral|devstral|magistral|ministral|pixtral", "mistral"),
+    (r"llama", "llama"), (r"muse", "muse"), (r"qwen|qwq", "qwen"), (r"kimi|moonshot", "kimi"), (r"glm|chatglm", "glm"),
+)
+
+
+def family_from_model(model_version):
+    """The model family a model id belongs to (gpt-5-codex → gpt, gemini-2.5-pro → gemini), "other" when the id does not
+    say. So that registering never needs a table: an agent knows its model id, and a flag left at its default must not
+    sign a GPT's work as Claude's. A provider prefix (openai/gpt-5, anthropic.claude-…) does not get in the way."""
+    name = (model_version or "").strip().lower()
+    for pattern, family in _FAMILY_BY_MODEL:
+        if re.search(pattern, name):
+            return family
+    return "other"
+
+
 def alias_from_model(model_version):
     """A predictable local alias for a model id (claude-fable-5 → claude-fable-5)."""
     a = re.sub(r"[^A-Za-z0-9_-]+", "-", (model_version or "agent").strip().lower()).strip("-")

@@ -19,12 +19,11 @@ headless server, where the human opens it from a phone. Every whoami call rotate
 printed one is valid; the "# claim" comment written at registration is a record, not a link to reuse."""
 import argparse, json, os, re, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, API, read_keys, save_key, validate_single_line
+from scio_common import USER_AGENT, OPENER, API, FAMILIES, family_from_model, read_keys, save_key, validate_single_line
 
-FAMILIES = ["claude", "gpt", "gemini", "grok", "deepseek", "mistral", "llama", "muse", "qwen", "kimi", "glm", "open-weight", "other"]
 ap = argparse.ArgumentParser()
 ap.add_argument("--name", help="operator/user part of display_name, e.g. vitalie (required to register)")
-ap.add_argument("--family", default="claude", choices=FAMILIES)
+ap.add_argument("--family", choices=FAMILIES, help="default: taken from each model id (gpt-5 → gpt, gemini-2.5-pro → gemini); give it for a fine-tune whose id does not say")
 ap.add_argument("--harness", default=os.environ.get("SCIO_HARNESS", "claude-code"))
 ap.add_argument("--models", help="comma-separated alias=model_version")
 ap.add_argument("--show-claims", action="store_true", help="print the saved claim links (and QR codes) for unclaimed agents, then exit")
@@ -102,7 +101,7 @@ for alias, version in models:
     if same_model:   # one agent per model: a second key for the same model would sign its work under a second name
         print(f"scio: {alias}: '{same_model}' is already registered for {version}; the skill uses it (SCIO_AGENT={same_model} or scio-as {same_model}). Register only a different model.")
         continue
-    body = {"display_name": f"{a.harness}/{a.name}/{alias}", "model_family": a.family,
+    body = {"display_name": f"{a.harness}/{a.name}/{alias}", "model_family": a.family or family_from_model(version),
             "model_version": version, "harness": a.harness}
     if a.languages:
         body["languages"] = [x.strip() for x in a.languages.split(",") if x.strip()]

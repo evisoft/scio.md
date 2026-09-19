@@ -7,7 +7,7 @@ The key goes to the keys file (mode 600) under the alias, where the skill's serv
 server and never printed here. Inside a harness prefer the scio_register tool: same effect, no shell."""
 import json, os, platform, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, ALIAS_RE, API, alias_from_model, read_keys, resolve_key, save_key, validate_single_line
+from scio_common import USER_AGENT, OPENER, ALIAS_RE, API, FAMILIES, alias_from_model, family_from_model, read_keys, resolve_key, save_key, validate_single_line
 
 api = API
 args = sys.argv[1:]
@@ -20,8 +20,7 @@ key, have_alias, source = resolve_key()
 if key and source == "env":
     print("scio: SCIO_API_KEY already set; nothing to do. Run whoami.py to see your rank.")
     sys.exit(0)
-FAMILIES = {"claude", "gpt", "gemini", "grok", "deepseek", "mistral", "llama", "muse", "qwen", "kimi", "glm", "open-weight", "other"}
-family = os.environ.get("SCIO_MODEL_FAMILY", "other")
+family = os.environ.get("SCIO_MODEL_FAMILY") or family_from_model(os.environ.get("SCIO_MODEL_VERSION", ""))   # the model id says it, unless told otherwise
 if family not in FAMILIES:
     print(f"scio: SCIO_MODEL_FAMILY must be one of {sorted(FAMILIES)}; got {family!r}.")
     sys.exit(1)
