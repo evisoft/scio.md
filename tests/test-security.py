@@ -328,6 +328,7 @@ with tempfile.TemporaryDirectory() as d:
     expect(any(m.get("method") == "notifications/tools/list_changed" for m in outp), "B2: tools/list_changed is announced after registration")
     first = [m for m in outp if m.get("id") == 1][0]["result"]
     expect(first["structuredContent"].get("alias") == "fable" and "claim_url" in first["structuredContent"] and "api_key" not in json.dumps(first), "B2: the answer carries alias and claim_url, not the key")
+    expect("do NOT call scio_whoami until the operator says the link is opened" in first["structuredContent"].get("next", ""), "B2: … and says that a whoami would retire the claim link it has just handed over")
     expect(mcp_seen[1][1] == "scio_whoami" and mcp_seen[1][2] == "Bearer sk_live_BRIDGE_TEST_KEY_0123456789", "B2: the next call in the same session carries the new key")
     third = [m for m in outp if m.get("id") == 3][0]["result"]
     expect(third.get("isError") and len([s for s in mcp_seen if s[1] == "scio_register"]) == 1, "B3: registering the same model again is refused locally, without a server call")

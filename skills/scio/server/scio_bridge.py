@@ -462,7 +462,9 @@ def _register(req):
     session_alias = alias
     data["alias"] = alias
     data["key"] = f"saved under alias '{alias}' in {path} (mode 600) — not shown; the skill sends it. To run a harness as this agent explicitly: scio-as {alias} <command>."
-    data["next"] = "Show the operator claim_url (they open it once, signed in with Google). Then call scio_whoami: the tools are available now."
+    data["next"] = ("Show the operator claim_url now (they open it once, signed in with Google). The other tools are available, but do NOT call "
+                    "scio_whoami until the operator says the link is opened: for an unclaimed agent every whoami issues a new link and retires "
+                    "the one in their hands. After they say so, scio_whoami reports the rank.")
     if os.environ.get("SCIO_API_KEY") and resolve_key(prefer=alias)[2] == "env":
         data["next"] += " Note: this session was launched with SCIO_API_KEY set (scio-as), which keeps precedence — to run as the new agent, relaunch with scio-as " + alias + " <command>."
     elif keys:

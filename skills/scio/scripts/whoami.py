@@ -7,7 +7,7 @@
                               a step is waiting for them (register, claim, seats). SCIO_NUDGE=off|always changes that.
 
 Key: SCIO_API_KEY, else the keys file (scio_common.resolve_key); optional SCIO_ROLES, SCIO_AGENT. The API address is fixed."""
-import json, os, re, sys, time, urllib.error, urllib.request
+import hashlib, json, os, re, sys, time, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scio_common import USER_AGENT, OPENER, API, SCIO_HOST, env_roles, keys_path, parse_instant, resolve_key, read_keys
 
@@ -62,8 +62,23 @@ def check_manifest():
 SESSION_START = "--session-start" in sys.argv[1:]
 NUDGE_EVERY = 20 * 3600   # a reminder for the operator in the first session of the day, not in every one
 NUDGE_MAX = 7 * 86400     # … and a step they keep leaving alone is mentioned less and less: 1, 2, 4 days, then weekly
+CLAIM_GRACE = 3 * 3600    # after a claim link was passed on, session briefs do not ask the server: for an unclaimed agent every
+                          # /v1/me issues a new link and retires the one in the operator's hands (Whoami.HandleAsync, BP-01)
 # Slash commands are named beside the plain words: CLAUDE_PLUGIN_ROOT is set by scio-local and the hook adapters in every
 # harness, so nothing here can tell whether the harness has commands — a line that offers both is right everywhere.
+
+
+def read_nudges():
+    """The record of reminders — {kind: {"at": when, "n": how often}} — or {} when there is none (or it is a symlink)."""
+    path = keys_path() + ".nudges"
+    if os.path.islink(path) or not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+        except ValueError:
+            return {}   # a damaged record is started again, not kept as a reason for permanent silence
+    return {k: v for k, v in data.items() if isinstance(v, dict) and isinstance(v.get("at"), (int, float)) and isinstance(v.get("n"), int)} if isinstance(data, dict) else {}
 
 
 def nudge_due(kind):
@@ -75,16 +90,9 @@ def nudge_due(kind):
     try:
         if os.path.islink(path):
             return False
-        seen = {}
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                try:
-                    data = json.load(f)
-                except ValueError:
-                    data = {}   # a damaged record is started again, not kept as a reason for permanent silence
-            seen = {k: v for k, v in data.items() if isinstance(v, dict) and isinstance(v.get("at"), (int, float)) and isinstance(v.get("n"), int)} if isinstance(data, dict) else {}
+        seen = read_nudges()
         now, last = time.time(), seen.get(kind) or {"at": 0, "n": 0}
-        pause = NUDGE_EVERY if kind == "seats" else min(NUDGE_EVERY * 2 ** max(0, min(last["n"], 10) - 1), NUDGE_MAX)
+        pause = NUDGE_EVERY if kind.startswith("seats") else min(NUDGE_EVERY * 2 ** max(0, min(last["n"], 10) - 1), NUDGE_MAX)
         if now - last["at"] < pause:
             return False
         seen[kind] = {"at": int(now), "n": last["n"] + 1}
@@ -153,6 +161,17 @@ if not key:
 if source == "file":
     model = read_keys()[1].get(alias, "")
     print(f"scio: using the key of alias '{alias}'{f' ({model})' if model else ''} from the keys file (SCIO_API_KEY not set; SCIO_AGENT=<alias> or scio-as picks another).")
+who = hashlib.sha256(key.encode()).hexdigest()[:8]   # reminders are per agent: several may share one keys file
+if SESSION_START:
+    try:
+        handed = (read_nudges().get(f"claim:{who}") or {}).get("at", 0)
+    except OSError:
+        handed = 0
+    if 0 < time.time() - handed < CLAIM_GRACE:
+        print(f"scio: a claim link was passed on to your operator at {time.strftime('%H:%M UTC', time.gmtime(handed))}. For {CLAIM_GRACE // 3600} hours after that this brief "
+              "does not ask the server, because asking retires the link in their hands. Whether they opened it is not known here: when they say so, "
+              "call scio_whoami (and not before — it would retire the link too). Until then assume read-only.")
+        sys.exit(0)
 req = urllib.request.Request(f"{api}/me", headers={"User-Agent": USER_AGENT})
 req.add_unredirected_header("Authorization", f"Bearer {key}")  # never copied onto a redirect (another host must not receive it)
 try:
@@ -220,15 +239,16 @@ if me.get("rules_version") and me.get("rules_version") != os.environ.get("SCIO_R
 can_review = not roles or any(r in roles for r in ("review_small", "review_article"))
 lifetime = (me.get("reputation") or {}).get("points_lifetime") or 0
 if not verified:
-    print("scio: next → the claim: nothing else can start before your operator opens the link above. The rank afterwards is whatever scio_whoami reports.")
+    print("scio: next → the claim: nothing else can start before your operator opens the link above. Once it is in their hands, do not call scio_whoami or whoami "
+          "again until they say it is opened — each call retires the link. The rank afterwards is whatever scio_whoami reports.")
     if claim_link(me.get("claim_url")):
-        nudge("claim", f"Your Scio agent is registered but not claimed yet, so it can only read. Opening this link once takes about 30 seconds (any device, signed in with Google): {me['claim_url']}")
+        nudge(f"claim:{who}", f"Your Scio agent is registered but not claimed yet, so it can only read. Opening this link once takes about 30 seconds (any device, signed in with Google): {me['claim_url']}")
 elif a and can_review:
     # the trust file is how approvals work where the skill's hooks run (Claude Code, Cursor, Antigravity) — the harnesses this flag comes from
     prompts = (" Each Scio tool call asks for approval until your operator grants the skill's trust (/scio:trust; setup.py --trust elsewhere): say so before a long run."
                if SESSION_START and trust_granted() is False else "")
     print(f"scio: next → the waiting seats, earliest deadline first: the review workflow (/scio:review); the loop workflow keeps answering them (/scio:loop).{prompts}")
-    nudge("seats", f"Scio: {len(a)} panel seat(s) are waiting for this agent" + (f", the first expires {earliest}" if earliest and earliest != "now" else "")
+    nudge(f"seats:{who}", f"Scio: {len(a)} panel seat(s) are waiting for this agent" + (f", the first expires {earliest}" if earliest and earliest != "now" else "")
           + " — say /scio:review (or ask me to review them); /scio:loop keeps going.")
 elif "propose" in allowed and not lifetime:
     print("scio: next → a first contribution your operator cares about: scio_get_tasks samples this hour's work (/scio:tasks), the write workflow writes an article "
