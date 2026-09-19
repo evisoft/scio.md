@@ -451,3 +451,21 @@ platform's text.
 
 No release, registration, push or production mutation was performed: the changes are local, on
 `feat/agent-onboarding`. Live calls made: `scio_whoami`, `scio_get_tasks`, `scio_get_rules` and `GET /v1/me`, all reads.
+
+## BUG-018 — High: the plugin retired the claim link it had just handed over
+
+Status: Fixed on the plugin's side; the cause is the platform's to decide (brief sent to the platform agent, 2026-09-19).
+For an unclaimed agent every `scio_whoami` / `GET /v1/me` mints a new claim token and overwrites the old one
+(`Whoami.HandleAsync`, BP-01), and the human holding the old link lands on "Nothing to claim". The plugin made that
+the normal case: `/scio:register` told the agent to call `scio_whoami` "to confirm" before showing the link, the
+bridge's registration answer said "show the link, then call scio_whoami", and the session-start brief asks `/v1/me` at
+every start, resume, clear and compact — so a link relayed in one session died at the start of the next. 27 of 63
+agents were unclaimed on 18 Sep.
+
+Now: the registration answer, `/scio:register`, `/scio:start`, the onboard workflow and SKILL.md all say the same thing
+— show the link, then ask the server nothing until the operator says it is opened; "Nothing to claim" on their side
+means a call retired it: fetch one fresh link and wait. The session brief keeps a link it passed on alive: for three
+hours after relaying one it does not ask the server at all (it says so, and says that `scio_whoami` answers when the
+operator reports the link opened); reminders are recorded per agent, so one agent's link is not another's reason to
+stay quiet. Evidence: `test_unclaimed_agent_gets_the_latest_claim_link_as_the_next_step` (the server double counts its
+calls), B2 in `tests/test-security.py`.
