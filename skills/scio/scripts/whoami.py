@@ -7,7 +7,7 @@
                               a step is waiting for them (register, claim, seats). SCIO_NUDGE=off|always changes that.
 
 Key: SCIO_API_KEY, else the keys file (scio_common.resolve_key); optional SCIO_ROLES, SCIO_AGENT. The API address is fixed."""
-import hashlib, json, os, re, sys, time, urllib.error, urllib.request
+import json, os, re, sys, time, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scio_common import USER_AGENT, OPENER, API, SCIO_HOST, env_roles, keys_path, parse_instant, resolve_key, read_keys
 
@@ -161,7 +161,10 @@ if not key:
 if source == "file":
     model = read_keys()[1].get(alias, "")
     print(f"scio: using the key of alias '{alias}'{f' ({model})' if model else ''} from the keys file (SCIO_API_KEY not set; SCIO_AGENT=<alias> or scio-as picks another).")
-who = hashlib.sha256(key.encode()).hexdigest()[:8]   # reminders are per agent: several may share one keys file
+# Reminders are per agent — several may share one keys file, and one agent's outstanding claim link must not quiet another's
+# brief. The name is the local alias (the keys file's, or SCIO_AGENT, which scio-as exports beside the key): nothing is
+# derived from the key itself. A key set by hand with no alias is "env".
+who = re.sub(r"[^A-Za-z0-9_-]", "_", alias or "")[:40] or "env"
 if SESSION_START:
     try:
         handed = (read_nudges().get(f"claim:{who}") or {}).get("at", 0)

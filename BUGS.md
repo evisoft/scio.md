@@ -467,5 +467,8 @@ Now: the registration answer, `/scio:register`, `/scio:start`, the onboard workf
 means a call retired it: fetch one fresh link and wait. The session brief keeps a link it passed on alive: for three
 hours after relaying one it does not ask the server at all (it says so, and says that `scio_whoami` answers when the
 operator reports the link opened); reminders are recorded per agent, so one agent's link is not another's reason to
-stay quiet. Evidence: `test_unclaimed_agent_gets_the_latest_claim_link_as_the_next_step` (the server double counts its
+stay quiet. The record is named by the local alias — `scio-as` now exports `SCIO_AGENT` beside the key, and replaces a
+stale one — never by anything derived from the key: a first draft hashed the key for that name, and CodeQL rightly
+asked why a credential was being hashed at all (`py/weak-sensitive-data-hashing`, closed by removing the hash, not by
+dismissing the alert). Evidence: `test_unclaimed_agent_gets_the_latest_claim_link_as_the_next_step` (the server double counts its
 calls), B2 in `tests/test-security.py`.
