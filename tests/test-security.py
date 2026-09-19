@@ -435,6 +435,11 @@ with tempfile.TemporaryDirectory() as d:
     probe15 = subprocess.run([PY, "-c", "import sys; sys.path.insert(0, %r); import scio_common as c; print(c.resolve_key()[1:])" % HERE], capture_output=True, text=True,
                              env=dict({k: v for k, v in aenv.items() if k not in ("SCIO_API_KEY", "SCIO_AGENT")}, SCIO_KEYS_FILE=kf4, SCIO_WORK_DIR=os.path.join(ws, ".scio", "work")))
     expect("'codex', 'file'" in probe15.stdout, "B18: a workspace choice that names no known alias is ignored (the default applies), it never blocks the key")
+    # a harness without a session hook learns where it stands from the server's instructions — local facts only, no network
+    outl = local([{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}], SCIO_KEYS_FILE=os.path.join(d, "absent"))
+    expect("not registered" in outl[0]["result"]["instructions"] and "onboard" in outl[0]["result"]["instructions"], "B19: scio-local's instructions say when no agent is registered, and name the onboard workflow")
+    outl = local([{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}], SCIO_KEYS_FILE=kf4)
+    expect("not registered" not in outl[0]["result"]["instructions"] and "use_agent" in outl[0]["result"]["instructions"], "B19: … and, with several agents, that use_agent picks this model's own")
     # a second model registered through the bridge becomes this workspace's agent by itself
     kf5 = os.path.join(d, "keys5"); open(kf5, "w").write("codex=sk_live_CODEX_KEY_0123456789\n# default codex\n# model codex gpt-5-codex\n")
     ws5 = os.path.join(d, "ws16", ".scio", "work")
@@ -808,6 +813,36 @@ with tempfile.TemporaryDirectory() as d:
     r = subprocess.run([PY, os.path.join(RT_R2, "scripts", "setup.py"), "--harness", "kimi", "--register", "u", "--models", "x=claude-fable-5"], capture_output=True, text=True, env=dict(h, SCIO_KEYS_FILE=os.path.join(d, "k2")), stdin=subprocess.DEVNULL)
     expect(not hits and "nothing written" in (r.stdout + r.stderr) and not os.path.exists(os.path.join(d, "k2")), "S4: setup.py --register without --yes registers nothing on the server")
     reg2.shutdown()
+    # S8 — onboarding outside Claude Code: the family comes from the model id (a mixed fleet in one command, and no
+    # gpt-5 signed as `claude` because a flag was left out), and setup.py ends with the step that comes next
+    bodies = []
+    class R3(R):
+        def do_POST(self):
+            bodies.append(json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)))))
+            self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+            self.wfile.write(json.dumps({"agent_id": "ag_%d" % len(bodies), "api_key": "sk_live_FAM_%d_0123456789abcdef" % len(bodies), "claim_url": "https://x/claim"}).encode())
+    reg3 = http.server.HTTPServer(("127.0.0.1", 0), R3); threading.Thread(target=reg3.serve_forever, daemon=True).start()
+    RT_R3 = runtime_copy(f"http://127.0.0.1:{reg3.server_port}")
+    k8 = os.path.join(d, "k8")
+    r = subprocess.run([PY, os.path.join(RT_R3, "scripts", "register-models.py"), "--name", "u", "--harness", "codex", "--models", "gpt5=gpt-5-codex,gem=gemini-2.5-pro,oss=gpt-oss-120b,mine=my-inhouse-1,fable=claude-fable-5"],
+                       capture_output=True, text=True, env=dict(aenv, SCIO_KEYS_FILE=k8))
+    expect([b.get("model_family") for b in bodies] == ["gpt", "gemini", "open-weight", "other", "claude"], "S8: register-models.py without --family takes each agent's family from its model id")
+    del bodies[:]
+    r = subprocess.run([PY, os.path.join(RT_R3, "scripts", "register-models.py"), "--name", "u", "--family", "qwen", "--models", "ft=my-finetune-7b"], capture_output=True, text=True, env=dict(aenv, SCIO_KEYS_FILE=os.path.join(d, "k8b")))
+    expect([b.get("model_family") for b in bodies] == ["qwen"], "S8: an explicit --family still wins (a fine-tune whose id does not say what it is)")
+    del bodies[:]
+    h8 = os.path.join(d, "h8"); os.makedirs(h8)
+    r = subprocess.run([PY, os.path.join(RT_R3, "scripts", "setup.py"), "--harness", "cursor", "--register", "u", "--models", "gpt5=gpt-5", "--yes"], capture_output=True, text=True,
+                       env=dict(h, HOME=h8, SCIO_KEYS_FILE=os.path.join(d, "k8c")), cwd=d)
+    expect([b.get("model_family") for b in bodies] == ["gpt"], "S8: setup.py --register passes no family of its own (it used to say claude for every model)")
+    expect("next:" in r.stdout and "set me up for Scio" in r.stdout and "claim" in r.stdout.split("next:")[-1], "S8: after registering, setup.py ends with the next step: open the claim link, launch, say the sentence")
+    h9 = os.path.join(d, "h9"); os.makedirs(h9)
+    r = subprocess.run([PY, os.path.join(RT_R3, "scripts", "setup.py"), "--harness", "windsurf", "--yes"], capture_output=True, text=True, env=dict(h, HOME=h9, SCIO_KEYS_FILE=os.path.join(d, "none")), cwd=d)
+    tail8 = r.stdout.split("next:")[-1]
+    expect("next:" in r.stdout and "set me up for Scio" in tail8 and "registers itself" in tail8 and "scio-as" not in r.stdout, "S8: with no agent yet, setup.py says the agent registers itself in the session — and no longer sends anyone to scio-as")
+    r = subprocess.run([PY, os.path.join(RT_R3, "scripts", "setup.py"), "--harness", "windsurf"], capture_output=True, text=True, env=dict(h, HOME=h9, SCIO_KEYS_FILE=os.path.join(d, "none")), cwd=d, stdin=subprocess.DEVNULL)
+    expect("next:" not in r.stdout + r.stderr, "S8: a run that wrote nothing announces no next step")
+    reg3.shutdown()
     # the hooks files survive a second setup.py run (the JSON string was re-escaped on every run before)
     RT_H = os.path.dirname(runtime_copy("http://127.0.0.1:1"))   # …/scio-rt-x: needs the repository's hooks/ next to skills/
     shutil.copytree(os.path.join(ROOT, "hooks"), os.path.join(RT_H, "hooks"))

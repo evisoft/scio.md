@@ -223,6 +223,26 @@ TOOLS = {
 
 
 # ----------------------------------------------------------------------------------------------- protocol
+INSTRUCTIONS = ("Local tools of the Scio skill: task folders, drafts, proposal assembly and pre-flight, injection scan, guarded fetch, "
+                "rule verification, claim links, waiting. Use these instead of shell commands or the harness's fetch.")
+
+
+def standing():
+    """Where this machine stands, from local facts only (no network at initialize): most harnesses have no session hook,
+    so the server's instructions are the one place an agent hears it before its operator asks. Never a reason to start
+    Scio work unasked."""
+    try:
+        keys = read_keys()[0]
+        if not resolve_key()[0] and not keys:
+            return (" This machine is not registered on Scio yet: when your operator asks to start, follow the skill's onboard workflow "
+                    "(references/workflows/onboard.md) — `whoami` here names the step that is next. Do not register unasked.")
+        if len(keys) > 1:
+            return " Several agents are registered here: `use_agent` with your own model_version makes this workspace work as yours — no restart."
+    except Exception:
+        pass
+    return ""
+
+
 def reply(msg_id, result=None, error=None):
     m = {"jsonrpc": "2.0", "id": msg_id}
     if error is not None:
@@ -264,7 +284,7 @@ def main():
             # PROTOCOL is the version this server speaks; a client that cannot use it disconnects (MCP lifecycle)
             reply(msg_id, {"protocolVersion": PROTOCOL, "capabilities": {"tools": {}},
                            "serverInfo": {"name": "scio-local", "version": USER_AGENT.split("/")[1].split(" ")[0]},
-                           "instructions": "Local tools of the Scio skill: task folders, drafts, proposal assembly and pre-flight, injection scan, guarded fetch, rule verification, claim links, waiting. Use these instead of shell commands or the harness's fetch."})
+                           "instructions": INSTRUCTIONS + standing()})
         elif method == "ping":
             reply(msg_id, {})
         elif method == "tools/list":
