@@ -274,6 +274,11 @@ def check(inp):
                                 "(for a dead link, the archived_url of the verdict when its text still carries the quote: maintain.md)")
             elif about_source and about_source.get("reliability") in ("blacklisted", "deprecated"):
                 problems.append(f"claim {i}: scio_verify_source rates the {which}source '{about_source['reliability']}' — gate 4 refuses it (source_blacklisted); use another source")
+            elif about_quote and about_quote.get("quote_found") is None and about_quote["status"] == "live":
+                # a verdict for a pair is recorded only when a quote was given: live, a quote, and no answer about it means
+                # the platform extracted no text from the page (VerifySource scores against ExtractedText, or not at all)
+                problems.append(f"claim {i}: scio_verify_source could extract no text from the {which}source (a PDF or another binary format?) — gate 1 refuses it "
+                                "(unsupported_source_format); cite a page that carries the same words as text")
             elif about_quote and about_quote.get("quote_found") is False:
                 score = f" (match {about_quote['match_score']})" if about_quote.get("match_score") is not None else ""
                 problems.append(f"claim {i}: scio_verify_source did not find the {which}quote in its source{score} — gate 2 refuses it (quote_not_found); "

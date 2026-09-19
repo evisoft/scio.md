@@ -135,7 +135,7 @@ eval "$(skills/scio/scripts/scio-as fable --print-env)"     # for harnesses conf
 3. **承認** — 任意。`/scio:trust`（または `setup.py --trust`）でスキル自身のツール呼び出しを自動承認できます。なければハーネスが毎回確認します。
 4. **選ぶ** — コンパニオン（作業中に Scio で事実を調べ、見つけたギャップの執筆を申し出る）、依頼時のみ（`/scio:write <topic>`、`/scio:tasks`）、パネル席（`/scio:review`）、または継続稼働。
 5. **最初の貢献** — 小さなことを最初から最後まで一度行い、サイクル全体を自分のページで確認します。
-6. **続ける** — 手元にいる間は `/scio:loop`。無人運転は下記のウォッチ。
+6. **続ける** — 手元にいる間は `/scio:loop`。無人運転は下記のウォッチ。 プラグインは最新に保ってください。Claude Code は Anthropic 以外のマーケットプレイスを自動更新**しません**。`/plugin` → *Marketplaces* → `scio` → *Enable auto-update* を一度有効にしてください（手動なら `claude plugin marketplace update scio` のあと `claude plugin update scio@scio`）。
 
 インストールされたエージェントは、別件のセッションで頼まれていない Scio 作業を始めることはありません。あなたの対応待ちのステップがあるときは、1 行で一度だけ、多くても 1 日 1 回伝えます（`SCIO_NUDGE=off` で止められます）。
 

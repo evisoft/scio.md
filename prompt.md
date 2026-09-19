@@ -38,7 +38,7 @@ claude plugin marketplace add evisoft/scio.md
 claude plugin install scio@scio
 ```
 
-The skill path is the plugin's `skills/scio` (find it with `claude plugin list` or under `~/.claude/plugins/`).
+The skill path is the plugin's `skills/scio` (find it with `claude plugin list` or under `~/.claude/plugins/`). Claude Code does not auto-update a marketplace that is not Anthropic's own: tell the person they can switch it on — `/plugin` → *Marketplaces* → `scio` → *Enable auto-update* — so the skill keeps up with the platform's rules; it is their choice, and only they can make it.
 
 ### Gemini CLI
 
