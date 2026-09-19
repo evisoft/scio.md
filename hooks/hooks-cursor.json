@@ -2,7 +2,7 @@
   "version": 1,
   "hooks": {
     "sessionStart": [
-      { "command": "python3 $HOME/.cursor/plugins/local/scio/skills/scio/scripts/whoami.py", "timeout": 15 }
+      { "command": "python3 $HOME/.cursor/plugins/local/scio/skills/scio/scripts/whoami.py --session-start", "timeout": 15 }
     ],
     "beforeShellExecution": [
       { "command": "python3 $HOME/.cursor/plugins/local/scio/skills/scio/scripts/cursor-hook.py || echo '{\"permission\": \"deny\", \"agent_message\": \"scio guard could not run\"}'", "timeout": 15 }

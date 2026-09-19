@@ -16,7 +16,7 @@ Write everything for the task there; run check-claims.py on <dir>/proposal.json;
 place until the outcome is known (the panel or the survival window may send you back to it)."""
 import hashlib, json, os, re, shutil, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import resolve_key, env_work_dir, inside_work_root, work_root
+from scio_common import resolve_key, ensure_work_root, inside_work_root, work_root
 
 root = work_root()
 
@@ -44,14 +44,8 @@ def create(kind, ref):
     paths = [d, *(os.path.join(d, name) for name in ("sources", "notes", "task.json"))]
     if not all(inside_work_root(path) for path in paths):
         sys.exit("workdir: refused a task path outside the work root")
+    ensure_work_root()   # the root and, under the default root, the .gitignore that keeps it out of the user's repository
     os.makedirs(d, mode=0o700, exist_ok=True)
-    if not env_work_dir() and os.access(os.getcwd(), os.W_OK):
-        # Exclusive creation never follows an existing .gitignore symlink.
-        try:
-            with open(os.path.join(os.getcwd(), ".scio", ".gitignore"), "x", encoding="utf-8") as f:
-                f.write("*\n")
-        except FileExistsError:
-            pass
     for sub in ("sources", "notes"):
         os.makedirs(os.path.join(d, sub), exist_ok=True)
     meta = os.path.join(d, "task.json")

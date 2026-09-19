@@ -11,7 +11,7 @@ import json, os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from importlib import import_module
 from urllib.parse import urlparse
-from scio_common import inside_work_root
+from scio_common import inside_work_root, read_verdicts, source_ids
 _scan = import_module("scan-injection")
 
 SENSITIVE = {"living_person", "health", "law", "politics"}
@@ -252,6 +252,41 @@ def check(inp):
             if missing_nums:  # report a measurement before a year: that is where precision drifts
                 worst = sorted(missing_nums, key=lambda n: bool(re.fullmatch(r"(19|20)\d{2}", n)))[0]
                 warnings.append(f"claim {i}: number {worst} in the sentence is not in the quote — check precision (C1, C4)")
+
+    # --- what the platform already said about these sources (the bridge records every scio_verify_source verdict) ---
+    # The gates run the same fetch and the same quote match on the proposal: a pair they will refuse is an error here,
+    # before it costs the day's quota unit; a pair nobody verified is named, because that is where proposals die.
+    pair_verdicts, url_verdicts = read_verdicts()
+    unverified, spans = [], 0
+    for i, c in enumerate(claims):
+        if not isinstance(c, dict):
+            continue
+        cited = [("", c.get("source_url"), c.get("quote")), ("second ", c.get("second_source_url"), c.get("second_quote"))]
+        cited += [("premise's ", p.get("source_url"), p.get("quote")) for p in (c.get("premises") if isinstance(c.get("premises"), list) else []) if isinstance(p, dict)]
+        for which, u, q in cited:   # gate 2 retrieves all three kinds of span
+            if not (isinstance(u, str) and u.strip() and isinstance(q, str) and q.strip()):
+                continue
+            spans += 1
+            url_id, pair_id = source_ids(u, q)
+            about_source, about_quote = url_verdicts.get(url_id), pair_verdicts.get(pair_id)
+            if about_source and about_source["status"] in ("dead", "likely_fabricated", "forbidden_source"):
+                problems.append(f"claim {i}: scio_verify_source found the {which}source '{about_source['status']}' — gate 1 refuses it; re-source the sentence "
+                                "(for a dead link, the archived_url of the verdict when its text still carries the quote: maintain.md)")
+            elif about_source and about_source.get("reliability") in ("blacklisted", "deprecated"):
+                problems.append(f"claim {i}: scio_verify_source rates the {which}source '{about_source['reliability']}' — gate 4 refuses it (source_blacklisted); use another source")
+            elif about_quote and about_quote.get("quote_found") is False:
+                score = f" (match {about_quote['match_score']})" if about_quote.get("match_score") is not None else ""
+                problems.append(f"claim {i}: scio_verify_source did not find the {which}quote in its source{score} — gate 2 refuses it (quote_not_found); "
+                                "quote the source's exact words and verify again")
+            elif not about_quote or about_quote.get("quote_found") is not True:
+                unverified.append(i)
+            elif about_source and about_source.get("reliability") == "generally_unreliable":
+                warnings.append(f"claim {i}: the {which}source is rated generally_unreliable — unfit for a lone claim (write.md step 3)")
+    if unverified:
+        which = sorted(set(unverified))
+        warnings.insert(0, f"{len(unverified)} of {spans} source/quote pairs have no scio_verify_source verdict from the last 7 days in this workspace "
+                           f"(claims {', '.join(map(str, which[:10]))}{'…' if len(which) > 10 else ''}): the gates fetch every one, and a single quote they cannot find "
+                           "fails the proposal and spends the quota unit — verify each pair first, with the quote (write.md step 3)")
 
     # --- prose ----------------------------------------------------------------
     summary_text = (inp.get("summary") or fm.get("summary") or "")

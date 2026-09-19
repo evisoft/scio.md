@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/scio/scripts/whoami.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/scio/scripts/whoami.py\" --session-start",
             "timeout": 15
           }
         ]

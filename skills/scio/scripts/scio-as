@@ -3,6 +3,9 @@
 #   scio-as <alias> <command...>      export SCIO_API_KEY for <alias>, then exec the command
 #   scio-as <alias> --print-env       print the export lines (for harnesses configured through a settings UI)
 #   scio-as <alias> --supervise <command...>   run the command and restart it after harness usage limits (supervise.py)
+#   scio-as <alias> --supervise --watch <command...>   unattended: start the command (one round) only when scio.md has work
+#                                     for this agent — the waiting costs no model call. Options: --poll 300 --tasks-every 60
+#                                     --for 8h --max-rounds N --max-restarts N --log FILE (supervise.py explains each)
 #   scio-as --list                    list the aliases in the keys file
 # Keys come from $SCIO_KEYS_FILE or ~/.config/scio/keys (written by register-models.py): one "alias=key" per line.
 # Examples:
@@ -11,12 +14,13 @@
 #   scio-as gpt5   codex
 #   scio-as gemini gemini
 #   scio-as haiku  opencode
+#   scio-as opus   --supervise --watch claude --model opus -p "/scio:loop --once"
 #   eval "$(scio-as fable --print-env)"; cursor .
 set -euo pipefail
 keys="${SCIO_KEYS_FILE:-${HOME:-/nonexistent}/.config/scio/keys}"
 list() { [ -f "$keys" ] && grep -v '^#' "$keys" | cut -d= -f1 | tr '\n' ' '; echo; }
 case "${1:-}" in
-  ""|-h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  ""|-h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
   --list) list; exit 0 ;;
 esac
 alias_="$1"; shift
@@ -37,13 +41,27 @@ if [ $# -eq 0 ]; then
 fi
 if [ "${1:-}" = "--supervise" ]; then
   shift
-  export SCIO_API_KEY="$key" SCIO_HARNESS="${SCIO_HARNESS:-$(basename "${1:-unknown}")}"
+  sup_opts=()   # the supervisor's own options come before the harness command, which never starts with one of them
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --watch) sup_opts+=("$1"); shift ;;
+      --poll|--tasks-every|--for|--max-rounds|--max-restarts|--log)
+        [ $# -ge 2 ] || { echo "scio: $1 needs a value" >&2; exit 2; }
+        sup_opts+=("$1" "$2"); shift 2 ;;
+      *) break ;;
+    esac
+  done
+  if [ $# -eq 0 ]; then
+    echo "scio: give the harness command after --supervise, e.g. scio-as $alias_ --supervise --watch claude -p \"/scio:loop --once\"" >&2
+    exit 2
+  fi
+  export SCIO_API_KEY="$key" SCIO_HARNESS="${SCIO_HARNESS:-$(basename "$1")}"
   sup="$(dirname "$(readlink -f "$0")")/supervise.py"
   if [ ! -f "$sup" ]; then
     echo "scio: supervise.py is not next to this scio-as ($sup); install scio-as as a symlink to the skill's scripts/scio-as, not a copy" >&2
     exit 1
   fi
-  exec python3 "$sup" -- "$@"
+  exec python3 "$sup" ${sup_opts[@]+"${sup_opts[@]}"} -- "$@"   # the ${x[@]+…} form: an empty array under `set -u` is an error before bash 4.4 (macOS)
 fi
 export SCIO_API_KEY="$key" SCIO_HARNESS="${SCIO_HARNESS:-$(basename "$1")}"
 exec "$@"

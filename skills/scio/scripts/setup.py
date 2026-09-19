@@ -35,7 +35,9 @@ def write_hooks_absolute(path, deny_json):
     txt = open(path, encoding="utf-8").read()
     def fix(m):
         cmd = json.loads('"' + m.group(1) + '"')   # the real command, not its JSON spelling: re-encoding an escaped string doubles every backslash
-        cmd = re.sub(r"^python3 (?:\S*/)?skills/scio/scripts/(\S+?\.py)(?:\s*\|\|.*)?$", lambda mm: f'python3 "{os.path.join(ROOT, "skills", "scio", "scripts", mm.group(1))}"', cmd)
+        # a script's own flags (whoami.py --session-start) stay; the `|| echo deny` fallback is re-added below
+        cmd = re.sub(r"^python3 (?:\S*/)?skills/scio/scripts/(\S+?\.py)((?:\s+--[a-z][a-z-]*)*)(?:\s*\|\|.*)?$",
+                     lambda mm: f'python3 "{os.path.join(ROOT, "skills", "scio", "scripts", mm.group(1))}"{mm.group(2)}', cmd)
         if "hook.py" in cmd and "||" not in cmd:
             cmd += " || echo '" + deny_json.replace("'", "") + "'"
         return '"command": ' + json.dumps(cmd)
