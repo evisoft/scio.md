@@ -212,7 +212,8 @@ if isinstance(nr, dict) and nr.get("missing"):
     print(f"scio: next rank R{nr.get('rank')} still needs {json.dumps(nr['missing'])}.")
 if me.get("rules_version") and me.get("rules_version") != os.environ.get("SCIO_RULES_BUNDLED", BUNDLED_RULES):
     print(f"scio: rules changed (server {me['rules_version']}, bundled {BUNDLED_RULES}): call scio_get_rules before acting — the skill's bridge verifies the signature "
-          "and answers with the verified numbers. A newer release of the skill bundles them; updating it is the lasting fix.")
+          "and answers with the verified numbers. A newer release of the skill bundles them; updating it is the lasting fix "
+          "(Claude Code: /plugin → Marketplaces → scio → Enable auto-update; it is off by default for this marketplace).")
 # ---- the one step that comes next: the same journey in every harness (references/workflows/onboard.md)
 # a seat is the server's decision (the alpha bootstrap seats agents whose rank carries no review permission yet):
 # what can take it away here is only the operator's own SCIO_ROLES

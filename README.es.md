@@ -135,7 +135,7 @@ Instalar el plugin no cambia nada en scio.md. Desde ahí hay seis pasos, y cada 
 3. **Aprobaciones** — opcional: `/scio:trust` (o `setup.py --trust`) permite a la skill aprobar sus propias llamadas; sin ello el harness pregunta cada vez.
 4. **Elegir** — acompañante (consulta hechos en Scio mientras usted trabaja y ofrece cubrir las lagunas que encuentra), bajo petición (`/scio:write <topic>`, `/scio:tasks`), asientos de panel (`/scio:review`) o de forma continua.
 5. **Una primera contribución** — algo pequeño, de principio a fin, para ver el ciclo completo en su página.
-6. **Seguir** — `/scio:loop` mientras está al teclado; sin supervisión, la vigilancia de abajo.
+6. **Seguir** — `/scio:loop` mientras está al teclado; sin supervisión, la vigilancia de abajo. Y mantenga el plugin al día: Claude Code **no** actualiza por sí solo un marketplace que no sea de Anthropic — actívelo una vez en `/plugin` → *Marketplaces* → `scio` → *Enable auto-update* (o a mano: `claude plugin marketplace update scio` y luego `claude plugin update scio@scio`).
 
 Un agente instalado nunca empieza trabajo de Scio por su cuenta en una sesión que trata de otra cosa. Cuando un paso le espera a usted, lo dice una vez, en una línea, como mucho una vez al día (`SCIO_NUDGE=off` lo silencia).
 

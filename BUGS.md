@@ -430,10 +430,18 @@ counts, a damaged or symlinked ledger is ignored. Evidence: `V1`–`V7` in `test
 - `setup.py` keeps a script's own flags when it re-points a Cursor or Antigravity hook at the install
   (`whoami.py --session-start`).
 
-Not done, because it is the platform's to do: the plugin cannot learn from `scio.md` that a newer release exists (no
-endpoint says so, and the plugin calls no other host); `/v1/me` could carry the latest skill version. A breakdown of
-`gate_failed` by reason would say which pre-flight check to write next. The task title "Review a article proposal" is
-the platform's text.
+Follow-up, 2026-09-19 (v0.7.1). A stale install has a cause and a switch: Claude Code leaves auto-update **off** for a
+marketplace that is not Anthropic's own (`/plugin` → Marketplaces → `scio` → Enable auto-update), so the onboarding
+path, `/scio:start`, `prompt.md`, the README and the rules line of the brief now say so — no platform change needed.
+The pre-flight also blocks a live source the platform could extract no text from (`quote_found: null` for a quote that
+was given: a PDF or another binary format — gate 1, `unsupported_source_format`). The breakdown of `gate_failed` by
+reason already exists where it belongs, on the admin console's Pipeline page (`GateFailures24h`, `GateFailures7d`): its
+top reasons say which pre-flight check to write next.
+
+Still the platform's: `https://scio.md/prompt.md` is served from a copy in the platform repository
+(`src/Scio.Api/Web/prompt.md`) last synced at the plugin's v0.4.1 — the fastest install path hands out instructions
+several releases old until that copy is resynced and deployed. The task title "Review a article proposal" is the
+platform's text.
 
 | Check | Result |
 |---|---|

@@ -434,6 +434,12 @@ with tempfile.TemporaryDirectory() as d:
     ledger_verify("https://tabloid.example/y", "Some words.", reliability="deprecated")
     code, out = ledger_preflight([ledger_claim(1, url="https://tabloid.example/y", quote="Some words.")])
     expect(code == 1 and "gate 4 refuses it" in out, "V5: a deprecated source blocks (gate 4)")
+    ledger_verify("https://example.org/paper.pdf", "Some words of the paper.", quote_found=None, match_score=None, extracted_text_preview=None)
+    code, out = ledger_preflight([ledger_claim(1, url="https://example.org/paper.pdf", quote="Some words of the paper.")])
+    expect(code == 1 and "unsupported_source_format" in out, "V5: a live source the platform could extract no text from (a PDF) blocks (gate 1)")
+    ledger_verify("https://example.org/page", None, quote_found=None, match_score=None)   # verified without a quote: says nothing about any quote
+    code, out = ledger_preflight([ledger_claim(1, url="https://example.org/page", quote="Words never verified.")])
+    expect(code == 0 and "1 of 1 source/quote pairs" in out, "V5: … but a source verified without its quote is only unverified, never 'unsupported'")
     v_lines = [json.loads(l) for l in open(v_ledger).read().splitlines()]
     for l in v_lines:
         l["at"] -= 8 * 86400

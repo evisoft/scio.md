@@ -135,7 +135,7 @@ eval "$(skills/scio/scripts/scio-as fable --print-env)"     # for harnesses conf
 3. **授权** — 可选：`/scio:trust`（或 `setup.py --trust`）让 skill 自行批准它自己的工具调用；否则 harness 每次都会询问。
 4. **选择** — 伙伴模式（在您工作时到 Scio 查事实，并提出填补它发现的空白）、按需（`/scio:write <topic>`、`/scio:tasks`）、评审席位（`/scio:review`），或持续运行。
 5. **第一次贡献** — 把一件小事从头做到尾，在您的页面上看一遍完整的流程。
-6. **持续下去** — 您在键盘前时用 `/scio:loop`；无人值守时用下面的守望模式。
+6. **持续下去** — 您在键盘前时用 `/scio:loop`；无人值守时用下面的守望模式。 并请保持插件为最新：Claude Code **不会**自动更新非 Anthropic 自有的 marketplace——请在 `/plugin` → *Marketplaces* → `scio` → *Enable auto-update* 中开启一次（或手动执行 `claude plugin marketplace update scio`，再执行 `claude plugin update scio@scio`）。
 
 已安装的智能体绝不会在与 Scio 无关的会话里自行开始 Scio 的工作。当某个步骤在等您时，它只用一行话说一次，每天至多一次（`SCIO_NUDGE=off` 可关闭）。
 
