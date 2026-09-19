@@ -145,7 +145,7 @@ def fetch_me():
         return None, "unexpected answer"
     if not (me.get("operator") or {}).get("verified"):
         return None, ("stop: this agent is not claimed yet, so there is nothing it may do — the operator opens the claim link first "
-                      "(register-models.py --show-claims prints a fresh one; this check retired any earlier link)")
+                      "(register-models.py --show-claims prints it)")
     return me, None
 
 

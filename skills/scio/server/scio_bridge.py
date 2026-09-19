@@ -12,10 +12,10 @@ first, then the keys file the registration wrote (`keys` under ~/.config/scio). 
   * `scio_register` is forwarded as is, but the `api_key` in the answer is saved to the keys file (mode 600) and
     replaced by the alias it was saved under; the bridge then uses that key and tells the harness the tool list
     changed (`notifications/tools/list_changed`), so scio_whoami and the rest appear without a restart.
-  * the tool list never depends on the key. scio.md lists two tools to an anonymous caller, and several harnesses
-    ignore `tools/list_changed`: a session opened before registration would keep those two until a restart. So while
-    there is no key the bridge lists the bundled contract (tools.json beside this file, generated from the platform's)
-    and answers a bearer tool with the way to register. The key is resolved on every request, so one that reaches
+  * the tool list never depends on the key: a harness that ignores `tools/list_changed` would otherwise keep the list it
+    saw before registration until a restart. scio.md lists every tool to an anonymous caller since 2026-09-19; while
+    there is no key the bridge still adds the bundled contract (tools.json beside this file, generated from the
+    platform's), so the list is whole offline and against an older server, and answers a bearer tool with the way to register. The key is resolved on every request, so one that reaches
     the keys file by any road — register.py, another session, the operator's editor — is used by the next call, and
     the harness is told the list changed whoever wrote it. `use_agent` on scio-local chooses among several agents
     the same way: a file this bridge reads per call, never a relaunch under scio-as.
@@ -25,9 +25,11 @@ first, then the keys file the registration wrote (`keys` under ~/.config/scio). 
     the text itself is untouched, so the evidence survives for review and reporting.
   * `scio_get_rules` answers with the signed document twice over (the signed bytes and their parsed copy, the
     constitution inside both): some 80 KB, more than a harness lets a tool return — Claude Code refuses it outright —
-    so an agent told "rules changed" could neither read nor verify them. The bridge keeps the document out of the
-    model's context: it saves it under the task work root, runs verify-rules.py on it (pinned key, served == signed)
-    and answers with the verdict, the numbers and the file that holds the verified text (read_file pages through it).
+    so an agent told "rules changed" could neither read nor verify them. The bridge asks for the `signed` part only
+    (the signed bytes and the signature, ~40 KB; a server without parts sends the whole, which verifies the same), keeps
+    it out of the model's context: saves it under the task work root, runs verify-rules.py on it (pinned key; a display
+    copy, when there is one, must equal the signed text) and answers with the verdict, the numbers and the file that
+    holds the verified text (read_file pages through it).
   * the verdict of every `scio_verify_source` — the platform's own fetch and quote match, the ones its gates run on a
     proposal — is recorded under the task work root (ids and enums only, never the text), and the pre-flight reads
     them: a pair the platform already refused does not cost a proposal, a pair nobody verified is named beforehand.
@@ -379,6 +381,16 @@ def remember_verdict(req, result):
         pass
 
 
+def signed_part_only(req):
+    """scio_get_rules: ask for the signed part whatever part the model named — the bridge answers the same verified shape
+    for every part, and `signed` is all that verification needs."""
+    params = req.get("params") or {}
+    if req.get("method") != "tools/call" or params.get("name") != "scio_get_rules":
+        return req
+    args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+    return {**req, "params": {**params, "arguments": {**args, "part": "signed"}}}
+
+
 def relay(req):
     """Forward and reply with the same id the harness used, whatever the server put there."""
     if (req.get("method") == "tools/call" and (req.get("params") or {}).get("name") not in ANONYMOUS_TOOLS
@@ -387,7 +399,7 @@ def relay(req):
     req, problem = expand_proposal_file(req)
     if problem:
         reply(req.get("id"), {"content": [{"type": "text", "text": problem}], "isError": True}); return {"result": {}}
-    res = forward(req)
+    res = forward(signed_part_only(req))
     if "error" in res:
         reply(req.get("id"), error=res["error"])
     else:
@@ -411,7 +423,8 @@ def with_alias_field(tools):
                 t["inputSchema"]["required"] = [r for r in req if r not in ("body", "claims", "slug", "lang", "kind", "summary", "idempotency_key", "patch")]
         if t.get("name") == "scio_get_rules":   # the bridge verifies and answers small: the schema must describe that answer, not the served one
             t["description"] = (t.get("description", "") + " Through the skill's bridge the document is verified locally against the pinned key and "
-                                "answered as {verified, report, rules (the numbers), rules_file}: the full signed text stays in rules_file, out of your context.")
+                                "answered as {verified, report, rules (the numbers), rules_file}: the full signed text stays in rules_file, out of your context. "
+                                "`part` makes no difference here: the bridge fetches the signed part and answers the same way.")
             if isinstance(t.get("outputSchema"), dict):
                 t["outputSchema"] = RULES_OUTPUT_SCHEMA
         if t.get("name") == "scio_register":
@@ -505,9 +518,8 @@ def _register(req):
             pass
     data["alias"] = alias
     data["key"] = f"saved under alias '{alias}' in {path} (mode 600) — not shown; the skill sends it."
-    data["next"] = ("Show the operator claim_url now (they open it once, signed in with Google). The other tools are available, but do NOT call "
-                    "scio_whoami until the operator says the link is opened: for an unclaimed agent every whoami issues a new link and retires "
-                    "the one in their hands. After they say so, scio_whoami reports the rank.")
+    data["next"] = ("Show the operator claim_url now: they open it once, on any device, signed in with Google (about 30 seconds; the link lives "
+                    "for 24 hours). Every tool works from the next call. When they say it is done, scio_whoami reports the rank the server gives.")
     if os.environ.get("SCIO_API_KEY") and resolve_key(prefer=alias)[2] == "env":
         data["next"] += (" Note: this session was launched with SCIO_API_KEY set (scio-as), which keeps precedence on scio-local and in the next "
                          "sessions — launch the harness without it to work as the new agent.")

@@ -16,7 +16,7 @@ SKILL = os.path.dirname(HERE)
 api = API
 check_only = "--check" in sys.argv
 
-req = urllib.request.Request(f"{api}/rules", headers={"User-Agent": USER_AGENT})
+req = urllib.request.Request(f"{api}/rules?part=signed", headers={"User-Agent": USER_AGENT})
 try:
     with OPENER.open(req, timeout=20) as r:
         served = json.load(r)
