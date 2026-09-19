@@ -10,7 +10,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # Where the agent's key comes from, in this order — so a harness works right after installation, without a launcher:
 #   1. SCIO_API_KEY in the environment (what `scio-as <alias> …` exports) — the operator's explicit choice;
 #   2. the keys file ($SCIO_KEYS_FILE, default `keys` under ~/.config/scio; written by register-models.py or by the
-#      bridge when the agent calls scio_register): the alias named by SCIO_AGENT, else `# default <alias>`, else the first.
+#      bridge when the agent calls scio_register): the alias named by SCIO_AGENT, else the one chosen for this workspace
+#      (`agent` under the task work root: use_agent on scio-local, or a second registration), else `# default <alias>`,
+#      else the first. The file is read on every call, so a key or a choice made mid-session needs no restart.
 # A harness that could not expand `${SCIO_API_KEY}` hands the literal text to its servers; that is "no key", not a key.
 _PLACEHOLDER = re.compile(r"^\s*(\$\{?[A-Za-z_][A-Za-z0-9_:-]*\}?|\{env:[^}]*\}|<[^>]*>)?\s*$")
 ALIAS_RE = re.compile(r"[A-Za-z0-9_-]+")
@@ -176,9 +178,41 @@ def env_roles():
     return "" if _PLACEHOLDER.match(v) else v.strip()
 
 
+def pinned_agent_path():
+    return os.path.join(work_root(), "agent")
+
+
+def pinned_agent():
+    """The alias chosen for this workspace, or "". It is an alias and nothing else: whatever else the file holds is ignored."""
+    try:
+        with open(pinned_agent_path(), encoding="utf-8", errors="replace") as f:
+            v = f.read(200).strip()
+    except OSError:
+        return ""
+    return v if ALIAS_RE.fullmatch(v) else ""
+
+
+def pin_agent(alias):
+    """Choose one of the keys file's agents for this workspace. The bridge, scio-local, whoami.py and the session brief
+    all resolve the key per call, so they follow at once — what `scio-as <alias>` does for a launch, without the launch."""
+    if not ALIAS_RE.fullmatch(alias or "") or alias not in read_keys()[0]:
+        raise ValueError(f"no agent '{alias}' in the keys file")
+    ensure_work_root()
+    path = pinned_agent_path()
+    if not inside_work_root(os.path.dirname(path)):
+        raise OSError("the task work root resolves elsewhere")
+    if os.path.islink(path):   # a planted symlink must not move the write
+        os.remove(path)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(alias + "\n")
+    return path
+
+
 def resolve_key(prefer=None):
     """(key, alias, source): source is "env", "file", "unknown-agent" (SCIO_AGENT names no alias in the file — no key is
-    used rather than another agent's, which would sign one model's work with another's name) or "" (no key anywhere)."""
+    used rather than another agent's, which would sign one model's work with another's name) or "" (no key anywhere).
+    The workspace's choice comes after SCIO_AGENT (the operator's launch wins) and, unlike it, never blocks the key:
+    a choice that names no known alias is a stale file, not an instruction."""
     k = env_key()
     if k:
         return k, agent_env(), "env"
@@ -190,6 +224,9 @@ def resolve_key(prefer=None):
     agent = agent_env()
     if agent:
         return (keys[agent], agent, "file") if agent in keys else ("", agent, "unknown-agent")
+    pinned = pinned_agent()
+    if pinned in keys:
+        return keys[pinned], pinned, "file"
     if default and default in keys:
         return keys[default], default, "file"
     alias = next(iter(keys))

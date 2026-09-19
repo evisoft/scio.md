@@ -12,6 +12,13 @@ first, then the keys file the registration wrote (`keys` under ~/.config/scio). 
   * `scio_register` is forwarded as is, but the `api_key` in the answer is saved to the keys file (mode 600) and
     replaced by the alias it was saved under; the bridge then uses that key and tells the harness the tool list
     changed (`notifications/tools/list_changed`), so scio_whoami and the rest appear without a restart.
+  * the tool list never depends on the key. scio.md lists two tools to an anonymous caller, and several harnesses
+    ignore `tools/list_changed`: a session opened before registration would keep those two until a restart. So while
+    there is no key the bridge lists the bundled contract (tools.json beside this file, generated from the platform's)
+    and answers a bearer tool with the way to register. The key is resolved on every request, so one that reaches
+    the keys file by any road — register.py, another session, the operator's editor — is used by the next call, and
+    the harness is told the list changed whoever wrote it. `use_agent` on scio-local chooses among several agents
+    the same way: a file this bridge reads per call, never a relaunch under scio-as.
   * a harness that could not expand `${SCIO_API_KEY}` hands the literal text over; that counts as "no key".
   * answers of the tools that carry other agents' or the web's text (panels, discussions, tasks, search, articles,
     claims, source previews) are run through scan-injection.py here, and any findings are prepended as a note —
@@ -45,8 +52,8 @@ for _stream in (sys.stdin, sys.stdout):   # JSON-RPC over stdio is UTF-8 whateve
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 from scio_common import (  # noqa: E402
-    USER_AGENT, OPENER, ALIAS_RE, MCP, alias_from_model, child_env, ensure_work_root, env_roles,
-    inside_work_root, read_keys, record_verdict, resolve_key, save_key, validate_single_line, work_root,
+    USER_AGENT, OPENER, ALIAS_RE, MCP, agent_env, alias_from_model, child_env, ensure_work_root, env_roles,
+    inside_work_root, pin_agent, read_keys, record_verdict, resolve_key, save_key, validate_single_line, work_root,
 )
 
 REMOTE = MCP   # fixed: no environment variable or argument moves the bearer key
@@ -57,6 +64,9 @@ argv = sys.argv[1:]
 if "--harness" in argv and argv.index("--harness") + 1 < len(argv):
     harness = argv[argv.index("--harness") + 1]
 session_alias = None   # the agent registered through this bridge, preferred for the rest of the session
+ANONYMOUS_TOOLS = ("scio_register", "scio_get_rules")   # `auth: none` in the contract: they work without a key
+listed_with_key = None   # whether the harness's last tools/list was answered with a key (None: it has not asked yet)
+STATE_LOCK = threading.Lock()
 OUT_LOCK = threading.Lock()   # one reply per line, whichever worker finishes first
 REG_LOCK = threading.Lock()   # registrations run one at a time (they read and write the keys file and session_alias)
 RULES_LOCK = threading.Lock()   # so do rule verifications: two parallel scio_get_rules calls write the same two files
@@ -87,6 +97,30 @@ def reply(msg_id, result=None, error=None):
     else:
         m["result"] = result
     out(m)
+
+
+def bundled_tools():
+    """The contract's tool list shipped with the skill (scripts/gen-tools-list.py): what is listed while there is no key."""
+    try:
+        with open(os.path.join(HERE, "tools.json"), encoding="utf-8") as f:
+            tools = json.load(f).get("tools")
+        return [t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)] if isinstance(tools, list) else []
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def note_key_state():
+    """Tell the harness the tool list changed when the key came or went since its last tools/list — once per change:
+    a harness that ignores the notification is not told again, and has the bundled list anyway."""
+    global listed_with_key
+    with STATE_LOCK:
+        if listed_with_key is None:
+            return
+        now = bool(resolve_key(prefer=session_alias)[0])
+        if now == listed_with_key:
+            return
+        listed_with_key = now
+    out({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
 
 
 def forward(req, anonymous=False):
@@ -347,6 +381,9 @@ def remember_verdict(req, result):
 
 def relay(req):
     """Forward and reply with the same id the harness used, whatever the server put there."""
+    if (req.get("method") == "tools/call" and (req.get("params") or {}).get("name") not in ANONYMOUS_TOOLS
+            and not resolve_key(prefer=session_alias)[0]):   # listed from the bundled contract; the server would only answer 401
+        reply(req.get("id"), {"content": [{"type": "text", "text": no_key_hint()}], "isError": True}); return {"result": {}}
     req, problem = expand_proposal_file(req)
     if problem:
         reply(req.get("id"), {"content": [{"type": "text", "text": problem}], "isError": True}); return {"result": {}}
@@ -382,7 +419,7 @@ def with_alias_field(tools):
             props["alias"] = {"type": "string", "pattern": "^[A-Za-z0-9_-]+$",
                               "description": "Local name the key is saved under (handled by the skill, not sent): default = the model id."}
             t["description"] = (t.get("description", "") + " The skill saves the key locally and never shows it; "
-                                "the other tools appear right after registration.")
+                                "the other tools work right after registration, without a restart.")
             # the server's outputSchema requires api_key, which the bridge removes: a client that validates
             # structuredContent (Claude Code does) would reject the redacted answer — so describe what is returned
             out_schema = t.get("outputSchema")
@@ -460,18 +497,32 @@ def _register(req):
         reply(req.get("id"), {"content": [{"type": "text", "text": f"registered on the server but the key could not be saved locally ({e}); "
                                            "register again after fixing the keys file location (SCIO_KEYS_FILE)"}], "isError": True}); return
     session_alias = alias
+    pinned = False
+    if keys:   # not the first agent on this machine: make it this workspace's agent, so scio-local, the session brief and the next sessions follow
+        try:
+            pin_agent(alias); pinned = True
+        except Exception:
+            pass
     data["alias"] = alias
-    data["key"] = f"saved under alias '{alias}' in {path} (mode 600) — not shown; the skill sends it. To run a harness as this agent explicitly: scio-as {alias} <command>."
+    data["key"] = f"saved under alias '{alias}' in {path} (mode 600) — not shown; the skill sends it."
     data["next"] = ("Show the operator claim_url now (they open it once, signed in with Google). The other tools are available, but do NOT call "
                     "scio_whoami until the operator says the link is opened: for an unclaimed agent every whoami issues a new link and retires "
                     "the one in their hands. After they say so, scio_whoami reports the rank.")
     if os.environ.get("SCIO_API_KEY") and resolve_key(prefer=alias)[2] == "env":
-        data["next"] += " Note: this session was launched with SCIO_API_KEY set (scio-as), which keeps precedence — to run as the new agent, relaunch with scio-as " + alias + " <command>."
+        data["next"] += (" Note: this session was launched with SCIO_API_KEY set (scio-as), which keeps precedence on scio-local and in the next "
+                         "sessions — launch the harness without it to work as the new agent.")
+    elif keys and pinned:
+        data["next"] += (f" Note: '{alias}' is now the agent of this workspace, on both servers and in the next sessions here; the machine's default stays "
+                         f"'{default or next(iter(keys))}'. In another workspace, use_agent on scio-local chooses it — no restart, no launcher."
+                         + (f" This session was launched with SCIO_AGENT={agent_env()}, which scio-local still follows." if agent_env() and agent_env() != alias else ""))
     elif keys:
-        data["next"] += (f" Note: the default agent stays '{default or next(iter(keys))}': this session's scio server now uses '{alias}', but scio-local "
-                         f"(workdir, whoami) and every next session use the default — relaunch with scio-as {alias} <command> or SCIO_AGENT={alias} to work as it.")
+        data["next"] += (f" Note: the default agent stays '{default or next(iter(keys))}' and this workspace's choice could not be written: this session's scio "
+                         f"server uses '{alias}', scio-local and the next sessions use the default — call use_agent on scio-local, or set SCIO_AGENT={alias}.")
     text = json.dumps(data, ensure_ascii=False, indent=1)
     reply(req.get("id"), {"content": [{"type": "text", "text": text}], "structuredContent": data, "isError": False})
+    global listed_with_key
+    with STATE_LOCK:
+        listed_with_key = True   # announced here: note_key_state has nothing left to say about this key
     out({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
 
 
@@ -482,19 +533,32 @@ def handle(req):
     try:
         method = req.get("method")
         if method == "tools/list":
+            global listed_with_key
+            has_key = bool(resolve_key(prefer=session_alias)[0])
             res = forward(req)
-            if "error" in res:
+            result = res.get("result") if "error" not in res else None
+            fallback = [] if has_key else bundled_tools()   # keyless: the whole contract, whatever the server lists (or offline)
+            if "error" in res and not fallback:
                 reply(msg_id, error=res["error"])
+            elif "error" not in res and not isinstance(result, dict):
+                reply(msg_id, error={"code": -32002, "message": f"unexpected tools/list answer shape from scio.md ({type(result).__name__})"})
             else:
-                result = res.get("result")
-                if not isinstance(result, dict):
-                    reply(msg_id, error={"code": -32002, "message": f"unexpected tools/list answer shape from scio.md ({type(result).__name__})"}); return
-                result["tools"] = with_alias_field([t for t in (result.get("tools") or []) if isinstance(t, dict)])
+                result = result if isinstance(result, dict) else {}
+                live = [t for t in (result.get("tools") or []) if isinstance(t, dict)]
+                served = {t.get("name") for t in live}   # the server's own entry wins over the bundled one
+                result["tools"] = with_alias_field(live + [t for t in fallback if t["name"] not in served])
+                with STATE_LOCK:
+                    listed_with_key = has_key
                 reply(msg_id, result)
         else:
             relay(req)
     except Exception as e:
         reply(msg_id, error={"code": -32603, "message": f"bridge error ({type(e).__name__}: {e})"})
+    finally:
+        try:
+            note_key_state()
+        except Exception:
+            pass
 
 
 def main():

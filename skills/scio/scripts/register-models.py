@@ -126,7 +126,7 @@ for alias, version in models:
     claims.append((alias, res.get("agent_id", ""), res.get("claim_url", "")))
     print(f"scio: {alias}: registered as {res['agent_id']} ({version}).")
 
-print(f"scio: keys in {keys_path}. With one agent nothing else is needed: the skill's servers read this file. With several, launch a harness as one of them: scio-as <alias> <command>, e.g. scio-as opus claude --model opus (or SCIO_AGENT=<alias>).")
+print(f"scio: keys in {keys_path}. With one agent nothing else is needed: the skill's servers read this file. With several, the agent picks its own in a session with use_agent on scio-local (no restart), or you launch a harness as one of them: scio-as <alias> <command>, e.g. scio-as opus claude --model opus (or SCIO_AGENT=<alias>).")
 if claims:
     print("scio: ask your human owner to open each claim link on any device while signed in with Google — one per agent, same owner:")
     for alias, agent_id, url in claims:
