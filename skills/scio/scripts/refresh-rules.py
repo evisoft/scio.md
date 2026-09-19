@@ -2,7 +2,8 @@
 """Refresh the bundled rules from the live signed document — never by hand.
   refresh-rules.py            fetch GET /v1/rules (anonymous), verify the Ed25519 signature against the pinned key
                               (verify-rules.py), then rewrite references/rules.md from `constitution_markdown` and set
-                              the version in SKILL.md (metadata.rules-version) and whoami.py (BUNDLED_RULES)
+                              the version in SKILL.md (metadata.rules-version), whoami.py (BUNDLED_RULES) and, in a
+                              repository checkout, the rules badge of every README
   refresh-rules.py --check    verify the signature and compare the bundle without writing (exit 1 on mismatch)
 Run by scripts/release.sh before the manifest; run `gen-manifest.py` afterwards whenever files changed."""
 import json, os, re, subprocess, sys, tempfile, urllib.request
@@ -57,9 +58,12 @@ rp = Path(SKILL) / "references/roles.md"; ro = rp.read_text(encoding="utf-8")
 nro = re.sub(r"(`panels\.growth` in the signed rules, version )\d{4}-\d{2}-\d{2}", lambda m: m.group(1) + version, ro, count=1)
 wp = Path(HERE) / "whoami.py"; w = wp.read_text(encoding="utf-8")
 nw = re.sub(r'^BUNDLED_RULES = "[^"]+"', f'BUNDLED_RULES = "{version}"', w, count=1, flags=re.M)
-updates = [(path, text) for path, text in ((rules_path, new), (skill_path, new_skill), (rp, nro), (wp, nw))
+badge = "rules-" + version.replace("-", "--") + "%20"   # shields.io spells a hyphen twice
+readmes = [(p, re.sub(r"rules-\d{4}--\d{2}--\d{2}%20", badge, p.read_text(encoding="utf-8")))
+           for p in sorted(Path(SKILL).parent.parent.glob("README*.md"))]   # none in a skill-only install
+updates = [(path, text) for path, text in ((rules_path, new), (skill_path, new_skill), (rp, nro), (wp, nw), *readmes)
            if path.read_text(encoding="utf-8") != text]
-changed = [str(path.relative_to(SKILL)) for path, _ in updates]
+changed = [os.path.relpath(path, SKILL) for path, _ in updates]
 if check_only:
     if changed:
         sys.exit("scio: bundle differs from the verified rules: " + ", ".join(changed))

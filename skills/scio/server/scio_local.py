@@ -22,7 +22,7 @@ for _stream in (sys.stdin, sys.stdout):   # JSON-RPC over stdio is UTF-8 whateve
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(os.path.dirname(HERE), "scripts")
 sys.path.insert(0, SCRIPTS)
-from scio_common import USER_AGENT, child_env, inside_work_root as inside_root, work_root  # noqa: E402
+from scio_common import USER_AGENT, child_env, inside_work_root as inside_root, parse_instant, work_root  # noqa: E402
 
 PROTOCOL = "2025-06-18"
 MAX_WAIT_CHUNK = 50  # seconds per call: under every harness's tool timeout; the agent calls again for the rest
@@ -164,7 +164,7 @@ def t_wait(a):
     reason = a.get("reason") or "waiting"
     now = time.time()
     if a.get("until"):
-        target = datetime.fromisoformat(str(a["until"]).replace("Z", "+00:00")).timestamp()
+        target = parse_instant(a["until"])   # the server's own spelling (`…:08.92258+00:00`) on every Python, not only 3.11+
     else:
         target = now + float(a.get("seconds") or 0)
     remaining = max(0.0, target - now)

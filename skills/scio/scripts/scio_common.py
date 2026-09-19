@@ -1,7 +1,7 @@
 """Shared constants for the skill's scripts. One User-Agent for everything that talks to scio.md or the web:
 Cloudflare's browser integrity check refuses urllib's default UA (403 / error 1010), and a stable name lets the
 platform see the plugin's traffic in its logs. The version comes from SKILL.md's frontmatter so it moves with the skill."""
-import os, re, urllib.error, urllib.request
+import hashlib, json, os, re, time, urllib.error, urllib.request
 from urllib.parse import urlparse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -44,6 +44,98 @@ def inside_work_root(path):
         return os.path.commonpath([root, real]) == root
     except ValueError:   # different drives on Windows
         return False
+
+
+def ensure_work_root():
+    """Create the task root (mode 700) and return it. Under the default root, <workspace>/.scio/work, the `.gitignore`
+    (`*`) beside it is written first-come: whatever the skill keeps there — task folders, the verified rules — can never
+    reach the user's repository. One implementation for everything that writes under the root (workdir.py, the bridge)."""
+    root = work_root()
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    if not env_work_dir() and os.access(os.getcwd(), os.W_OK):
+        try:   # exclusive creation never follows an existing .gitignore symlink
+            with open(os.path.join(os.getcwd(), ".scio", ".gitignore"), "x", encoding="utf-8") as f:
+                f.write("*\n")
+        except FileExistsError:
+            pass
+    return root
+
+
+# ------------------------------------------------------------------------------------- what the platform said about a source
+# `scio_verify_source` is the platform's own verdict on a source and a quote — the same fetch and the same match the gates
+# run on a proposal. The bridge records each verdict here; the pre-flight reads them, so a pair the platform already
+# refused never costs a proposal, and a pair nobody verified is named before the gates find it. Only ids (hashes) and the
+# verdict's enums are kept: the URL and the quote are other people's text and are not stored.
+VERDICT_TTL = 7 * 86400   # a page changes: an older verdict is no verdict
+VERDICT_STATUS = ("live", "archived", "dead", "likely_fabricated", "forbidden_source")
+VERDICT_RELIABILITY = ("reliable", "situational", "generally_unreliable", "deprecated", "blacklisted", "unknown")
+
+
+def _norm(text):
+    return " ".join(str(text or "").split())
+
+
+def source_ids(url, quote):
+    """(url id, pair id) for a source and a quote, however they were spaced."""
+    u = _norm(url).rstrip("/")
+    return (hashlib.sha256(u.encode()).hexdigest()[:32],
+            hashlib.sha256((u + "\n" + _norm(quote)).encode()).hexdigest()[:32])
+
+
+def verdicts_path():
+    return os.path.join(work_root(), "verified-sources.jsonl")
+
+
+def record_verdict(url, quote, verdict):
+    """Append one verdict (enums and numbers only, validated) to the ledger under the task work root."""
+    status, reliability = verdict.get("status"), verdict.get("reliability")
+    found, score = verdict.get("quote_found"), verdict.get("match_score")
+    if status not in VERDICT_STATUS or not isinstance(url, str) or not url.strip():
+        return False
+    url_id, pair_id = source_ids(url, quote)
+    line = {"at": int(time.time()), "url": url_id, "pair": pair_id if _norm(quote) else None, "status": status,
+            "quote_found": found if isinstance(found, bool) else None,
+            "match_score": round(float(score), 3) if isinstance(score, (int, float)) and not isinstance(score, bool) else None,
+            "reliability": reliability if reliability in VERDICT_RELIABILITY else "unknown"}
+    ensure_work_root()
+    path = verdicts_path()
+    if not inside_work_root(path) or os.path.islink(path):
+        return False
+    if os.path.exists(path) and os.path.getsize(path) > 2_000_000:   # thousands of verdicts: keep the recent half
+        with open(path, encoding="utf-8", errors="replace") as f:
+            kept = f.read().splitlines()[-5000:]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(kept) + "\n")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        f.write(json.dumps(line) + "\n")
+    return True
+
+
+def read_verdicts():
+    """({pair id: verdict}, {url id: verdict}) — the latest of each, none older than VERDICT_TTL; empty when there is no ledger."""
+    pairs, urls = {}, {}
+    path = verdicts_path()
+    try:
+        if not inside_work_root(path) or os.path.islink(path):
+            return pairs, urls
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return pairs, urls
+    oldest = time.time() - VERDICT_TTL
+    for raw in lines:
+        try:
+            v = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(v, dict) or not isinstance(v.get("at"), (int, float)) or v["at"] < oldest or v.get("status") not in VERDICT_STATUS:
+            continue
+        if isinstance(v.get("url"), str):
+            urls[v["url"]] = v
+        if isinstance(v.get("pair"), str):
+            pairs[v["pair"]] = v
+    return pairs, urls
 
 
 def read_keys():
@@ -102,6 +194,20 @@ def resolve_key(prefer=None):
         return keys[default], default, "file"
     alias = next(iter(keys))
     return keys[alias], alias, "file"
+
+
+def parse_instant(value):
+    """An ISO-8601 instant as the server writes it → POSIX seconds. datetime.fromisoformat before Python 3.11 accepts a
+    fraction of exactly 3 or 6 digits and no `Z`; the platform trims trailing zeros (`18:00:08.92258+00:00`), so a seat's
+    own `expires_at` was unreadable to `wait` on the Python most systems ship. No offset means UTC."""
+    from datetime import datetime, timezone
+    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})[Tt ](\d{2}:\d{2})(?::(\d{2}))?(?:[.,](\d+))?\s*([Zz]|[+-]\d{2}(?::?\d{2})?)?", str(value).strip())
+    if not m:
+        raise ValueError(f"not an ISO-8601 instant: {str(value)[:40]!r}")
+    day, clock, sec, frac, tz = m.groups()
+    tz = "+00:00" if not tz or tz in "Zz" else tz if len(tz) == 6 else tz[:3] + ":" + (tz[3:] or "00")
+    t = datetime.fromisoformat(f"{day}T{clock}:{sec or '00'}.{((frac or '') + '000000')[:6]}{tz}")
+    return t.astimezone(timezone.utc).timestamp()
 
 
 def validate_single_line(value, field):
