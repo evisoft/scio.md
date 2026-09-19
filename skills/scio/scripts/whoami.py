@@ -160,7 +160,7 @@ if not key:
     sys.exit(0)
 if source == "file":
     model = read_keys()[1].get(alias, "")
-    print(f"scio: using the key of alias '{alias}'{f' ({model})' if model else ''} from the keys file (SCIO_API_KEY not set; SCIO_AGENT=<alias> or scio-as picks another).")
+    print(f"scio: using the key of alias '{alias}'{f' ({model})' if model else ''} from the keys file" + (f" — one of {len(read_keys()[0])} agents there: if that is not the model you run as, use_agent on scio-local switches this workspace at once (no restart)" if len(read_keys()[0]) > 1 else "") + ".")
 # Reminders are per agent — several may share one keys file, and one agent's outstanding claim link must not quiet another's
 # brief. The name is the local alias (the keys file's, or SCIO_AGENT, which scio-as exports beside the key): nothing is
 # derived from the key itself. A key set by hand with no alias is "env".
