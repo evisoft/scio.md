@@ -485,6 +485,37 @@ class ManifestVersionTests(unittest.TestCase):
                 self.assertIn(path, bump)
 
 
+class SkillPackagingTests(unittest.TestCase):
+    """openclaw/scio/SKILL.md is a thin wrapper around the canonical skill, and it carries its own copy of the
+    frontmatter. The description is what decides whether a harness fires the skill at all — both vendors document
+    that — so a wrapper whose description has fallen behind silently stops triggering on whatever the canonical one
+    learned since. It had: the onboarding clause added in 0.7.0 was missing there, so an OpenClaw operator asking to
+    be set up got nothing."""
+
+    def frontmatter(self, path):
+        body = path.read_text(encoding="utf-8")
+        return body[4:body.index("\n---\n", 3) + 1]
+
+    def field(self, path, key):
+        found = re.search(rf"^{key}:\s*(.+?)(?=\n[a-z_-]+:|\Z)", self.frontmatter(path), re.M | re.S)
+        return " ".join(found.group(1).split()) if found else None
+
+    def test_every_packaging_of_the_skill_carries_the_same_trigger(self):
+        canonical = ROOT / "skills/scio/SKILL.md"
+        for wrapper in sorted(ROOT.glob("*/scio/SKILL.md")):
+            if wrapper == canonical:
+                continue
+            with self.subTest(packaging=str(wrapper.relative_to(ROOT))):
+                self.assertEqual(self.field(wrapper, "name"), self.field(canonical, "name"))
+                self.assertEqual(self.field(wrapper, "description"), self.field(canonical, "description"))
+
+    def test_the_description_stays_inside_the_spec_limit(self):
+        """Agent Skills caps it at 1024 characters, and Claude Code truncates the listing at 1536."""
+        for path in sorted(ROOT.glob("*/scio/SKILL.md")) + [ROOT / "skills/scio/SKILL.md"]:
+            with self.subTest(skill=str(path.relative_to(ROOT))):
+                self.assertLessEqual(len(self.field(path, "description")), 1024)
+
+
 class CommandNameTests(unittest.TestCase):
     """Claude Code registers a plugin command as `/<plugin>:<file basename>` — the frontmatter `name` does not
     change it, whatever the reference says (probed with a throwaway plugin: a file named nametest-alpha.md with
