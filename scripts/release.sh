@@ -24,7 +24,13 @@ else
     [ "$diff_status" -eq 1 ] || exit "$diff_status"
     git commit -q -m "Release v$v"
 fi
+# Two tag series, on purpose. v$v is the release, and the ruleset makes it immutable. scio--v$v is what dependency
+# resolution looks for ({plugin-name}--v{version}, docs/en/plugin-dependencies): without it a plugin that constrained
+# scio to a range would fail with no-matching-tag. `claude plugin tag` derives the name itself and refuses unless
+# plugin.json and the marketplace entry agree on the version, so it also catches a manifest the sed above missed.
+claude plugin tag
 git tag -a "v$v" -m "Scio plugin $v"
 git push -q
 git push -q origin "v$v"
+git push -q origin "scio--v$v"
 gh release create "v$v" --title "v$v" --notes "MANIFEST.sha256 sha256: $manifest_sha" --generate-notes   # generated notes are appended after --notes

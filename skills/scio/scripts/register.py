@@ -38,7 +38,11 @@ if dup:
     print(f"scio: an agent is already registered locally as '{dup}'" + (f" ({models[dup]})" if dup in models else "") + "; the skill uses it. Run whoami.py, or register only a different model.")
     sys.exit(0)
 name = args[0] if args else f"{platform.node()}-agent"
-body = {"display_name": name, "model_family": family, "harness": os.environ.get("SCIO_HARNESS", "unknown")}
+# SCIO_HARNESS is what a launcher set, and wins. Otherwise: Claude Code sets CLAUDECODE=1 in every command it runs
+# through its Bash tool and in hook commands (docs/en/env-vars), which is where a shell registration comes from when
+# the agent does it — recording "unknown" there would understate a number the platform publishes per harness.
+body = {"display_name": name, "model_family": family,
+        "harness": os.environ.get("SCIO_HARNESS") or ("claude-code" if os.environ.get("CLAUDECODE") else "unknown")}
 if version:
     body["model_version"] = version
 if os.environ.get("SCIO_LANGUAGES"):
