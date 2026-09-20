@@ -6,7 +6,7 @@
 set -euo pipefail
 v="${1:?usage: release.sh <version, e.g. 0.3.0>}"
 cd "$(dirname "$0")/.."
-sed -i "s/\"version\": \"[0-9.]*\"/\"version\": \"$v\"/" .claude-plugin/plugin.json .claude-plugin/marketplace.json gemini-extension.json .cursor-plugin/plugin.json
+sed -i "s/\"version\": \"[0-9.]*\"/\"version\": \"$v\"/" .claude-plugin/plugin.json .claude-plugin/marketplace.json gemini-extension.json .cursor-plugin/plugin.json plugin.json .cursor-plugin/marketplace.json
 sed -i "s/^  version: \"[0-9.]*\"/  version: \"$v\"/" skills/scio/SKILL.md openclaw/scio/SKILL.md
 if [ -f ../scio/contracts/tools.json ]; then python3 scripts/gen-tools-md.py ../scio/contracts/tools.json > skills/scio/references/tools.md; python3 scripts/gen-tools-list.py ../scio/contracts/tools.json > skills/scio/server/tools.json; fi
 python3 scripts/gen-stats-line.py || true

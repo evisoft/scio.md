@@ -443,6 +443,76 @@ class HardeningTests(unittest.TestCase):
                 self.assertFalse(any(line.startswith("gh release ") for line in seen), seen)
 
 
+class ManifestVersionTests(unittest.TestCase):
+    """Every marketplace reads the version out of a different file, and release.sh bumps them with one sed. A
+    manifest added without being added to that line goes stale silently — a directory would keep showing the
+    version of whenever it was last remembered to."""
+
+    def version_of(self, path, *keys):
+        body = json.loads((ROOT / path).read_text(encoding="utf-8"))
+        for key in keys:
+            body = body[key]
+        return body
+
+    def test_every_manifest_declares_the_same_version(self):
+        declared = {
+            "plugin.json": self.version_of("plugin.json", "version"),
+            ".claude-plugin/plugin.json": self.version_of(".claude-plugin/plugin.json", "version"),
+            ".claude-plugin/marketplace.json": self.version_of(".claude-plugin/marketplace.json", "plugins", 0, "version"),
+            ".cursor-plugin/plugin.json": self.version_of(".cursor-plugin/plugin.json", "version"),
+            ".cursor-plugin/marketplace.json": self.version_of(".cursor-plugin/marketplace.json", "metadata", "version"),
+            "gemini-extension.json": self.version_of("gemini-extension.json", "version"),
+        }
+        self.assertEqual(len(set(declared.values())), 1, declared)
+
+    def test_release_bumps_every_file_that_carries_a_version(self):
+        release = (ROOT / "scripts/release.sh").read_text(encoding="utf-8")
+        bump = next(line for line in release.splitlines() if line.startswith('sed -i "s/\\"version\\"'))
+        for path in (".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", "gemini-extension.json",
+                     ".cursor-plugin/plugin.json", ".cursor-plugin/marketplace.json", "plugin.json"):
+            with self.subTest(manifest=path):
+                self.assertIn(path, bump)
+
+
+class StatsLineTests(unittest.TestCase):
+    """The stats line is generated, never typed (P0 applied to the README). A README the generator does not know
+    about keeps whatever number it was born with while claiming to be live — the one failure mode worth a test."""
+
+    def readmes(self):
+        return sorted(p.name for p in ROOT.glob("README*.md"))
+
+    def test_the_generator_knows_every_readme(self):
+        generator = (ROOT / "scripts/gen-stats-line.py").read_text(encoding="utf-8")
+        for name in self.readmes():
+            with self.subTest(readme=name):
+                self.assertIn(f'"{name}"', generator)
+
+    def test_every_readme_carries_the_markers_and_a_line_between_them(self):
+        for name in self.readmes():
+            with self.subTest(readme=name):
+                body = (ROOT / name).read_text(encoding="utf-8")
+                block = re.search(r"<!-- stats:start -->(.*?)<!-- stats:end -->", body, re.S)
+                self.assertIsNotNone(block, f"{name} has no stats markers")
+                line = block.group(1).strip()
+                if line:   # empty is legitimate only before the first consensus article
+                    self.assertIn("/v1/stats", line)
+                    self.assertRegex(line, r"\d")
+
+    def test_the_line_is_not_hand_written_english_in_a_translation(self):
+        """A translation that simply copied the English sentence would pass every structural check."""
+        english = re.search(r"<!-- stats:start -->(.*?)<!-- stats:end -->",
+                            (ROOT / "README.md").read_text(encoding="utf-8"), re.S).group(1).strip()
+        if not english:
+            self.skipTest("no consensus article yet")
+        for name in self.readmes():
+            if name == "README.md":
+                continue
+            with self.subTest(readme=name):
+                line = re.search(r"<!-- stats:start -->(.*?)<!-- stats:end -->",
+                                 (ROOT / name).read_text(encoding="utf-8"), re.S).group(1).strip()
+                self.assertNotEqual(line, english)
+
+
 class ToolAnnotationTests(unittest.TestCase):
     """MCP reads a missing hint the cautious way (openWorldHint true; destructiveHint true wherever readOnlyHint is
     false), so an incomplete annotation tells every client the tool is more dangerous than it is — and a harness
