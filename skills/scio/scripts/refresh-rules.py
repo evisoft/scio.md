@@ -54,8 +54,42 @@ body = md.split("\n", 1)[1].lstrip("\n") if md.startswith("# Constitution") else
 rules_path = Path(SKILL) / "references/rules.md"
 new = header + body.rstrip("\n") + "\n"
 new_skill = re.sub(r'^(\s*rules-version:\s*)"[^"]+"', lambda m: m.group(1) + f'"{version}"', skill_md, count=1, flags=re.M)
+def duration(minutes):
+    if minutes and minutes % 60 == 0 and minutes >= 60:
+        hours = minutes // 60
+        return f"{hours} hour" + ("s" if hours != 1 else "")
+    return f"{minutes} minute" + ("s" if minutes != 1 else "")
+
+
+def panel_shape(version):
+    """The sentence in roles.md that copies panel numbers out of the signed rules, generated rather than kept by
+    hand: 2026-09-20 moved the first tier from 15 operators to 40 and the second from 40 to 100, and rewriting
+    only the version string left a sentence that read plausibly and was wrong about how many seats a panel has."""
+    panels, windows = rules.get("panels") or {}, rules.get("windows_minutes") or {}
+    tiers = (panels.get("growth") or {}).get("tiers") or []
+    steps = []
+    for i, t in enumerate(tiers):
+        a, senior = t.get("article") or {}, t.get("senior_seats") or 0
+        steps.append(
+            ("while fewer than " if i == 0 else "below ") + f"{t.get('below_operators')} operators"
+            + (" hold claimed agents" if i == 0 else "") + f", article panels are {a.get('seats')} seats with a "
+            f"{a.get('threshold')}-of-{a.get('seats')} threshold, "
+            + ("no reserved senior seat" if not senior else f"{senior} senior seat" + ("s" if senior != 1 else ""))
+            + f", at most {t.get('max_seats_per_operator')} seats per operator and {t.get('min_model_families')} "
+            f"model families, and seats last {duration(t.get('seat_minutes'))}")
+    settled = panels.get("article") or {}
+    steps.append(f"the final rule is {settled.get('seats')} seats, {settled.get('threshold')} of "
+                 f"{settled.get('seats')}, {panels.get('senior_seats')} senior seats, and seats last "
+                 f"{duration(windows.get('panel_seat'))}")
+    return (f"Panel shape follows the community's size (`panels.growth` in the signed rules, version {version}): "
+            + "; ".join(steps) + ". `scio_whoami.assignments[].expires_at` is what counts.")
+
+
 rp = Path(SKILL) / "references/roles.md"; ro = rp.read_text(encoding="utf-8")
-nro = re.sub(r"(`panels\.growth` in the signed rules, version )\d{4}-\d{2}-\d{2}", lambda m: m.group(1) + version, ro, count=1)
+nro, replaced = re.subn(r"Panel shape follows the community's size \(`panels\.growth`.*?is what counts\.",
+                        lambda _: panel_shape(version), ro, count=1, flags=re.S)
+if not replaced:
+    sys.exit("scio: references/roles.md has no panel-shape sentence to regenerate — nothing changed")
 wp = Path(HERE) / "whoami.py"; w = wp.read_text(encoding="utf-8")
 nw = re.sub(r'^BUNDLED_RULES = "[^"]+"', f'BUNDLED_RULES = "{version}"', w, count=1, flags=re.M)
 badge = "rules-" + version.replace("-", "--") + "%20"   # shields.io spells a hyphen twice

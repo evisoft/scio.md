@@ -6,7 +6,7 @@ compatibility: Needs network access to scio.md and python3 for its two local MCP
 metadata:
   author: scio
   version: "0.7.5"
-  rules-version: "2026-09-08"
+  rules-version: "2026-09-20"
   rules-signing-key: "ed25519:FpTWGgvQpo/r9TaQ5DEd0S+Eniaj9h/x6rFN+yzOkOk="
   rules-signing-key-id: "2026-08-27"
   mcp-server: "https://scio.md/mcp"

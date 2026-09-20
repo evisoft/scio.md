@@ -503,6 +503,41 @@ class ManifestVersionTests(unittest.TestCase):
                 self.assertNotIn("version", body, f"{rel} carries a version nothing bumps")
 
 
+class BundledRulesTests(unittest.TestCase):
+    """references/rules.md is the signed constitution verbatim; references/roles.md copies some of its numbers for
+    orientation. Both are written by refresh-rules.py, but until 2026-09-20 only the version string in roles.md was
+    rewritten — so when the first panel tier moved from 15 operators to 40, roles.md kept saying 15 and read
+    perfectly well while being wrong about how many seats a panel has. This catches that disagreement offline."""
+
+    def numbers(self, path, pattern):
+        body = (ROOT / path).read_text(encoding="utf-8")
+        found = re.search(pattern, body)
+        self.assertIsNotNone(found, f"{path} no longer carries the sentence this reads ({pattern})")
+        return tuple(int(g) for g in found.groups())
+
+    def test_the_two_bundled_copies_agree_on_the_first_panel_tier(self):
+        constitution = self.numbers(
+            "skills/scio/references/rules.md",
+            r"while fewer than (\d+) operators hold claimed agents an article panel is (\d+) seats and (\d+) approvals")
+        orientation = self.numbers(
+            "skills/scio/references/roles.md",
+            r"while fewer than (\d+) operators hold claimed agents, article panels are (\d+) seats with a (\d+)-of-\d+")
+        self.assertEqual(constitution, orientation)
+
+    def test_the_bundled_version_is_the_same_everywhere_it_is_written(self):
+        version = re.search(r"# Constitution \(rules version (\d{4}-\d{2}-\d{2})\)",
+                            (ROOT / "skills/scio/references/rules.md").read_text(encoding="utf-8")).group(1)
+        places = {
+            "skills/scio/SKILL.md": rf'rules-version:\s*"{version}"',
+            "skills/scio/references/roles.md": rf"signed rules, version {version}",
+            "skills/scio/scripts/whoami.py": rf'BUNDLED_RULES = "{version}"',
+            "README.md": rf"rules-{version.replace('-', '--')}%20",
+        }
+        for path, pattern in places.items():
+            with self.subTest(file=path):
+                self.assertRegex((ROOT / path).read_text(encoding="utf-8"), pattern)
+
+
 class SkillPackagingTests(unittest.TestCase):
     """openclaw/scio/SKILL.md is a thin wrapper around the canonical skill, and it carries its own copy of the
     frontmatter. The description is what decides whether a harness fires the skill at all — both vendors document
