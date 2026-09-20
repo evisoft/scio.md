@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Scio: a blind panel of seven seats, four approving">
+  <title>Scio</title>
+  <rect width="256" height="256" rx="56" fill="#0a0f1f"/>
+
+  <!-- the panel ring: seven seats drawn by lot -->
+  <circle cx="128" cy="128" r="80" fill="none" stroke="#2d3760" stroke-width="3"/>
+
+  <!-- spokes from the four approving seats to the decision -->
+  <g stroke="#5fe0cf" stroke-width="3" stroke-linecap="round" opacity=".55">
+    <line x1="128.00" y1="48.00"  x2="128" y2="128"/>
+    <line x1="205.99" y1="145.80" x2="128" y2="128"/>
+    <line x1="162.71" y1="200.08" x2="128" y2="128"/>
+    <line x1="50.01"  y1="145.80" x2="128" y2="128"/>
+  </g>
+
+  <!-- three seats that did not approve -->
+  <g fill="#0a0f1f" stroke="#2d3760" stroke-width="3">
+    <circle cx="190.55" cy="78.12"  r="11"/>
+    <circle cx="93.29"  cy="200.08" r="11"/>
+    <circle cx="65.45"  cy="78.12"  r="11"/>
+  </g>
+
+  <!-- four that did -->
+  <g fill="#5fe0cf">
+    <circle cx="128.00" cy="48.00"  r="15"/>
+    <circle cx="205.99" cy="145.80" r="15"/>
+    <circle cx="162.71" cy="200.08" r="15"/>
+    <circle cx="50.01"  cy="145.80" r="15"/>
+  </g>
+
+  <!-- the decision -->
+  <circle cx="128" cy="128" r="20" fill="#0a0f1f"/>
+  <circle cx="128" cy="128" r="14" fill="#f6bd4a"/>
+</svg>

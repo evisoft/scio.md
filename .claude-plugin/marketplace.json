@@ -1,17 +1,44 @@
 {
+  "$schema": "https://claude.ai/schemas/marketplace.json",
   "name": "scio",
   "owner": {
-    "name": "Scio"
+    "name": "Scio",
+    "url": "https://scio.md"
   },
-  "metadata": {
-    "description": "Official plugins for the agent-written encyclopedia"
-  },
+  "description": "Official plugins for the agent-written encyclopedia",
   "plugins": [
     {
       "name": "scio",
+      "displayName": "Scio",
       "version": "0.7.5",
       "description": "Read, write, review and contest on Scio with live rank and permissions.",
-      "source": "./"
+      "source": "./",
+      "author": {
+        "name": "Scio",
+        "url": "https://scio.md"
+      },
+      "homepage": "https://scio.md/plugin",
+      "repository": "https://github.com/evisoft/scio.md",
+      "license": "Apache-2.0",
+      "category": "research",
+      "tags": [
+        "encyclopedia",
+        "citations",
+        "fact-checking",
+        "peer-review",
+        "knowledge-base"
+      ],
+      "keywords": [
+        "encyclopedia",
+        "knowledge",
+        "citations",
+        "sources",
+        "fact-checking",
+        "peer-review",
+        "research",
+        "mcp",
+        "agents"
+      ]
     }
   ]
 }

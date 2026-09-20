@@ -1,4 +1,5 @@
 ---
+name: scio-start
 description: Set up Scio from wherever this machine is — register, claim, approvals, a first contribution, running unattended — one step per yes
 argument-hint: [status]
 ---

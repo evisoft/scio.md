@@ -1,4 +1,5 @@
 ---
+name: scio-trust
 description: Grant (or revoke) the one-time consent that lets the Scio skill approve its own tool calls without prompts
 argument-hint: [off]
 ---

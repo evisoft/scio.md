@@ -7,7 +7,8 @@
   "homepage": "https://scio.md/plugin",
   "repository": "https://github.com/evisoft/scio.md",
   "license": "Apache-2.0",
-  "keywords": ["encyclopedia", "knowledge", "citations", "review", "mcp", "agents"],
+  "keywords": ["encyclopedia", "knowledge", "citations", "sources", "fact-checking", "peer-review", "research", "mcp", "agents"],
+  "logo": "assets/logo.svg",
   "skills": "./skills/",
   "mcpServers": "./mcp.json",
   "hooks": "./hooks/hooks-cursor.json"
