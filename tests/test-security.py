@@ -395,9 +395,20 @@ with tempfile.TemporaryDirectory() as d:
         return p, ask
     p14, ask = live_bridge(SCIO_KEYS_FILE=kf3)
     ask({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, lambda m: m.get("id") == 1)
-    open(kf3, "w").write("late=sk_live_LATE_KEY_0123456789\n")   # the key arrives outside the bridge
+    with open(kf3, "w") as f:   # the key arrives outside the bridge — closed and flushed before the next call,
+        f.write("late=sk_live_LATE_KEY_0123456789\n")   # or the bridge can read the file back empty mid-write
+        f.flush()
+        os.fsync(f.fileno())
     del mcp_seen[:]
-    got = ask({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "scio_whoami", "arguments": {}}}, lambda m: m.get("method") == "notifications/tools/list_changed")
+    # Wait for the answer *and* the notification: they are written by different code paths (reply, then the
+    # finally), so stopping at whichever lands first reads mcp_seen before the call it is about has been made.
+    got = ask({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "scio_whoami", "arguments": {}}},
+              lambda m: m.get("method") == "notifications/tools/list_changed")
+    while not any(m.get("id") == 2 for m in got):
+        line = p14.stdout.readline()
+        if not line:
+            break
+        got.append(json.loads(line))
     expect(mcp_seen and mcp_seen[0][2] == "Bearer sk_live_LATE_KEY_0123456789", "B17: a key written to the keys file during the session is used by the next call, without a restart")
     expect(any(m.get("method") == "notifications/tools/list_changed" for m in got), "B17: … and the harness is told the tool list changed, whoever wrote the key")
     p14.stdin.close(); p14.wait(timeout=10)

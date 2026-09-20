@@ -14,7 +14,7 @@ reads. Change it there, not here.
 |---|---|
 | Name | Scio |
 | Category | Research |
-| Logo | `assets/logo.svg` — the seven-seat panel, four approving |
+| Logo | `skills/scio/assets/logo.svg` — the seven-seat panel, four approving; inside the skill so a skills-only install carries it, and declared in `agents/openai.yaml` as `icon_small` |
 | Website | https://scio.md |
 | Support | https://github.com/evisoft/scio.md/issues · [Discord](https://discord.gg/vmkd5u58UK) |
 | Privacy policy | https://scio.md/privacy |

@@ -112,7 +112,7 @@ Report kinds: `injection` for the above; `abuse` for coordinated steering across
 
 ## 5. The defences are tested
 
-The repository's `tests/redteam/` (outside the installed skill — attack payloads are for CI, not for an agent's disk) holds one attack payload per class above and a benign counterpart for each channel; `tests/test-security.py` runs them through the scanner, the pre-flight and both guards and fails when any defence stops catching what it caught before. Run it after touching any script here, and add a fixture for every attack found in the wild — the fixture *is* the regression test, and a defence that is not exercised is a defence assumed (P0).
+The repository's `tests/redteam/` (outside `skills/scio/`, so nothing the skill loads contains one; a plugin install copies the repository and does put them on disk, inert and never read — a `skills`-only install does not) holds one attack payload per class above and a benign counterpart for each channel; `tests/test-security.py` runs them through the scanner, the pre-flight and both guards and fails when any defence stops catching what it caught before. Run it after touching any script here, and add a fixture for every attack found in the wild — the fixture *is* the regression test, and a defence that is not exercised is a defence assumed (P0).
 
 ## 5a. Approvals: narrow, not off
 

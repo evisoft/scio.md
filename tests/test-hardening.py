@@ -715,20 +715,32 @@ class ToolAnnotationTests(unittest.TestCase):
         self.assertFalse(hints["destructiveHint"])      # even where the bundle disagrees
         self.assertIn("openWorldHint", hints)           # and the silence is still filled
 
-    def test_the_cursor_plugin_never_ships_a_path_from_someone_elses_machine(self):
+    def test_the_cursor_mcp_file_spells_the_plugin_root_the_way_cursor_expands_it(self):
         """A plugin installed from the Cursor marketplace does not land where a hand-clone was told to go, and
-        python3 does not expand `~` the way a shell would. Both files the plugin manifest points at must spell the
-        plugin root the one way Cursor expands — its docs say ${PLUGIN_ROOT} deliberately is not expanded."""
+        python3 does not expand `~` the way a shell would. In mcp.json Cursor expands ${CURSOR_PLUGIN_ROOT}, and
+        its docs say the standard's ${PLUGIN_ROOT} deliberately is not — so that file gets no machine path at all."""
         manifest = json.loads((ROOT / ".cursor-plugin/plugin.json").read_text(encoding="utf-8"))
-        for field in ("mcpServers", "hooks"):
-            path = ROOT / manifest[field].lstrip("./")
-            with self.subTest(file=manifest[field]):
-                self.assertTrue(path.exists())
-                body = path.read_text(encoding="utf-8")
-                commands = " ".join(re.findall(r'"(?:command|args)":\s*(\[[^\]]*\]|"[^"]*")', body))
-                for machine in ("~/", "$HOME", "plugins/local", "/home/", "/Users/"):
-                    self.assertNotIn(machine, commands, f"{manifest[field]} carries {machine}")
-                self.assertIn("${CURSOR_PLUGIN_ROOT}", commands)
+        body = (ROOT / manifest["mcpServers"].lstrip("./")).read_text(encoding="utf-8")
+        commands = " ".join(re.findall(r'"(?:command|args)":\s*(\[[^\]]*\]|"[^"]*")', body))
+        for machine in ("~/", "$HOME", "plugins/local", "/home/", "/Users/"):
+            self.assertNotIn(machine, commands, f"mcp.json carries {machine}")
+        self.assertIn("${CURSOR_PLUGIN_ROOT}", commands)
+
+    def test_the_cursor_hooks_survive_a_plugin_root_cursor_never_sets(self):
+        """Hooks are the other story: CURSOR_PLUGIN_ROOT is not among the environment variables Cursor documents
+        for hook processes, and the expansion its docs promise is for mcp.json. These commands run through a shell
+        and fail closed — a path that resolves to nothing denies every MCP call and every shell command — so the
+        variable is used with the documented hand-clone location behind `:-`, and neither spelling alone."""
+        manifest = json.loads((ROOT / ".cursor-plugin/plugin.json").read_text(encoding="utf-8"))
+        body = (ROOT / manifest["hooks"].lstrip("./")).read_text(encoding="utf-8")
+        commands = re.findall(r'"command":\s*"((?:[^"\\]|\\.)*)"', body)
+        self.assertTrue(commands)
+        for command in commands:
+            with self.subTest(command=command[:60]):
+                self.assertIn("${CURSOR_PLUGIN_ROOT:-", command)   # marketplace install first
+                self.assertIn(".cursor/plugins/local/scio}", command)   # the documented clone, when it is unset
+                self.assertNotIn("/home/", command)
+                self.assertNotIn("/Users/", command)
 
     def test_the_local_server_annotates_every_tool_it_lists(self):
         local = load_module("annotation_local", ROOT / "skills/scio/server/scio_local.py")

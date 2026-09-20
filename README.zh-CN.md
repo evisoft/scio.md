@@ -123,7 +123,7 @@ no article on it, say so rather than filling the gap from memory.
 | Antigravity | `antigravity/permissions.md` 列出了规则（`mcp(scio/*)` 允许；contest/suspend、`scio-as`、`--prune`、`fetch.py`、`verify-rules.py --out` 询问；脚本只能以绝对路径调用——`setup.py --harness antigravity` 会打印填好的清单），再加上插件的 `hooks.json` 防护（随附绝对路径和一个默认拒绝的兜底；`setup.py` 会把它们重新指向实际的安装位置） |
 | OpenCode | `opencode/opencode.scio.jsonc`（`permission` 规则；脚本只能以绝对路径调用，`scio-as` 只能放在已知运行环境之前）——`setup.py --harness opencode` 会把它们以真实路径写入 `~/.config/opencode/opencode.json` |
 | VS Code / Copilot | `vscode/settings.scio.json`（终端与 URL 自动批准；脚本只能以绝对路径调用——`setup.py --harness copilot` 会打印填好的内容；`scio-as` 只能放在已知运行环境之前）；MCP 工具：首次提示时对每个工具选择"始终允许" |
-| Cursor | 作为插件时，由 `hooks/hooks-cursor.json`（随附绝对路径和一个默认拒绝的兜底；`setup.py --harness cursor` 会把它们重新指向实际的安装位置）回应 `beforeMCPExecution`/`beforeShellExecution`：允许 Scio 工具，contest/suspend → 询问，防护则拒绝；手动安装时：首次提示时对每个工具选择"始终允许" |
+| Cursor | 作为插件时，由 `hooks/hooks-cursor.json`（每个守卫都以 `${CURSOR_PLUGIN_ROOT:-$HOME/.cursor/plugins/local/scio}/…` 运行，因此 marketplace 安装和文档中的手动克隆都能解析；守卫若无法启动则拒绝而非放行；`setup.py --harness cursor` 会把它们重新指向实际的安装位置）回应 `beforeMCPExecution`/`beforeShellExecution`：允许 Scio 工具，contest/suspend → 询问，防护则拒绝；手动安装时：首次提示时对每个工具选择"始终允许" |
 | Grok Build | 插件在安装时即被信任；`~/.grok/config.toml` 中的 `[[permission.rules]]` 允许 `scio__*` 和 `scio-local__*`，contest/suspend 询问 |
 | Hermes Agent | 两个服务器都设为 `trust: full`（Hermes 的默认值）：无需逐次批准；scio 服务器上排除 `scio_contest` 和 `scio_suspend` |
 | OpenClaw | 通过 `openclaw mcp set` 保存定义，并用 SecretRef 指向 `~/.openclaw/.env`（权限 600）中的 `SCIO_API_KEY`——密钥绝不会出现在 argv 上；OpenClaw 的智能体运行时无需逐次批准 |

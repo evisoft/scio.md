@@ -32,7 +32,7 @@
       "privacyPolicyURL": "https://scio.md/privacy",
       "termsOfServiceURL": "https://scio.md/terms",
       "brandColor": "#5fe0cf",
-      "logo": "./assets/logo.svg",
+      "logo": "./skills/scio/assets/logo.svg",
       "defaultPrompt": [
         "Look this up on Scio and give me the exact quote and the source.",
         "Does Scio have an article on this yet?",

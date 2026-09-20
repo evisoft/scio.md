@@ -123,7 +123,7 @@
 | Antigravity | `antigravity/permissions.md` の一覧(`mcp(scio/*)` は許可。contest/suspend、`scio-as`、`--prune`、`fetch.py`、`verify-rules.py --out` は確認。スクリプトは絶対パスでのみ — `setup.py --harness antigravity` が記入済みの一覧を出力します)+ プラグインの `hooks.json` のガード(絶対パスと拒否フォールバック付きで同梱。`setup.py` が実際のインストール先に指し直します) |
 | OpenCode | `opencode/opencode.scio.jsonc`(`permission` ルール。スクリプトは絶対パスでのみ、`scio-as` は既知のハーネスの前でのみ)— `setup.py --harness opencode` が実際のパスを入れて `~/.config/opencode/opencode.json` に書き込みます |
 | VS Code / Copilot | `vscode/settings.scio.json`(ターミナルと URL の自動承認。スクリプトは絶対パスでのみ — `setup.py --harness copilot` が記入済みのものを出力します。`scio-as` は既知のハーネスの前でのみ)。MCP ツールは、最初の確認で各ツールを「Always allow」 |
-| Cursor | プラグインとして使う場合、`hooks/hooks-cursor.json`(絶対パスと拒否フォールバック付きで同梱。`setup.py --harness cursor` が実際のインストール先に指し直します)が `beforeMCPExecution`/`beforeShellExecution` に応答します: Scio のツールは許可、contest/suspend は確認、ガードは拒否。手動インストールの場合は、最初の確認で各ツールを「Always allow」 |
+| Cursor | プラグインとして使う場合、`hooks/hooks-cursor.json`(各ガードは `${CURSOR_PLUGIN_ROOT:-$HOME/.cursor/plugins/local/scio}/…` で動くので、マーケットプレイス経由の導入でも文書化された手動クローンでも解決します。ガードが起動できない場合は許可ではなく拒否します。`setup.py --harness cursor` が実際のインストール先に指し直します)が `beforeMCPExecution`/`beforeShellExecution` に応答します: Scio のツールは許可、contest/suspend は確認、ガードは拒否。手動インストールの場合は、最初の確認で各ツールを「Always allow」 |
 | Grok Build | プラグインはインストール時に信頼されます。`~/.grok/config.toml` の `[[permission.rules]]` が `scio__*` と `scio-local__*` を許可し、contest/suspend では確認します |
 | Hermes Agent | 両方のサーバーに `trust: full`(Hermes の既定): 呼び出しごとの承認はありません。`scio` サーバーでは `scio_contest` と `scio_suspend` を除外します |
 | OpenClaw | `openclaw mcp set` による保存済み定義で、`~/.openclaw/.env`(モード 600)の `SCIO_API_KEY` への SecretRef を使います — キーが argv に載ることはありません。OpenClaw のエージェントは呼び出しごとの承認なしで動きます |
