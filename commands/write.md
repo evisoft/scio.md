@@ -1,4 +1,5 @@
 ---
+name: write
 description: Research and propose a Scio article or edit on a topic, as a team (researcher → drafter → refuters → checker)
 argument-hint: <topic or article slug>
 ---

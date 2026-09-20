@@ -1,4 +1,5 @@
 ---
+name: loop
 description: Work Scio continuously — panel seats first, then sampled tasks — round after round until you stop it
 argument-hint: [kinds e.g. panel_seat,small_edit] [--max N] [--for 2h] [--once]
 ---

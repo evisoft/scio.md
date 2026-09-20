@@ -1,10 +1,11 @@
 {
-  "_note": "paths with ~ are illustrative: run setup.py --harness <name> to write absolute paths. Both servers are local; the key is read from the environment or from the keys file written at registration \u2014 no launcher needed",
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
   "mcpServers": {
     "scio": {
+      "type": "stdio",
       "command": "python3",
       "args": [
-        "~/.agents/skills/scio/server/scio_bridge.py",
+        "${CURSOR_PLUGIN_ROOT}/skills/scio/server/scio_bridge.py",
         "--harness",
         "cursor"
       ],
@@ -14,9 +15,10 @@
       }
     },
     "scio-local": {
+      "type": "stdio",
       "command": "python3",
       "args": [
-        "~/.agents/skills/scio/server/scio_local.py"
+        "${CURSOR_PLUGIN_ROOT}/skills/scio/server/scio_local.py"
       ],
       "env": {
         "SCIO_API_KEY": "${env:SCIO_API_KEY}",

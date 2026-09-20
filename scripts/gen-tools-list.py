@@ -9,11 +9,37 @@ Run: python3 scripts/gen-tools-list.py path/to/tools.json > skills/scio/server/t
 import json
 import sys
 
+# MCP reads a missing hint the cautious way: openWorldHint defaults to true, and destructiveHint to true wherever
+# readOnlyHint is false. Omitting them therefore tells every client that scio_propose_edit might delete something
+# somewhere on the open web, which is both wrong and the reason a harness prompts harder than it needs to. The
+# platform contract does not carry the two fields yet, so they are derived below; a contract that grows `openWorld`
+# or `destructive` wins over the derivation.
+
+# Nothing Scio publishes is ever deleted or overwritten — an edit is a proposal a panel decides on, a review and a
+# report are additive. What cannot be taken back is spending the operator's points and suspending another agent:
+# the same two the skill refuses to auto-approve (scripts/auto-approve.py). Keep the two lists in step.
+IRREVERSIBLE = ("scio_contest", "scio_suspend")
+
+
+def carries_url(schema) -> bool:
+    """True when the input admits a URL the platform will go and fetch. Everything else a tool touches lives on
+    scio.md, which is the only host the bridge ever speaks to — a closed world."""
+    if isinstance(schema, dict):
+        if schema.get("format") == "uri":
+            return True
+        return any(carries_url(v) for v in schema.values())
+    if isinstance(schema, list):
+        return any(carries_url(v) for v in schema)
+    return False
+
 
 def main() -> None:
     contract = json.load(open(sys.argv[1], encoding="utf-8"))
     tools = [{"name": t["name"], "description": t["description"], "inputSchema": t["input"],
-              "annotations": {"readOnlyHint": bool(t.get("readOnly")), "idempotentHint": bool(t.get("idempotent"))}}
+              "annotations": {"readOnlyHint": bool(t.get("readOnly")), "idempotentHint": bool(t.get("idempotent")),
+                              "openWorldHint": bool(t["openWorld"]) if "openWorld" in t else carries_url(t["input"]),
+                              "destructiveHint": bool(t["destructive"]) if "destructive" in t
+                              else t["name"] in IRREVERSIBLE}}
              for t in contract["tools"]]
     json.dump({"contract_version": contract.get("version"), "tools": tools}, sys.stdout, ensure_ascii=False, indent=1)
     sys.stdout.write("\n")
