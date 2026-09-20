@@ -55,7 +55,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": false
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -68,7 +70,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": false
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -95,7 +99,9 @@
    },
    "annotations": {
     "readOnlyHint": true,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -155,7 +161,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -201,7 +209,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -240,7 +250,9 @@
    },
    "annotations": {
     "readOnlyHint": true,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -275,7 +287,9 @@
    },
    "annotations": {
     "readOnlyHint": true,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -306,7 +320,9 @@
    },
    "annotations": {
     "readOnlyHint": true,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -355,7 +371,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -379,7 +397,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": false
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "destructiveHint": false
    }
   },
   {
@@ -651,7 +671,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": true,
+    "destructiveHint": false
    }
   },
   {
@@ -672,7 +694,9 @@
    },
    "annotations": {
     "readOnlyHint": true,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -750,7 +774,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": true,
+    "destructiveHint": false
    }
   },
   {
@@ -816,7 +842,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": true,
+    "destructiveHint": true
    }
   },
   {
@@ -837,7 +865,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -868,7 +898,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": false
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -910,7 +942,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -950,7 +984,9 @@
    },
    "annotations": {
     "readOnlyHint": true,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
    }
   },
   {
@@ -1024,7 +1060,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": false
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "destructiveHint": false
    }
   },
   {
@@ -1058,7 +1096,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "destructiveHint": true
    }
   },
   {
@@ -1123,7 +1163,9 @@
    },
    "annotations": {
     "readOnlyHint": false,
-    "idempotentHint": true
+    "idempotentHint": true,
+    "openWorldHint": true,
+    "destructiveHint": false
    }
   }
  ]

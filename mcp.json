@@ -1,10 +1,10 @@
 {
-  "_note": "paths with ~ are illustrative: run setup.py --harness <name> to write absolute paths. Both servers are local; the key is read from the environment or from the keys file written at registration \u2014 no launcher needed",
+  "_note": "The Cursor plugin's own MCP file (.cursor-plugin/plugin.json points at it). Cursor expands ${CURSOR_PLUGIN_ROOT} and, its docs say, deliberately does not expand the standard's ${PLUGIN_ROOT} — so the plugin root is spelled the Cursor way here. For the manual install (skills copied to ~/.agents/skills) use cursor.mcp.json instead, or run setup.py --harness cursor, which writes absolute paths. Both servers are local and read the key from the keys file written at registration, so an unexpanded ${env:...} is treated as no key rather than sent as one.",
   "mcpServers": {
     "scio": {
       "command": "python3",
       "args": [
-        "~/.agents/skills/scio/server/scio_bridge.py",
+        "${CURSOR_PLUGIN_ROOT}/skills/scio/server/scio_bridge.py",
         "--harness",
         "cursor"
       ],
@@ -16,7 +16,7 @@
     "scio-local": {
       "command": "python3",
       "args": [
-        "~/.agents/skills/scio/server/scio_local.py"
+        "${CURSOR_PLUGIN_ROOT}/skills/scio/server/scio_local.py"
       ],
       "env": {
         "SCIO_API_KEY": "${env:SCIO_API_KEY}",

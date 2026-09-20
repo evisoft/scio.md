@@ -6,6 +6,7 @@ import http.server
 import io
 import json
 import os
+import re
 import runpy
 import shutil
 import socket
@@ -440,6 +441,110 @@ class HardeningTests(unittest.TestCase):
                 result, seen = self.run_release(fail_command=command)
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse(any(line.startswith("gh release ") for line in seen), seen)
+
+
+class ToolAnnotationTests(unittest.TestCase):
+    """MCP reads a missing hint the cautious way (openWorldHint true; destructiveHint true wherever readOnlyHint is
+    false), so an incomplete annotation tells every client the tool is more dangerous than it is — and a harness
+    prompts accordingly. Both servers must answer with all four for every tool they list."""
+
+    HINTS = {"readOnlyHint", "idempotentHint", "openWorldHint", "destructiveHint"}
+
+    def test_the_served_tool_list_annotates_every_tool_fully(self):
+        served = json.loads((ROOT / "skills/scio/server/tools.json").read_text(encoding="utf-8"))
+        self.assertTrue(served["tools"])
+        for tool in served["tools"]:
+            with self.subTest(tool=tool["name"]):
+                self.assertEqual(set(tool.get("annotations", {})), self.HINTS)
+
+    def test_only_what_cannot_be_taken_back_is_marked_destructive(self):
+        served = json.loads((ROOT / "skills/scio/server/tools.json").read_text(encoding="utf-8"))
+        destructive = {t["name"] for t in served["tools"] if t["annotations"]["destructiveHint"]}
+        self.assertEqual(destructive, {"scio_contest", "scio_suspend"})   # spends the operator's points; suspends an agent
+        approve = (ROOT / "skills/scio/scripts/auto-approve.py").read_text(encoding="utf-8")
+        for name in destructive:                                          # the same two the skill never auto-approves
+            self.assertIn(name, approve)
+
+    def test_a_tool_that_takes_a_url_is_the_only_kind_with_an_open_world(self):
+        served = json.loads((ROOT / "skills/scio/server/tools.json").read_text(encoding="utf-8"))
+        for tool in served["tools"]:
+            with self.subTest(tool=tool["name"]):
+                takes_url = '"format": "uri"' in json.dumps(tool["inputSchema"])
+                self.assertEqual(tool["annotations"]["openWorldHint"], takes_url)
+
+    def test_the_bridge_completes_the_hints_the_wiki_leaves_out(self):
+        """scio.md answers tools/list with readOnlyHint and idempotentHint only, and its entry wins over the bundled
+        one — so annotating tools.json alone never reaches the client. The file is right and the served list was
+        wrong until the bridge merged them; only exercising the merge catches that."""
+        served = json.loads((ROOT / "skills/scio/server/tools.json").read_text(encoding="utf-8"))["tools"]
+        by_name = {t["name"]: t for t in served}
+        live = [{"name": name, "description": "", "inputSchema": {},
+                 "annotations": {"readOnlyHint": t["annotations"]["readOnlyHint"],
+                                 "idempotentHint": t["annotations"]["idempotentHint"]}}
+                for name, t in by_name.items()]
+
+        merged = {t["name"]: t["annotations"] for t in bridge.with_full_hints(live)}
+        for name, hints in merged.items():
+            with self.subTest(tool=name):
+                self.assertEqual(set(hints), self.HINTS)
+                self.assertEqual(hints["openWorldHint"], by_name[name]["annotations"]["openWorldHint"])
+                self.assertEqual(hints["destructiveHint"], by_name[name]["annotations"]["destructiveHint"])
+
+    def test_the_tools_list_a_harness_actually_receives_carries_all_four(self):
+        """The merge being correct is not the same as the merge being wired in: the bug this guards against was a
+        right tools.json whose hints the handler dropped on the way out. Drive handle() with a wiki-shaped answer
+        and read what the harness would see."""
+        served = json.loads((ROOT / "skills/scio/server/tools.json").read_text(encoding="utf-8"))["tools"]
+        live = [{"name": t["name"], "description": "", "inputSchema": {},
+                 "annotations": {k: t["annotations"][k] for k in ("readOnlyHint", "idempotentHint")}}
+                for t in served]
+        sent = []
+        with patch.object(bridge, "forward", return_value={"result": {"tools": live}}), \
+             patch.object(bridge, "resolve_key", return_value=("sk_test", "a", "env")), \
+             patch.object(bridge, "note_key_state"), \
+             patch.object(bridge, "out", sent.append):
+            bridge.handle({"jsonrpc": "2.0", "id": 7, "method": "tools/list", "params": {}})
+
+        answers = [m for m in sent if m.get("id") == 7]
+        self.assertEqual(len(answers), 1, sent)
+        tools = answers[0]["result"]["tools"]
+        self.assertEqual(len(tools), len(served))
+        for tool in tools:
+            with self.subTest(tool=tool["name"]):
+                self.assertEqual(set(tool["annotations"]), self.HINTS)
+
+    def test_the_bridge_never_overrides_a_hint_the_wiki_did_send(self):
+        """The wiki is authoritative for what it says; the bundle only fills the silence. A contract that starts
+        answering with all four must win, or the bridge would pin a stale answer over a corrected one."""
+        live = [{"name": "scio_suspend", "annotations": {"readOnlyHint": True, "destructiveHint": False}}]
+        hints = bridge.with_full_hints(live)[0]["annotations"]
+        self.assertTrue(hints["readOnlyHint"])          # the wiki's values survive
+        self.assertFalse(hints["destructiveHint"])      # even where the bundle disagrees
+        self.assertIn("openWorldHint", hints)           # and the silence is still filled
+
+    def test_the_cursor_plugin_never_ships_a_path_from_someone_elses_machine(self):
+        """A plugin installed from the Cursor marketplace does not land where a hand-clone was told to go, and
+        python3 does not expand `~` the way a shell would. Both files the plugin manifest points at must spell the
+        plugin root the one way Cursor expands — its docs say ${PLUGIN_ROOT} deliberately is not expanded."""
+        manifest = json.loads((ROOT / ".cursor-plugin/plugin.json").read_text(encoding="utf-8"))
+        for field in ("mcpServers", "hooks"):
+            path = ROOT / manifest[field].lstrip("./")
+            with self.subTest(file=manifest[field]):
+                self.assertTrue(path.exists())
+                body = path.read_text(encoding="utf-8")
+                commands = " ".join(re.findall(r'"(?:command|args)":\s*(\[[^\]]*\]|"[^"]*")', body))
+                for machine in ("~/", "$HOME", "plugins/local", "/home/", "/Users/"):
+                    self.assertNotIn(machine, commands, f"{manifest[field]} carries {machine}")
+                self.assertIn("${CURSOR_PLUGIN_ROOT}", commands)
+
+    def test_the_local_server_annotates_every_tool_it_lists(self):
+        local = load_module("annotation_local", ROOT / "skills/scio/server/scio_local.py")
+        self.assertEqual(set(local.TOOLS), set(local.ANNOTATIONS))        # a missing entry would raise on tools/list
+        for name, hints in local.ANNOTATIONS.items():
+            with self.subTest(tool=name):
+                self.assertEqual(set(hints), self.HINTS)
+        self.assertTrue(local.ANNOTATIONS["fetch"]["openWorldHint"])      # the only one that leaves this machine
+        self.assertFalse(any(h["openWorldHint"] for n, h in local.ANNOTATIONS.items() if n != "fetch"))
 
 
 if __name__ == "__main__":

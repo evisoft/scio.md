@@ -413,6 +413,22 @@ def relay(req):
     return res
 
 
+def with_full_hints(tools):
+    """scio.md answers with readOnlyHint and idempotentHint only. MCP reads the two it leaves out the cautious way —
+    openWorldHint true, and destructiveHint true wherever readOnlyHint is false — so without them a harness prompts
+    as though scio_get_article might delete something out on the open web. The bundled contract carries all four
+    (scripts/gen-tools-list.py derives the missing pair): fill in what the server omitted, never override what it sent."""
+    bundled = {t.get("name"): (t.get("annotations") or {}) for t in bundled_tools()}
+    for t in tools:
+        known = bundled.get(t.get("name"))
+        if not known:
+            continue
+        hints = dict(known)
+        hints.update(t.get("annotations") or {})   # the server's own value wins wherever it has one
+        t["annotations"] = hints
+    return tools
+
+
 def with_alias_field(tools):
     for t in tools:
         if t.get("name") == "scio_propose_edit":   # a long proposal never crosses the model's context: the bridge reads the file
@@ -558,7 +574,7 @@ def handle(req):
                 result = result if isinstance(result, dict) else {}
                 live = [t for t in (result.get("tools") or []) if isinstance(t, dict)]
                 served = {t.get("name") for t in live}   # the server's own entry wins over the bundled one
-                result["tools"] = with_alias_field(live + [t for t in fallback if t["name"] not in served])
+                result["tools"] = with_alias_field(with_full_hints(live + [t for t in fallback if t["name"] not in served]))
                 with STATE_LOCK:
                     listed_with_key = has_key
                 reply(msg_id, result)

@@ -221,6 +221,26 @@ TOOLS = {
     "wait": ("Wait toward a deadline without a shell: sleeps up to 50 s per call and returns remaining_seconds; call again until done. Use for rate_limited.retry_after_ms, quota_exceeded.resets_at, a harness usage-limit reset time, or a task's ttl_ms.", {"type": "object", "properties": {"seconds": {"type": "number"}, "until": {"type": "string", "description": "ISO-8601 instant"}, "reason": {"type": "string"}}}, t_wait),
 }
 
+# MCP reads a missing hint the cautious way — openWorldHint true, and destructiveHint true wherever readOnlyHint is
+# false — so a server that declares none of them says every one of its tools may delete something on the open web.
+# These tools write nowhere but the task folder under <workspace>/.scio/work, and only `fetch` leaves this machine.
+ANNOTATIONS = {
+    "whoami":         {"readOnlyHint": True,  "idempotentHint": False, "openWorldHint": False, "destructiveHint": False},
+    "workdir":        {"readOnlyHint": False, "idempotentHint": True,  "openWorldHint": False, "destructiveHint": False},
+    "write_file":     {"readOnlyHint": False, "idempotentHint": True,  "openWorldHint": False, "destructiveHint": True},
+    "read_file":      {"readOnlyHint": True,  "idempotentHint": True,  "openWorldHint": False, "destructiveHint": False},
+    "build_proposal": {"readOnlyHint": False, "idempotentHint": True,  "openWorldHint": False, "destructiveHint": False},
+    "check_proposal": {"readOnlyHint": True,  "idempotentHint": True,  "openWorldHint": False, "destructiveHint": False},
+    "scan_injection": {"readOnlyHint": True,  "idempotentHint": True,  "openWorldHint": False, "destructiveHint": False},
+    "fetch":          {"readOnlyHint": True,  "idempotentHint": False, "openWorldHint": True,  "destructiveHint": False},
+    "verify_rules":   {"readOnlyHint": True,  "idempotentHint": True,  "openWorldHint": False, "destructiveHint": False},
+    "use_agent":      {"readOnlyHint": False, "idempotentHint": True,  "openWorldHint": False, "destructiveHint": False},
+    "show_claims":    {"readOnlyHint": True,  "idempotentHint": True,  "openWorldHint": False, "destructiveHint": False},
+    "wait":           {"readOnlyHint": True,  "idempotentHint": False, "openWorldHint": False, "destructiveHint": False},
+}
+# write_file is the one that can overwrite: it replaces a draft in the folder it is given. Nothing else here
+# takes anything back, and `fetch` is the only tool whose world is not this machine and scio.md.
+
 
 # ----------------------------------------------------------------------------------------------- protocol
 INSTRUCTIONS = ("Local tools of the Scio skill: task folders, drafts, proposal assembly and pre-flight, injection scan, guarded fetch, "
@@ -288,7 +308,8 @@ def main():
         elif method == "ping":
             reply(msg_id, {})
         elif method == "tools/list":
-            reply(msg_id, {"tools": [{"name": n, "description": d, "inputSchema": s} for n, (d, s, _) in TOOLS.items()]})
+            reply(msg_id, {"tools": [{"name": n, "description": d, "inputSchema": s, "annotations": ANNOTATIONS[n]}
+                                     for n, (d, s, _) in TOOLS.items()]})
         elif method == "tools/call":
             name, args = params.get("name"), params.get("arguments") or {}
             if not isinstance(name, str) or name not in TOOLS:
