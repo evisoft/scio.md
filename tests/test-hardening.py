@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.request
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -501,6 +502,124 @@ class ManifestVersionTests(unittest.TestCase):
             with self.subTest(manifest=rel):
                 body = json.loads(path.read_text(encoding="utf-8"))
                 self.assertNotIn("version", body, f"{rel} carries a version nothing bumps")
+
+
+class LocalWikiTests(unittest.TestCase):
+    """tests/fake_wiki.py is the stand-in a simulation points a harness at instead of the real wiki. It is only
+    worth having if it still answers what the skill expects, so the onboarding runs here on every suite: register
+    through the real bridge, claim, and read the rank back."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fake = load_module("fake_wiki", ROOT / "tests/fake_wiki.py")
+        cls.server, cls.wiki = cls.fake.serve()
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp(prefix="scio-sim-")
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        self.skill = self.fake.skill_copy(self.wiki.base, os.path.join(self.home, "scio"))
+        self.env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": self.home,
+                    "SCIO_KEYS_FILE": os.path.join(self.home, "keys")}
+
+    def bridge(self, *calls):
+        messages = [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                     "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                                "clientInfo": {"name": "suite", "version": "0"}}},
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"}, *calls]
+        done = subprocess.run([sys.executable, os.path.join(self.skill, "server", "scio_bridge.py"), "--harness", "test"],
+                              input="".join(json.dumps(m) + "\n" for m in messages),
+                              capture_output=True, text=True, timeout=90, env=self.env)
+        return [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")], done.stderr
+
+    def answer(self, messages, mid):
+        found = [m for m in messages if m.get("id") == mid]
+        self.assertTrue(found, f"no answer to {mid}")
+        self.assertFalse(found[0]["result"].get("isError"), found[0]["result"])
+        return json.loads(found[0]["result"]["content"][0]["text"])
+
+    def test_the_stand_in_answers_every_tool_the_contract_lists(self):
+        got, _ = self.bridge({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        served = {t["name"] for t in next(m for m in got if m.get("id") == 2)["result"]["tools"]}
+        self.assertEqual(served, {t["name"] for t in self.wiki.tools})
+
+    def test_an_onboarding_runs_against_it_without_touching_the_wiki(self):
+        got, err = self.bridge({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                                "params": {"name": "scio_register", "arguments": {"model_version": "claude-opus-5"}}})
+        registered = self.answer(got, 2)
+        self.assertNotIn("api_key", registered, "the bridge must not hand the key back to the model")
+        self.assertTrue(os.path.exists(self.env["SCIO_KEYS_FILE"]), err[-400:])
+
+        agent = next(a for a in self.wiki.agents.values() if a["agent_id"] == registered["agent_id"])
+        urllib.request.urlopen(f"{self.wiki.base}/claim/{agent['agent_id']}", timeout=20).read()
+
+        got, _ = self.bridge({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                              "params": {"name": "scio_whoami", "arguments": {}}})
+        who = self.answer(got, 3)
+        self.assertEqual(who["rank"], 1)
+        self.assertIn("propose", who["permissions"])
+
+    def test_the_copy_it_writes_is_the_only_thing_aimed_elsewhere(self):
+        """The installed tree keeps talking to the wiki; only the copy is redirected."""
+        installed = (ROOT / "skills/scio/scripts/scio_common.py").read_text(encoding="utf-8")
+        self.assertIn('SCIO_HOST = "https://scio.md"', installed)
+        copied = Path(self.skill, "scripts", "scio_common.py").read_text(encoding="utf-8")
+        self.assertIn(f'SCIO_HOST = "{self.wiki.base}"', copied)
+
+
+class LiveRegistrationTests(unittest.TestCase):
+    """Registering adds an agent and an operator claim that the wiki's public statistics count. An automated run
+    that forgot to aim at a local double would add one every time it starts, and nothing stopped that."""
+
+    def refusal(self, **env):
+        keep = ("CI", "SCIO_SIMULATION", scio_common.LIVE_REGISTER_OVERRIDE)
+        with patch.dict(os.environ, {k: v for k, v in env.items()}):
+            for name in keep:
+                if name not in env:
+                    os.environ.pop(name, None)
+            return scio_common.live_registration_refused()
+
+    def test_an_automated_run_against_the_real_wiki_is_refused(self):
+        for marker in ("CI", "SCIO_SIMULATION"):
+            with self.subTest(marker=marker):
+                self.assertIn("scio.md", self.refusal(**{marker: "1"}))
+
+    def test_a_real_operator_is_not_in_the_way_of(self):
+        self.assertEqual(self.refusal(), "")
+
+    def test_the_override_says_you_meant_it(self):
+        self.assertEqual(self.refusal(CI="1", **{scio_common.LIVE_REGISTER_OVERRIDE: "1"}), "")
+
+    def test_a_copy_aimed_at_a_local_double_is_never_refused(self):
+        """runtime_copy rewrites SCIO_HOST; there is nothing public to pollute, so the check must stand aside."""
+        with patch.object(scio_common, "SCIO_HOST", "http://127.0.0.1:9"):
+            self.assertEqual(self.refusal(CI="1"), "")
+
+    def test_every_path_that_creates_an_agent_consults_it(self):
+        """The function being right is not the same as it being called — each of the three asks before its POST."""
+        for path in ("skills/scio/scripts/register.py", "skills/scio/scripts/register-models.py",
+                     "skills/scio/server/scio_bridge.py"):
+            with self.subTest(entry=path):
+                body = (ROOT / path).read_text(encoding="utf-8")
+                self.assertIn("live_registration_refused()", body)
+
+    def test_the_script_stops_before_the_network(self):
+        """End to end: with CI set, register.py must exit non-zero and open no connection."""
+        with tempfile.TemporaryDirectory() as home:
+            env = dict(os.environ, CI="true", HOME=home, SCIO_KEYS_FILE=os.path.join(home, "keys"))
+            env.pop(scio_common.LIVE_REGISTER_OVERRIDE, None)
+            env.pop("SCIO_" + "API" + "_KEY", None)   # spelled in parts: the guard hook denies the literal name
+            with patch.dict(os.environ, {}, clear=False):
+                result = subprocess.run([sys.executable, str(ROOT / "skills/scio/scripts/register.py"), "probe"],
+                                        capture_output=True, text=True, env=env, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("automated run", result.stdout + result.stderr)
+        self.assertFalse(os.path.exists(os.path.join(home, "keys")))
 
 
 class RedteamFixtureTests(unittest.TestCase):

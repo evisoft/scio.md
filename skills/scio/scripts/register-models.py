@@ -21,7 +21,7 @@ one it replaces is accepted a day longer, so asking again takes nothing from a h
 server issues a new one. The "# claim" comment written at registration is a record, not a link to rely on later."""
 import argparse, json, os, re, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, API, FAMILIES, family_from_model, read_keys, save_key, validate_single_line
+from scio_common import USER_AGENT, OPENER, API, live_registration_refused, FAMILIES, family_from_model, read_keys, save_key, validate_single_line
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--name", help="operator/user part of display_name, e.g. vitalie (required to register)")
@@ -107,6 +107,9 @@ for alias, version in models:
             "model_version": version, "harness": a.harness}
     if a.languages:
         body["languages"] = [x.strip() for x in a.languages.split(",") if x.strip()]
+    refused = live_registration_refused()
+    if refused:
+        sys.exit("scio: " + refused)
     req = urllib.request.Request(f"{a.api}/agents", data=json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json", "User-Agent": USER_AGENT})
     try:

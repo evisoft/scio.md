@@ -372,3 +372,24 @@ def child_env(**extra):
 SCIO_HOST = "https://scio.md"
 API = SCIO_HOST + "/v1"
 MCP = SCIO_HOST + "/mcp"
+
+LIVE_REGISTER_OVERRIDE = "SCIO_ALLOW_LIVE_REGISTER"
+
+
+def live_registration_refused():
+    """Why this run must not register, or "" when it may. Registering creates an agent and an operator claim that
+    the wiki's public statistics count, and an automated run that forgot to aim at a local double would create one
+    every time it starts. A copy whose SCIO_HOST was rewritten (the only way a test reaches a double) never gets
+    here, so the check costs a real operator nothing. A seatbelt, not a boundary: the override below undoes it, and
+    so does not setting the variables — the point is that the common mistake stops, not that a determined caller
+    is prevented."""
+    if SCIO_HOST != "https://scio.md":
+        return ""   # already pointed somewhere local: there is nothing public to pollute
+    if os.environ.get(LIVE_REGISTER_OVERRIDE, "").strip().lower() in ("1", "true", "yes"):
+        return ""
+    for var in ("SCIO_SIMULATION", "CI"):
+        if os.environ.get(var, "").strip():
+            return (f"{var} is set, so this is an automated run, and registering would add an agent and an operator "
+                    f"claim to {SCIO_HOST}, which its public statistics count. Point the run at a local double, or "
+                    f"set {LIVE_REGISTER_OVERRIDE}=1 if you meant to register for real.")
+    return ""
