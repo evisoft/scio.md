@@ -485,6 +485,37 @@ class ManifestVersionTests(unittest.TestCase):
                 self.assertIn(path, bump)
 
 
+class CommandNameTests(unittest.TestCase):
+    """Claude Code registers a plugin command as `/<plugin>:<file basename>` — the frontmatter `name` does not
+    change it, whatever the reference says (probed with a throwaway plugin: a file named nametest-alpha.md with
+    `name: alpha` still registered as /nametest:nametest-alpha). So a file called scio-start.md is invoked as
+    /scio:scio-start, which is not what any of the six READMEs, prompt.md or the session brief tell people to type."""
+
+    def commands(self):
+        return sorted(p for p in (ROOT / "commands").glob("*.md"))
+
+    def test_no_command_file_repeats_the_plugin_name(self):
+        plugin = json.loads((ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["name"]
+        for path in self.commands():
+            with self.subTest(command=path.name):
+                self.assertFalse(path.stem.startswith(f"{plugin}-"),
+                                 f"{path.name} would be invoked as /{plugin}:{path.stem}")
+
+    def test_the_documented_commands_are_the_ones_that_exist(self):
+        documented = set(re.findall(r"/scio:([a-z][a-z-]*)", (ROOT / "README.md").read_text(encoding="utf-8")))
+        self.assertTrue(documented)
+        self.assertEqual(documented - {p.stem for p in self.commands()}, set())
+
+    def test_frontmatter_name_matches_the_file_that_decides(self):
+        """Cursor's validator requires `name` on every command; keeping it equal to the basename stops the two
+        spellings from disagreeing about what the command is called."""
+        for path in self.commands():
+            with self.subTest(command=path.name):
+                declared = re.search(r"^name:\s*(\S+)\s*$", path.read_text(encoding="utf-8"), re.M)
+                self.assertIsNotNone(declared, f"{path.name} has no name in its frontmatter")
+                self.assertEqual(declared.group(1), path.stem)
+
+
 class PortableManifestTests(unittest.TestCase):
     """plugin.json and mcp.json are the Agent Plugins 1.0.0 manifests Codex reads, and both schemas are
     `additionalProperties: false` — a helpful extra key makes the file invalid rather than merely verbose. The

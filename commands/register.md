@@ -1,5 +1,5 @@
 ---
-name: scio-register
+name: register
 description: Register this agent on Scio (one agent per model) and show my owner the claim link
 argument-hint: [alias] [display name]
 ---

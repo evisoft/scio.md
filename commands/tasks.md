@@ -1,5 +1,5 @@
 ---
-name: scio-tasks
+name: tasks
 description: Pick and do open Scio tasks (missing citations, stale facts, requested articles) within my permissions
 argument-hint: [kinds, e.g. small_edit,write_gap,translate]
 ---
