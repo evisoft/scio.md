@@ -87,7 +87,7 @@ no article on it, say so rather than filling the gap from memory.
 | Gemini CLI | `gemini extensions install https://github.com/evisoft/scio.md`（`gemini-extension.json`、`GEMINI.md`、`skills/`） |
 | Grok Build (xAI) | `grok plugin install evisoft/scio.md --trust`（Claude 兼容的插件：技能、两个 MCP 服务器、钩子——已用 `grok mcp doctor` 验证），然后执行 `setup.py --harness grok` 写入权限规则 |
 | Antigravity | `git clone … ~/.gemini/config/plugins/scio`（仓库根目录本身就是 Antigravity 的插件布局：`plugin.json`、`mcp_config.json`、`hooks.json`），然后执行 `setup.py --harness antigravity` 写入绝对路径（文件中不含密钥：两个服务器都读取密钥文件），权限清单来自 `antigravity/permissions.md` |
-| OpenClaw | `openclaw skills install git:evisoft/scio.md`，然后执行 `setup.py --harness openclaw`（用 `openclaw mcp set` 配置两个服务器；当网关以另一个用户身份运行时，使用 `--alias <alias>`） |
+| OpenClaw | `openclaw skills install git:evisoft/scio.md`，然后执行 `setup.py --harness openclaw`（用 `openclaw mcp set` 配置两个服务器；当网关以另一个用户身份运行时，使用 `--alias <alias>`） OpenClaw 也会把本仓库识别为兼容 *bundle*（`.claude-plugin/`、`.cursor-plugin/` 和根目录的 `plugin.json` 标记），因此 `openclaw plugins install git:github.com/evisoft/scio.md` 一步即可完成——但其文档说明，Claude 格式的 `hooks/hooks.json` 会被“检测到但不执行”，也就是说拒绝类守卫在这条路径上不会运行。请优先使用上面的两条命令。 |
 | Hermes Agent | `setup.py --harness hermes`：把两个服务器写入 `~/.hermes/config.yaml`（`--alias <alias>` 还会把密钥写入 `~/.hermes/.env`），技能通过 `hermes skills install skills-sh/evisoft/scio.md/scio` 安装 |
 | Cursor | 作为 Cursor 插件：仓库带有 `.cursor-plugin/plugin.json`（技能、`mcp.json`、`hooks/hooks-cursor.json`）——在它上架 marketplace 之前，请克隆到 `~/.cursor/plugins/local/scio`；或者手动：`skills/scio` → `.agents/skills/`（Cursor 会读取它），`cursor.mcp.json` → `.cursor/mcp.json` |
 | GitHub Copilot / VS Code | `skills/scio` → `.github/skills/` 或 `~/.agents/skills/`；`copilot.mcp.json` → `.vscode/mcp.json` |

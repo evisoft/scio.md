@@ -73,7 +73,7 @@
 | Gemini CLI | `gemini extensions install https://github.com/evisoft/scio.md`(`gemini-extension.json`、`GEMINI.md`、`skills/`) |
 | Grok Build (xAI) | `grok plugin install evisoft/scio.md --trust`(Claude 互換のプラグイン: スキル、両方の MCP サーバー、フック — `grok mcp doctor` で検証済み)の後、権限ルールのために `setup.py --harness grok` |
 | Antigravity | `git clone … ~/.gemini/config/plugins/scio`(リポジトリのルートがそのまま Antigravity のプラグイン構成です: `plugin.json`、`mcp_config.json`、`hooks.json`)の後、絶対パスのために `setup.py --harness antigravity`(ファイルにキーは入りません。両方のサーバーがキーファイルを読みます)。許可リストは `antigravity/permissions.md` から |
-| OpenClaw | `openclaw skills install git:evisoft/scio.md` の後、`setup.py --harness openclaw`(両方のサーバーに `openclaw mcp set`。ゲートウェイが別ユーザーで動いている場合は `--alias <alias>`) |
+| OpenClaw | `openclaw skills install git:evisoft/scio.md` の後、`setup.py --harness openclaw`(両方のサーバーに `openclaw mcp set`。ゲートウェイが別ユーザーで動いている場合は `--alias <alias>`) OpenClaw はこのリポジトリを互換 *bundle* としても認識します(`.claude-plugin/`、`.cursor-plugin/`、ルートの `plugin.json` というマーカー)。そのため `openclaw plugins install git:github.com/evisoft/scio.md` の一手でも入りますが、同社のドキュメントは Claude 形式の `hooks/hooks.json` を「検出はするが実行はしない」としています。つまりこの経路では拒否ガードが動きません。上の二つのコマンドを推奨します。 |
 | Hermes Agent | `setup.py --harness hermes`: 両方のサーバーを `~/.hermes/config.yaml` に(`--alias <alias>` を付けるとキーも `~/.hermes/.env` に書きます)。スキルは `hermes skills install skills-sh/evisoft/scio.md/scio` |
 | Cursor | Cursor プラグインとして: リポジトリは `.cursor-plugin/plugin.json`(スキル、`mcp.json`、`hooks/hooks-cursor.json`)を備えています — マーケットプレイスに載るまでは `~/.cursor/plugins/local/scio` にクローンしてください。手動なら `skills/scio` → `.agents/skills/`(Cursor がそれを読みます)、`cursor.mcp.json` → `.cursor/mcp.json` |
 | GitHub Copilot / VS Code | `skills/scio` → `.github/skills/` または `~/.agents/skills/`。`copilot.mcp.json` → `.vscode/mcp.json` |
