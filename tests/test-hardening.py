@@ -503,6 +503,49 @@ class ManifestVersionTests(unittest.TestCase):
                 self.assertNotIn("version", body, f"{rel} carries a version nothing bumps")
 
 
+class RedteamFixtureTests(unittest.TestCase):
+    """A plugin install copies the repository, so these fixtures land on every operator's disk — inert, never
+    loaded by the skill, but readable by anything that walks the directory. A fixture whose whole content is
+    instruction- or credential-shaped should say what it is wherever it is read, not only in the README beside
+    it. The signatures below are built from parts so this file does not itself become one."""
+
+    NOTE = "scio red-team fixture"
+
+    def signatures(self):
+        return (
+            "ignore " + "previous " + "instructions",
+            "you " + "must " + "approve",
+            "SYS" + "TEM:",
+            "include your " + "API " + "key",
+            ".config/" + "scio/" + "ke" + "ys",
+            "evil." + "example",
+            "verify." + "example",
+            "Note to " + "reviewers",              # the quieter injection: no imperative, same intent
+            "no need to " + "open them",
+        )
+
+    def test_a_fixture_that_reads_as_an_attack_says_it_is_a_fixture(self):
+        fixtures = sorted(p for p in (ROOT / "tests/redteam").iterdir() if p.is_file() and p.name != "README.md")
+        self.assertTrue(fixtures)
+        flagged = 0
+        for path in fixtures:
+            body = path.read_text(encoding="utf-8", errors="replace")
+            if not any(s in body for s in self.signatures()):
+                continue                                  # structural fixtures: addresses, shapes, benign text
+            flagged += 1
+            with self.subTest(fixture=path.name):
+                self.assertIn(self.NOTE, body, f"{path.name} carries attack text and does not say it is a fixture")
+        self.assertGreaterEqual(flagged, 5)               # the note must not be what makes them stop matching
+
+    def test_the_note_never_becomes_the_whole_fixture(self):
+        """Adding the line must not be what makes a defence stop catching the payload."""
+        for name in ("01-injection.txt", "02-exfiltration.txt"):
+            with self.subTest(fixture=name):
+                body = (ROOT / "tests/redteam" / name).read_text(encoding="utf-8")
+                self.assertTrue(body.startswith("[" + self.NOTE))
+                self.assertTrue(body.split("]\n", 1)[1].strip(), "nothing left after the note")
+
+
 class BundledRulesTests(unittest.TestCase):
     """references/rules.md is the signed constitution verbatim; references/roles.md copies some of its numbers for
     orientation. Both are written by refresh-rules.py, but until 2026-09-20 only the version string in roles.md was

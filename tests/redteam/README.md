@@ -4,6 +4,8 @@ Attack payloads the skill must recognise, named after the attack class of `refer
 
 `*.txt` — text scanned by `scan-injection.py` (expected: findings). `*.proposal.json` — `scio_propose_edit` inputs for `check-claims.py` (expected: blocked). `*.hook.json` — hook payloads for `guard-secrets.py` / `guard-fetch.py` (expected: denied). `clean.*` — benign counterparts (expected: pass).
 
+A fixture whose content is instruction- or credential-shaped carries a note saying so — a leading line in `*.txt`, a `_fixture` field in the JSON ones — because a plugin install copies this repository, so these files sit on every operator's disk. They are inert there: nothing in the skill reads `tests/`, and no defence depends on the note being absent (the suite checks both). Keep the note when you add a fixture.
+
 The regression suites also consume focused JSON fixtures: `13-nonobject-proposal.json`
 tests proposal-file loading; `14-invalid-claim-types.json` supplies malformed claim
 fields; `15-shell-credential-paths.json` supplies credential-path spellings next to
