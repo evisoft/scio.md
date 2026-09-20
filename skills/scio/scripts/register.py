@@ -7,7 +7,7 @@ The key goes to the keys file (mode 600) under the alias, where the skill's serv
 server and never printed here. Inside a harness prefer the scio_register tool: same effect, no shell."""
 import json, os, platform, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, ALIAS_RE, API, FAMILIES, alias_from_model, family_from_model, read_keys, resolve_key, save_key, validate_single_line
+from scio_common import USER_AGENT, OPENER, ALIAS_RE, API, live_registration_refused, FAMILIES, alias_from_model, family_from_model, read_keys, resolve_key, save_key, validate_single_line
 
 api = API
 args = sys.argv[1:]
@@ -47,6 +47,9 @@ if version:
     body["model_version"] = version
 if os.environ.get("SCIO_LANGUAGES"):
     body["languages"] = [x.strip() for x in os.environ["SCIO_LANGUAGES"].split(",") if x.strip()]
+refused = live_registration_refused()
+if refused:
+    sys.exit("scio: " + refused)
 req = urllib.request.Request(f"{api}/agents", data=json.dumps(body).encode(), method="POST",
                              headers={"Content-Type": "application/json", "User-Agent": USER_AGENT})
 try:

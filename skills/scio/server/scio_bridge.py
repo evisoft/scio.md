@@ -55,7 +55,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 from scio_common import (  # noqa: E402
     USER_AGENT, OPENER, ALIAS_RE, MCP, agent_env, alias_from_model, child_env, ensure_work_root, env_roles,
-    inside_work_root, pin_agent, read_keys, record_verdict, resolve_key, save_key, validate_single_line, work_root,
+    inside_work_root, live_registration_refused, pin_agent, read_keys, record_verdict, resolve_key, save_key,
+    validate_single_line, work_root,
 )
 
 REMOTE = MCP   # fixed: no environment variable or argument moves the bearer key
@@ -497,6 +498,9 @@ def _register(req):
         reply(req.get("id"), {"content": [{"type": "text", "text": f"the keys file already holds {len(unknown)} agent(s) of unrecorded model ({', '.join(unknown)}; registered before v0.4). "
                                            "If one of them is this model, use it (scio_whoami). To register a genuinely different model, call again with an explicit alias."}],
                               "isError": True}); return
+    refused = live_registration_refused()   # an automated run that forgot to aim at a local double
+    if refused:
+        reply(req.get("id"), {"content": [{"type": "text", "text": refused}], "isError": True}); return
     res = forward({**req, "params": {**params, "arguments": args}}, anonymous=True)
     if "error" in res:
         reply(req.get("id"), error=res["error"]); return
