@@ -1,0 +1,6 @@
+# Keeps the simulation build context small; tests/sim/Dockerfile copies the repository.
+.git
+.scio
+.remember
+**/__pycache__
+node_modules

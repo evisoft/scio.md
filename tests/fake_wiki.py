@@ -28,15 +28,26 @@ ROOT = HERE.parent
 CONTRACT = ROOT.parent / "scio" / "contracts" / "tools.json"
 BUNDLED = ROOT / "skills/scio/server/tools.json"
 SIGNED_RULES = HERE / "wiki" / "rules.signed.json"
+SNAPSHOT = HERE / "wiki" / "tools.json"   # GET /v1/tools.json, for when the platform checkout is absent
 LIVE = "https://scio.md"
 
 
 # ---------------------------------------------------------------------------------------------- the contract
+SOURCE = "?"   # which of the three the tool list came from, for the line the server prints on startup
+
+
 def contract():
     """The platform contract when this checkout sits beside the platform's, else the bundled list (names, inputs
     and annotations only — enough to answer tools/list, not enough to shape every result)."""
+    global SOURCE
     if CONTRACT.exists():
+        SOURCE = "the platform contract"
         return json.loads(CONTRACT.read_text(encoding="utf-8"))["tools"]
+    if SNAPSHOT.exists():   # a container has no platform checkout beside it: the wiki's own public copy
+        SOURCE = "the wiki's public /v1/tools.json"
+        body = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+        return body if isinstance(body, list) else body["tools"]
+    SOURCE = "the bundled list (no output schemas)"
     served = json.loads(BUNDLED.read_text(encoding="utf-8"))["tools"]
     return [{"name": t["name"], "description": t["description"], "input": t["inputSchema"],
              "output": {"type": "object"}, **{k: v for k, v in (t.get("annotations") or {}).items()}} for t in served]
@@ -289,8 +300,7 @@ def main():
         return
     server, wiki = serve(a.port)
     print(wiki.base, flush=True)
-    print(f"tools: {len(wiki.tools)} (from {'the platform contract' if CONTRACT.exists() else 'the bundled list'})"
-          f" · rules {wiki.rules_version}", file=sys.stderr, flush=True)
+    print(f"tools: {len(wiki.tools)} (from {SOURCE}) · rules {wiki.rules_version}", file=sys.stderr, flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

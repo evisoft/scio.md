@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# What one container does: stand up the local wiki, install the skill the way an operator would, wire the
+# harness to it, run the checks that need no model, and then — only if a key was passed — give the harness one
+# turn and show what it did with it.
+#
+# Two layers on purpose. The deterministic half decides the exit code; a model's turn is judged by hand,
+# because a suite whose verdict depends on what a model chose is a suite that fails one run in five.
+set -euo pipefail
+
+HARNESS="${HARNESS:?set HARNESS at build time}"
+PORT="${SCIO_FAKE_PORT:-8787}"
+BASE="http://127.0.0.1:${PORT}"
+SKILL_SRC=/opt/scio-skill
+SKILL="${HOME}/.agents/skills/scio"
+
+say() { printf '\n=== %s\n' "$*"; }
+
+say "local wiki on ${BASE}"
+python3 /repo/tests/fake_wiki.py --port "${PORT}" >/tmp/wiki.url 2>/tmp/wiki.log &
+for _ in $(seq 1 50); do
+  curl -fsS "${BASE}/v1/stats" >/dev/null 2>&1 && break
+  sleep 0.2
+done
+curl -fsS "${BASE}/v1/stats" | head -c 200; echo
+sed -n '1p' /tmp/wiki.log || true
+
+say "the skill, redirected at it"
+# The installed tree has no variable that moves the bearer's destination; a rewritten copy is the only way in.
+python3 /repo/tests/fake_wiki.py --skill-copy "${SKILL_SRC}" --base-url "${BASE}" >/dev/null
+mkdir -p "$(dirname "${SKILL}")"
+rm -rf "${SKILL}"
+cp -a "${SKILL_SRC}" "${SKILL}"
+grep -c "${BASE}" "${SKILL}/scripts/scio_common.py" >/dev/null && echo "  copy aimed at ${BASE}"
+
+say "wiring ${HARNESS}"
+python3 "${SKILL}/scripts/setup.py" --harness "${HARNESS}" --yes --trust 2>&1 | tail -3
+
+say "deterministic checks"
+# `|| status=$?` on purpose: under `set -e` a failing check would abort here, and the sections below are the
+# ones that say what the run actually did. Keep its code, keep going, exit with it at the end.
+status=0
+python3 /repo/tests/sim/check.py --skill "${SKILL}" --base-url "${BASE}" --harness "${HARNESS}" || status=$?
+
+say "the harness's own turn"
+PROMPT="${SCIO_SIM_PROMPT:-Call the scio_whoami tool and tell me the rank it reports. Do nothing else.}"
+case "${HARNESS}" in
+  claude) CMD=(claude -p "${PROMPT}") ;;
+  codex)  CMD=(codex exec "${PROMPT}") ;;
+  gemini) CMD=(gemini -p "${PROMPT}") ;;
+  grok)   CMD=(grok -p "${PROMPT}") ;;
+  kimi)   CMD=(kimi -p "${PROMPT}") ;;
+esac
+if [ -n "${SCIO_SIM_MODEL_KEY:-}" ]; then
+  echo "  ${CMD[0]} with a model key present"
+  timeout "${SCIO_SIM_TIMEOUT:-300}" "${CMD[@]}" 2>&1 | tail -30 || echo "  (the harness exited non-zero; read the turn above)"
+else
+  echo "  skipped: no model key passed. The checks above already ran without one."
+  echo "  would run: ${CMD[*]}"
+fi
+
+say "what the wiki saw"
+curl -fsS "${BASE}/v1/stats" | head -c 300; echo
+exit "${status}"
