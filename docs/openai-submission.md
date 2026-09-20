@@ -54,6 +54,14 @@ One skill, `skills/scio/`, in the Agent Skills format: `SKILL.md` plus `referenc
 generated tool contract, workflows). It ships with `MANIFEST.sha256`, and `scripts/whoami.py` warns at session
 start when the installed copy differs from it.
 
+## How Codex reads this repository
+
+The repository root **is** the plugin: `plugin.json` (portable Agent Plugins 1.0.0), `mcp.json`, `skills/` and
+`hooks/hooks.json` all sit where the format expects them, and both manifests validate against the published
+schemas. There is deliberately no `.agents/plugins/marketplace.json`: a local marketplace entry's `source.path`
+has to stay inside the marketplace root, and this plugin lives above it, so such an entry could only point at a
+directory with no manifest in it. Nothing needs one — the bundle is read directly.
+
 ## Starter prompts
 
 Declared in `plugin.json` (`extensions.com.openai.defaultPrompt`):

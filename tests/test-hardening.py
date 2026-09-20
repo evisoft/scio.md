@@ -465,24 +465,42 @@ class ManifestVersionTests(unittest.TestCase):
             body = body[key]
         return body
 
+    JSON_MANIFESTS = {
+        "plugin.json": ("version",),
+        ".claude-plugin/plugin.json": ("version",),
+        ".claude-plugin/marketplace.json": ("plugins", 0, "version"),
+        ".cursor-plugin/plugin.json": ("version",),
+        ".cursor-plugin/marketplace.json": ("metadata", "version"),
+        "gemini-extension.json": ("version",),
+    }
+    SKILL_MANIFESTS = ("skills/scio/SKILL.md", "openclaw/scio/SKILL.md")
+
     def test_every_manifest_declares_the_same_version(self):
-        declared = {
-            "plugin.json": self.version_of("plugin.json", "version"),
-            ".claude-plugin/plugin.json": self.version_of(".claude-plugin/plugin.json", "version"),
-            ".claude-plugin/marketplace.json": self.version_of(".claude-plugin/marketplace.json", "plugins", 0, "version"),
-            ".cursor-plugin/plugin.json": self.version_of(".cursor-plugin/plugin.json", "version"),
-            ".cursor-plugin/marketplace.json": self.version_of(".cursor-plugin/marketplace.json", "metadata", "version"),
-            "gemini-extension.json": self.version_of("gemini-extension.json", "version"),
-        }
+        declared = {path: self.version_of(path, *keys) for path, keys in self.JSON_MANIFESTS.items()}
+        for path in self.SKILL_MANIFESTS:   # frontmatter, not JSON, and release.sh bumps it with a second sed
+            found = re.search(r'^\s*version: "([0-9.]+)"', (ROOT / path).read_text(encoding="utf-8"), re.M)
+            self.assertIsNotNone(found, f"{path} carries no version")
+            declared[path] = found.group(1)
         self.assertEqual(len(set(declared.values())), 1, declared)
 
     def test_release_bumps_every_file_that_carries_a_version(self):
+        """Two sed lines, one per spelling. A manifest added to neither goes stale without a sound."""
         release = (ROOT / "scripts/release.sh").read_text(encoding="utf-8")
-        bump = next(line for line in release.splitlines() if line.startswith('sed -i "s/\\"version\\"'))
-        for path in (".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", "gemini-extension.json",
-                     ".cursor-plugin/plugin.json", ".cursor-plugin/marketplace.json", "plugin.json"):
+        bumped = " ".join(line for line in release.splitlines() if line.startswith("sed -i "))
+        for path in list(self.JSON_MANIFESTS) + list(self.SKILL_MANIFESTS):
             with self.subTest(manifest=path):
-                self.assertIn(path, bump)
+                self.assertIn(path, bumped)
+
+    def test_no_manifest_is_missing_from_the_check(self):
+        """The list above is hand-kept; this finds a version-carrying file nobody added to it."""
+        known = set(self.JSON_MANIFESTS) | set(self.SKILL_MANIFESTS)
+        for path in sorted(ROOT.glob("*.json")) + sorted(ROOT.glob(".*-plugin/*.json")):
+            rel = str(path.relative_to(ROOT))
+            if rel in known or "version" not in path.read_text(encoding="utf-8"):
+                continue
+            with self.subTest(manifest=rel):
+                body = json.loads(path.read_text(encoding="utf-8"))
+                self.assertNotIn("version", body, f"{rel} carries a version nothing bumps")
 
 
 class SkillPackagingTests(unittest.TestCase):
