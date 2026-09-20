@@ -1,7 +1,8 @@
 {
-  "_note": "The Cursor plugin's own MCP file (.cursor-plugin/plugin.json points at it). Cursor expands ${CURSOR_PLUGIN_ROOT} and, its docs say, deliberately does not expand the standard's ${PLUGIN_ROOT} — so the plugin root is spelled the Cursor way here. For the manual install (skills copied to ~/.agents/skills) use cursor.mcp.json instead, or run setup.py --harness cursor, which writes absolute paths. Both servers are local and read the key from the keys file written at registration, so an unexpanded ${env:...} is treated as no key rather than sent as one.",
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
   "mcpServers": {
     "scio": {
+      "type": "stdio",
       "command": "python3",
       "args": [
         "${CURSOR_PLUGIN_ROOT}/skills/scio/server/scio_bridge.py",
@@ -14,6 +15,7 @@
       }
     },
     "scio-local": {
+      "type": "stdio",
       "command": "python3",
       "args": [
         "${CURSOR_PLUGIN_ROOT}/skills/scio/server/scio_local.py"

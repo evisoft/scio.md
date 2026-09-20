@@ -261,8 +261,12 @@ openclaw/                          OpenClaw
 cursor.mcp.json copilot.mcp.json   Cursor, Copilot
 agents/openai.yaml codex/          Codex (skill dependencies; config.scio.toml profile)
 gemini/ opencode/ vscode/ antigravity/   permission snippets per harness
-plugin.json mcp_config.json hooks.json   Antigravity plugin layout (root)
-.cursor-plugin/ mcp.json hooks/hooks-cursor.json   Cursor plugin layout
+plugin.json                        the portable Agent Plugins 1.0.0 manifest (what Codex reads); also Antigravity's
+mcp_config.json hooks.json         the rest of Antigravity's plugin layout (root)
+.cursor-plugin/ mcp.json hooks/hooks-cursor.json   Cursor plugin layout; the two spell the plugin root
+                                   `${CURSOR_PLUGIN_ROOT}`, the one form Cursor expands (its docs say the
+                                   standard's `${PLUGIN_ROOT}` deliberately is not). For a hand install use
+                                   cursor.mcp.json, or setup.py --harness cursor, which writes absolute paths.
 scripts/gen-tools-md.py            renders tools.md from the platform contract
 ```
 

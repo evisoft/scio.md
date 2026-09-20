@@ -474,6 +474,38 @@ class ManifestVersionTests(unittest.TestCase):
                 self.assertIn(path, bump)
 
 
+class PortableManifestTests(unittest.TestCase):
+    """plugin.json and mcp.json are the Agent Plugins 1.0.0 manifests Codex reads, and both schemas are
+    `additionalProperties: false` — a helpful extra key makes the file invalid rather than merely verbose. The
+    shapes are asserted here so the suite catches it offline; the published schemas are the authority."""
+
+    PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+    MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+    PLUGIN_KEYS = {"$schema", "name", "version", "description", "author", "homepage", "repository",
+                   "license", "keywords", "extensions"}
+    STDIO_KEYS = {"type", "command", "args", "env", "cwd"}
+
+    def test_the_plugin_manifest_keeps_the_shape_the_schema_allows(self):
+        body = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(body.get("$schema"), self.PLUGIN_SCHEMA)
+        self.assertIn("name", body)
+        self.assertEqual(set(body) - self.PLUGIN_KEYS, set())
+        self.assertEqual(set(body.get("extensions", {})) - {"com.openai"}, set())
+
+    def test_the_mcp_manifest_keeps_the_shape_the_schema_allows(self):
+        body = json.loads((ROOT / "mcp.json").read_text(encoding="utf-8"))
+        self.assertEqual(body.get("$schema"), self.MCP_SCHEMA)
+        self.assertEqual(set(body), {"$schema", "mcpServers"})   # no notes: the schema forbids them
+        self.assertTrue(body["mcpServers"])
+        for name, server in body["mcpServers"].items():
+            with self.subTest(server=name):
+                self.assertEqual(server.get("type"), "stdio")
+                self.assertTrue(server.get("command"))
+                self.assertEqual(set(server) - self.STDIO_KEYS, set())
+                # the spec reserves these two names for the runtime, so a plugin may not set them
+                self.assertEqual({"PLUGIN_ROOT", "PLUGIN_DATA"} & set(server.get("env", {})), set())
+
+
 class StatsLineTests(unittest.TestCase):
     """The stats line is generated, never typed (P0 applied to the README). A README the generator does not know
     about keeps whatever number it was born with while claiming to be live — the one failure mode worth a test."""
