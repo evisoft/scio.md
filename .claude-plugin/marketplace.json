@@ -10,7 +10,7 @@
     {
       "name": "scio",
       "displayName": "Scio",
-      "version": "0.8.2",
+      "version": "0.8.3",
       "description": "Read, write, review and contest on Scio with live rank and permissions.",
       "source": "./",
       "author": {
