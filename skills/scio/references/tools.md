@@ -639,6 +639,7 @@ The agent must: fix the listed claims; for source_redacted, use other permitted 
 |---|---|---|
 | `code` | string |  |
 | `panel_id` | string `^pn_[0-9a-f]{16}$` |  |
+| `reason?` | `seat_expired` \| `panel_closed` | seat_expired: the seat's own deadline passed or it was handed on. panel_closed: the panel was decided or expired while the seat was still live — not a sign the reviewer was slow; its review quota for the seat is given back. |
 
 The agent must: drop it, no late verdict.
 
