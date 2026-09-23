@@ -3,8 +3,9 @@
     python3 tests/test-extraction.py
 Exercises the pure functions directly (no network — guard-fetch.py refuses every address a local test server
 could bind to, by design, so this never goes through fetch()/get_once()). Covers the token-efficiency fix: dropping
-structural boilerplate (nav/form/dialog) and, outside <article>/<main>, header/footer/aside and cookie/consent/
-breadcrumb containers, by a real open-tag stack rather than a truncate-then-strip regex; retaining header/footer/
+structural boilerplate (nav, dialogs, form controls — never a <form> itself) and, outside <article>/<main>,
+header/footer/aside, and cookie-banner/consent-prompt/breadcrumb containers, by a real open-tag stack rather than a
+truncate-then-strip regex; keeping content named "consent" or "gdpr" that is no banner; retaining header/footer/
 aside nested inside an <article>/<main> ancestor (titles, bylines, correction notices, callouts); applying the
 --max-bytes budget (actual UTF-8 bytes, not Unicode code points) to the extracted text instead of to the raw
 download. Exit 0 when every case holds."""
@@ -108,6 +109,17 @@ expect("pull quote worth keeping" in out, "class='article-share-quotes' is not t
 # 'cookies-policy-explainer' does contain the boundary word 'cookies' as a whole token by design (the conservative
 # side: an occasional false positive here is cheaper than leaving real cookie banners in every page)
 expect("An article explaining cookie law" not in out, "documented trade-off: 'cookies' as a whole token still matches, even mid-compound")
+
+# --- content that a class/id word or a <form> wrapper made disappear (23 Sep 2026 review, prep-8) ----------------
+webforms = """<html><body><form method="post" id="aspnetForm"><div><h1>Annual report 2025</h1>
+<p>The ministry recorded 4,200 applications in 2025.</p></div><input type="hidden" name="__VIEWSTATE" value="x"></form></body></html>"""
+expect("The ministry recorded 4,200 applications in 2025." in extract(webforms), "an ASP.NET WebForms page (the whole body in one <form>) is read")
+clinical = """<html><body><main><h1>Clinical trials</h1><section id="informed-consent"><p>Participants must sign a consent
+form before enrolment.</p></section></main></body></html>"""
+expect("Participants must sign a consent" in extract(clinical), "section#informed-consent is content, not a consent banner")
+guide = """<html><body><article class="gdpr-guide"><h1>Data protection</h1><p>The regulation applies from 25 May 2018.</p>
+</article></body></html>"""
+expect("The regulation applies from 25 May 2018." in extract(guide), "article.gdpr-guide is content, not a GDPR banner")
 
 # --- header/footer/aside nested in <article>/<main> carry exactly what a researcher needs: retained -------------
 article_meta = """

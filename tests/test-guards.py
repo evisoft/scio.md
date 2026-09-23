@@ -331,5 +331,69 @@ class CursorPayload(Sandbox):
         self.assertEqual(out.get("permission"), "deny")
 
 
+# --- prep-6, prep-8: fetch.py shows the text the server's snapshot keeps -------------------------------------------------
+class FetchText(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.fetch = load("fetch")
+
+    def text(self, html, ctype="text/html"):
+        return self.fetch.to_text(html.encode("utf-8") if isinstance(html, str) else html, ctype)
+
+    def test_a_page_wrapped_in_a_form_is_read(self):
+        page = ('<html><body><form method="post" id="aspnetForm"><div><h1>Annual report 2025</h1>'
+                '<p>The ministry recorded 4,200 applications in 2025.</p></div></form></body></html>')
+        self.assertIn("The ministry recorded 4,200 applications in 2025.", self.text(page))
+
+    def test_form_controls_are_still_dropped(self):
+        page = ('<html><body><form><label>Search the site</label><input name="q"><select><option>Option A</option></select>'
+                '<button>Go now</button><textarea>typed text</textarea></form><p>The article text.</p></body></html>')
+        out = self.text(page)
+        self.assertIn("The article text.", out)
+        for noise in ("Option A", "Go now", "typed text"):
+            self.assertNotIn(noise, out)
+
+    def test_consent_and_gdpr_name_content_as_well_as_banners(self):
+        clinical = ('<html><body><main><h1>Clinical trials</h1><section id="informed-consent"><p>Participants must sign a consent '
+                    'form before enrolment.</p></section></main></body></html>')
+        self.assertIn("Participants must sign a consent form before enrolment.", self.text(clinical))
+        guide = ('<html><body><article class="gdpr-guide"><h1>Data protection</h1><p>The regulation applies from 25 May 2018.</p>'
+                 '</article></body></html>')
+        self.assertIn("The regulation applies from 25 May 2018.", self.text(guide))
+        plain = '<html><body><div class="consent-section"><p>Consent must be freely given.</p></div><p>Other text.</p></body></html>'
+        self.assertIn("Consent must be freely given.", self.text(plain))
+
+    def test_consent_banners_are_still_dropped(self):
+        for cls in ("consent-banner", "gdpr-popup", "cookie-consent", "consentModal", "gdpr-consent-notice"):
+            with self.subTest(cls=cls):
+                out = self.text(f'<html><body><div class="{cls}"><p>We value your privacy.</p></div><p>The body.</p></body></html>')
+                self.assertNotIn("We value your privacy", out)
+                self.assertIn("The body.", out)
+
+    def test_a_banner_named_container_holding_the_page_is_kept(self):
+        prose = " ".join(f"Sentence {i} of the guide explains a duty of the controller." for i in range(40))
+        page = f'<html><body><div class="gdpr-notice"><p>{prose}</p></div><p>Footer line.</p></body></html>'
+        self.assertIn("Sentence 39 of the guide", self.text(page))
+
+    def test_inline_tags_split_words_as_the_snapshot_does(self):
+        # HtmlText.StripMarkup: a block tag is a line break, every other tag and every comment a space — so a quote
+        # copied from fetch.py has the snapshot's words (the space is kept only where it separates two of them)
+        self.assertEqual(self.text("<p>The molecule H<sub>2</sub>O has a bond angle of 104.5°.</p>"),
+                         "The molecule H 2 O has a bond angle of 104.5°.")
+        self.assertEqual(self.text("<p>super<wbr>cali and Smith<sup>1</sup> and a<!-- x -->b</p>"),
+                         "super cali and Smith 1 and a b")
+        self.assertEqual(self.text("<div><p>first</p>second</div>"), "first\nsecond")
+        self.assertEqual(self.text("<p>Hello <b>world</b>, <i>again</i>.</p>"), "Hello world, again.")
+
+    def test_a_meta_charset_is_read_when_the_header_names_none(self):
+        body = ('<html><head><meta charset="iso-8859-1"></head><body><p>La Universit\xe9 de Montr\xe9al a \xe9t\xe9 fond\xe9e en 1878.'
+                '</p></body></html>').encode("latin-1")
+        self.assertIn("La Université de Montréal a été fondée en 1878.", self.text(body, "text/html"))
+        legacy = ('<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"></head><body><p>Caf\xe9</p>'
+                  '</body></html>').encode("latin-1")
+        self.assertEqual(self.text(legacy, "text/html"), "Café")
+        self.assertIn("�", self.text(body, "text/html; charset=utf-8"))   # the header wins, as on the server
+
+
 if __name__ == "__main__":
     unittest.main()
