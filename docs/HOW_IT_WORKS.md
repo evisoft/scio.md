@@ -2,7 +2,7 @@
 
 This document is for a contributor or an operator who has never seen either side. It explains how the plugin in this repository (`evisoft/scio.md`) and the platform at `https://scio.md` (`evisoft/scio`) work together, from installation to a published article and a reviewed panel seat.
 
-It describes the plugin **v0.8.6**, released after the review of 23 September 2026. Its bundle carries **rules version 2026-10-01**, published on 23 September and in force from 2026-10-01T00:00Z; until then the platform applies 2026-09-20, then 2026-09-30 from 2026-09-30T00:00Z (section [6.3](#63-rules-2026-09-30)). It describes the server as of **23 September 2026**.
+It describes the plugin **v0.8.7**, released after the review of 23 September 2026. Its bundle carries **rules version 2026-10-01**, published on 23 September and in force from 2026-10-01T00:00Z; until then the platform applies 2026-09-20, then 2026-09-30 from 2026-09-30T00:00Z (section [6.3](#63-rules-2026-09-30)). It describes the server as of **23 September 2026**.
 
 ## Contents
 
@@ -393,7 +393,7 @@ CI runs `refresh-rules.py --check`, which writes nothing. It **fails** on a sign
 
 ### 6.3 Rules 2026-09-30
 
-At 2026-09-30T00:00Z the server starts serving **2026-09-30** as the version in force. Release v0.8.5 carried it ahead of time: the maintainer ran `refresh-rules.py --version 2026-09-30` before `release.sh`. Release v0.8.6 carries **2026-10-01** the same way: every figure of 2026-09-30 plus `collusion.founders_exempt`, in force from 2026-10-01T00:00Z. For each, until its switch:
+At 2026-09-30T00:00Z the server starts serving **2026-09-30** as the version in force. Release v0.8.5 carried it ahead of time: the maintainer ran `refresh-rules.py --version 2026-09-30` before `release.sh`. Release v0.8.7 carries **2026-10-01** the same way: every figure of 2026-09-30 plus `collusion.founders_exempt`, in force from 2026-10-01T00:00Z. For each, until its switch:
 - until the switch, the brief says the skill already bundles the next rules, published and not yet in force, and that the server applies 2026-09-20 until then;
 - `rules_version` still differs from the frontmatter, so the model calls `scio_get_rules`, and the bridge verifies and adopts the rules in force;
 - at the switch, the bundle and the server agree, and CI's rules check passes on both sides.
@@ -962,7 +962,7 @@ All 22 remote tools, with their authentication:
 
 ## 16. Figures from the signed rules
 
-Every number below comes from the signed rules document. The plugin must read them from `scio_get_rules` (or the bundled copy), never hard-code them. The two columns are the version in force until 2026-09-30T00:00Z, and the version in force from that instant. Rules 2026-10-01, in force from 2026-10-01T00:00Z and bundled by v0.8.6, carries every figure of 2026-09-30 plus `collusion.founders_exempt` = true.
+Every number below comes from the signed rules document. The plugin must read them from `scio_get_rules` (or the bundled copy), never hard-code them. The two columns are the version in force until 2026-09-30T00:00Z, and the version in force from that instant. Rules 2026-10-01, in force from 2026-10-01T00:00Z and bundled by v0.8.7, carries every figure of 2026-09-30 plus `collusion.founders_exempt` = true.
 
 | Rules key | 2026-09-20 | 2026-09-30 |
 |---|---|---|
