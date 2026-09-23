@@ -32,7 +32,7 @@ def normalise(s):
 
 def configure():
     """The paths every check compares against. Called inside main's guarded block: whatever raises here is a refusal."""
-    global keys_path, CFG_DIR, KEYS_DIR, CWD, CFG_REL, REAL_KEY, _home_real, _cwd_real, GUARDED, ROOTS
+    global keys_path, CFG_DIR, KEYS_DIR, CWD, CFG_REL, REAL_KEY, REAL_DIRS, _home_real, _cwd_real, GUARDED, ROOTS
     keys_path = os.environ.get("SCIO_KEYS_FILE") or os.path.join(DEFAULT_DIR, "keys")
     CFG_DIR = normalise(DEFAULT_DIR).rstrip("/")                 # …/.config/scio
     KEYS_DIR = normalise(os.path.dirname(os.path.abspath(keys_path))).rstrip("/")   # where a custom SCIO_KEYS_FILE lives
@@ -42,6 +42,8 @@ def configure():
         KEYS_DIR = ""   # not a dedicated directory (HOME, the workspace, /tmp, /opt …): only the file itself is a secret there
     CFG_REL = CFG_DIR.rsplit("/", 2)[-2] + "/" + CFG_DIR.rsplit("/", 1)[-1]   # .config/scio, for a relative spelling after cd ~
     REAL_KEY = os.path.realpath(os.path.expanduser(normalise(keys_path)))
+    # resolved once: names_credential_path runs on every word of a command, and a realpath walks the filesystem
+    REAL_DIRS = tuple(os.path.realpath(d) for d in (CFG_DIR, KEYS_DIR) if d)
     _home_real, _cwd_real = os.path.realpath(HOME), os.path.realpath(os.getcwd())
     GUARDED, ROOTS = guarded_ancestors(), home_roots()
 
@@ -69,15 +71,7 @@ def path_values(node, field=""):
 
 def names_credential_path(value):
     p = os.path.realpath(os.path.expanduser(normalise(value)))
-    key = os.path.realpath(os.path.expanduser(normalise(keys_path)))
-    if p == key:
-        return True
-    for directory in (CFG_DIR, KEYS_DIR):
-        if directory:
-            real = os.path.realpath(directory)
-            if p == real or p.startswith(real + os.sep):
-                return True
-    return False
+    return p == REAL_KEY or any(p == real or p.startswith(real + os.sep) for real in REAL_DIRS)
 
 
 # --- a directory that holds the keys file, read whole: `grep -r . ~/.config`, `tar c ~/.config | base64`, the Grep tool on
@@ -747,7 +741,7 @@ def decide(payload):
             or re.search(r"(?<![\w.-])" + re.escape(CFG_REL) + r"(?![\w.-])", nblob)
             or (re.search(r"\.config/[^\s/]*[*?\[]", nblob) and re.search(r"\b(keys|scio)\b", spelled))   # a glob under .config reaching for the file
             or re.search(r"\bfind\b[^\n;|&]*\.config\b[^\n;|&]*\bkeys\b", nblob)
-            or any(names_credential_path(v) for v in paths)
+            or any(names_credential_path(v) for v in dict.fromkeys(paths))   # each distinct word once: a realpath walks the filesystem
             or (cmd is not None and reads_keys_through_a_directory(cmd, commands))
             # a search tool reads every file under its path (Claude Code's Grep); a listing (Glob) reads only names
             or (re.search(r"grep", tool, re.I) and any(names(v, _cwd_real, GUARDED) for v in path_values(payload.get("tool_input", {}))))):
