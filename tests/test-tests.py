@@ -438,6 +438,12 @@ class ManifestTests(unittest.TestCase):
         env = {"CURSOR_PLUGIN_ROOT": str(plugin)}
         self.assertNotIn("WARNING", self.whoami(plugin / "skills/scio", **env).stdout)
         hooks = (plugin / "hooks/hooks-cursor.json").read_text(encoding="utf-8")
+        # setup.py names the interpreter that ran it (identity R-HOOKS-PY): another program in front of a guard is a change
+        spelled = json.dumps(PY)[1:-1]
+        self.assertIn(spelled, hooks)
+        (plugin / "hooks/hooks-cursor.json").write_text(hooks.replace(spelled, json.dumps(str(self.base / "python3"))[1:-1], 1),
+                                                        encoding="utf-8")
+        self.assertIn("hooks/hooks-cursor.json", self.whoami(plugin / "skills/scio", **env).stdout)
         (plugin / "hooks/hooks-cursor.json").write_text(hooks.replace("cursor-hook.py", "cursor-hook-disabled.py", 1), encoding="utf-8")
         self.assertIn("hooks/hooks-cursor.json", self.whoami(plugin / "skills/scio", **env).stdout)
 

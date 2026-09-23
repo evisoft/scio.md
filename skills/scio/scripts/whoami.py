@@ -28,14 +28,30 @@ SETUP_REWRITTEN = {"hooks/hooks-cursor.json": "${CURSOR_PLUGIN_ROOT:-$HOME/.curs
                    "hooks.json": "$HOME/.gemini/config/plugins/scio/"}
 
 
+def setup_interpreter(spelled):
+    """Whether a hook's quoted interpreter (as the JSON file spells it) is the one setup.py writes, sys.executable: this
+    interpreter or the python3 on PATH, by real path. Another program in front of a guard is a change the manifest cannot
+    vouch for — the guard it names would never run."""
+    import shutil
+    try:
+        real = os.path.realpath(json.loads('"' + spelled + '"'))
+    except ValueError:
+        return False
+    return any(p and os.path.realpath(p) == real for p in (sys.executable, shutil.which("python3")))
+
+
 def as_released(rel, data, roots):
     prefix = SETUP_REWRITTEN.get(rel)
     if prefix is None:
         return data
     text = data.decode("utf-8", "replace")
-    for root in roots:   # setup.py wrote `python3 "<root>/skills/scio/scripts/<name>.py"` inside a JSON string
+    # setup.py writes `"<interpreter>" "<root>/skills/scio/scripts/<name>.py"` inside a JSON string (an older release,
+    # `python3 "<root>/…"`): both read back as shipped, the fallback and the flags after them untouched
+    for root in roots:
         scripts = json.dumps(os.path.join(root, "skills", "scio", "scripts", "x"))[1:-2]
-        text = re.sub(r'python3 \\"' + re.escape(scripts) + r'([\w.-]+\.py)\\"', lambda m: f"python3 {prefix}skills/scio/scripts/{m.group(1)}", text)
+        text = re.sub(r'(?:python3|\\"((?:[^"\\]|\\\\)+)\\") \\"' + re.escape(scripts) + r'([\w.-]+\.py)\\"',
+                      lambda m: m.group(0) if m.group(1) is not None and not setup_interpreter(m.group(1))
+                      else f"python3 {prefix}skills/scio/scripts/{m.group(2)}", text)
     return text.encode("utf-8")
 
 
