@@ -181,5 +181,45 @@ class ProposalScan(Sandbox):
         self.assertTrue(any(scan.blocks_proposal(h) for h in scan.scan_text(text, "body")))
 
 
+# --- guards-2: a long URL is decided before the harness's hook timeout, never killed into an allow ---------------------
+class GuardFetchCost(Sandbox):
+    def test_a_long_crafted_query_is_denied_quickly(self):
+        url = "http://169.254.169.254/latest/meta-data/?" + "key_" * 15000
+        started = time.perf_counter()
+        decision = self.decision("guard-fetch.py", "mcp__plugin_playwright_playwright__browser_navigate", {"url": url})
+        self.assertEqual(decision, "deny")
+        self.assertLess(time.perf_counter() - started, 2.0)
+
+    def test_check_is_linear_in_the_query(self):
+        guard = load("guard-fetch")
+        for url in ("https://1.1.1.1/?" + "key_" * 15000, "https://1.1.1.1/?" + "a_" * 30000 + "=1",
+                    "https://1.1.1.1/?" + "key_" * 1900):
+            started = time.perf_counter()
+            reason = guard.check(url)
+            self.assertLess(time.perf_counter() - started, 0.5, url[:40])
+            if len(url) > 8192:
+                self.assertIsNotNone(reason)
+
+    def test_a_check_that_hangs_is_refused_at_the_deadline(self):
+        # a resolver that never answers: the harness would kill the hook, and a killed hook allows the call
+        code = ("import sys, time, socket, importlib; sys.path.insert(0, %r); g = importlib.import_module('guard-fetch'); "
+                "socket.getaddrinfo = lambda *a, **k: time.sleep(60); g.DEADLINE_SECONDS = 0.5; g.main()") % SCRIPTS
+        started = time.perf_counter()
+        r = subprocess.run([PY, "-c", code], input=json.dumps({"tool_name": "WebFetch", "tool_input": {"url": "https://example.org/"}}),
+                           capture_output=True, text=True, timeout=20)
+        self.assertLess(time.perf_counter() - started, 5)
+        self.assertEqual(json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_the_credential_parameter_rule(self):
+        guard = load("guard-fetch")
+        for query in ("access_token=x", "api_key=x", "apikey=x", "x-api-key=x", "session.id=x", "SessionId=x", "a=1&Auth=x",
+                      "a=1;token=x", "access%5Ftoken=x", "sig=x", "user[password]=x"):
+            with self.subTest(query=query):
+                self.assertIn("identifier", guard.check("https://1.1.1.1/?" + query) or "")
+        for query in ("keyword=x", "monkey=x", "q=api+key", "tokens_of_appreciation", "author=x", "page=2&sort=asc"):
+            with self.subTest(query=query):
+                self.assertIsNone(guard.check("https://1.1.1.1/?" + query))
+
+
 if __name__ == "__main__":
     unittest.main()
