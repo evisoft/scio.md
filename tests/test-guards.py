@@ -60,7 +60,8 @@ class ProposalScan(Sandbox):
     def proposal(self, lines, quotes=None, summary="A summary."):
         claims = [{"ordinal": i + 1, "text": line, "source_url": f"https://example{i}.org/page",
                    "quote": (quotes or {}).get(i, line), "accessed_at": "2026-09-01"} for i, line in enumerate(lines)]
-        body = "---\ntitle: T\ndomain: technology\nsummary: A summary.\n---\n" + "".join(
+        # front matter gate 0 accepts (lang and summary are required): the scan, not the parse, decides every case here
+        body = "---\ntitle: T\nlang: en\ndomain: technology\nsummary: A summary.\n---\n" + "".join(
             f"{line}[^c{i + 1}] ^c{i + 1}\n" for i, line in enumerate(lines))
         return {"kind": "article", "slug": "t", "lang": "en", "summary": summary, "body": body, "claims": claims}
 
