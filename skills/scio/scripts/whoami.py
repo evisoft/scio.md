@@ -11,7 +11,7 @@ import json, os, re, sys, time, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scio_common import USER_AGENT, OPENER, API, SCIO_HOST, env_roles, keys_path, parse_instant, resolve_key, read_keys
 
-BUNDLED_RULES = "2026-09-30"
+BUNDLED_RULES = "2026-10-01"
 
 
 SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
