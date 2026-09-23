@@ -13,8 +13,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
+try:
+    import tomllib   # Python 3.11+. The runtime scripts need nothing newer than 3.8, so neither may this suite as a whole:
+except ImportError:  # on 3.10 only the check that parses TOML is skipped
+    tomllib = None
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +186,7 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(ended.exception.code, 0)
         self.assertEqual(scio_common.read_keys()[0], {"old": "old_key", "new": "new_key"})
 
+    @unittest.skipIf(tomllib is None, "tomllib is Python 3.11+")
     def test_codex_servers_share_custom_work_root(self):
         # Setup writes only into this temporary home.
         r = self.run_script("setup.py", ["--harness", "codex", "--yes"], env=dict(self.env, HOME=str(self.base)))
@@ -210,8 +214,11 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(decision(cfg["bash"], f"python3 {SCRIPTS}/workdir.py write demo"), "allow")
 
     def test_rules_check_verifies_signature_and_actual_bundled_text(self):
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        from cryptography.hazmat.primitives import serialization
+        try:   # optional, as in the master suite: signing a test document needs it, the skill itself does not
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            from cryptography.hazmat.primitives import serialization
+        except ImportError:
+            self.skipTest("cryptography is not installed")
         runtime = self.base / "scio"
         shutil.copytree(SCRIPTS.parent, runtime, ignore=shutil.ignore_patterns("__pycache__"))
         key = Ed25519PrivateKey.generate()
