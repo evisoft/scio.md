@@ -35,7 +35,17 @@ RUN set -eux; \
     esac; \
     command -v "${HARNESS}" >/dev/null || { echo "${HARNESS} is not on PATH after installing it" >&2; exit 3; }
 
+# What the simulation reads, and nothing else: the skill, the tests with the stand-in, and the plugin files a
+# harness loads (the plugin under test is built from them in run.sh). Never `COPY .` — a maintainer's .env, the
+# usual home of the model keys simulate.sh passes at run time, would be baked into a layer of every image.
 WORKDIR /repo
-COPY . /repo
+COPY skills /repo/skills
+COPY tests /repo/tests
+COPY scripts /repo/scripts
+COPY .claude-plugin /repo/.claude-plugin
+COPY .mcp.json /repo/.mcp.json
+COPY hooks /repo/hooks
+COPY commands /repo/commands
+COPY agents /repo/agents
 
 ENTRYPOINT ["/repo/tests/sim/run.sh"]
