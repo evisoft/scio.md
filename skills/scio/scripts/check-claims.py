@@ -337,8 +337,8 @@ def check(inp):
             warnings.append(f"undated time-bound wording: \"{s[:70]}…\" — date it (C4)")
         if PUFFERY.search(s):
             warnings.append(f"puffery or unattributed consensus: \"{s[:70]}…\" — quote and attribute, or drop (C2, C6)")
-        if READER.search(s):
-            problems.append(f"text addressed to the reader or to agents: \"{s[:70]}…\" (C6)")
+        if READER.search(s):   # a warning: "The Reader" is a novel and "You Should Be Dancing" a song; gate 0 refuses neither
+            warnings.append(f"text addressed to the reader or to agents: \"{s[:70]}…\" — rephrase unless it is a name or a title (C6)")
         if VAGUE_NUM.search(s) and not re.search(r"\d", s):
             warnings.append(f"vague quantity without a number: \"{s[:70]}…\" — use the source's figure (C4)")
     if fm and not fm.get("summary"):
@@ -384,9 +384,9 @@ def check(inp):
     # scanned in full — headings, embeds, code and the summary included: an instruction hidden in a heading is still one
     hits = _scan.dedupe(_scan.scan_text(full_prose, "body") + _scan.scan_text(summary_text, "summary") + _scan.scan_json(claims, "claims"))
     for h in hits:   # every hit is classified — six warnings in the body must not hide a blocking hit in a claim's quote
-        target = problems if h["pattern"] in ("addressed_to_agent", "harness_vocabulary", "fake_role_marker", "skip_verification",
-                                              "verdict_steering", "exfiltration", "script_or_markup", "private_ip", "private_host",
-                                              "non_http_scheme", "non_ascii_host", "punycode_host", "zero_width_chars", "bidi_controls", "escaped_text", "shell_command") else warnings
+        # blocking: steering and what gate 0 refuses. The vocabulary of a subject (an access token, a system prompt), and
+        # in a verbatim quote anything gate 0 accepts, are warnings (scan-injection.blocks_proposal)
+        target = problems if _scan.blocks_proposal(h) else warnings
         target.append(f"{h['pattern']} at {h['where']}: …{h['excerpt'][:80]}… (security.md §4)")
     return problems, warnings[:12]
 
