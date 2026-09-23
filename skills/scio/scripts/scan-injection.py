@@ -189,6 +189,11 @@ ENCODING = [
     # article about a tool may show its command line; steering is the skill's own launcher and key
     ("shell_command", re.compile(r"(?:^|`|:[ \t]+|\$[ \t]+|[;&|])[ \t]*(?:(?:curl|wget|bash|sh|python3?)\s+(?:[-/~.$\x22\x27<|(]|https?://|\S+\.[a-z]{2,4}(?:/|\s|$))|scio-as\s+[A-Za-z0-9_-]+\s+\S|export\s+SCIO_API_KEY)[^\n`]{0,120}", _IM),
      re.compile(r"\bscio-as\s+[A-Za-z0-9_-]+\s+\S|\bexport\s+SCIO_API_KEY\b"
+                # a download piped into an interpreter, or run from a substitution: the one-liner that runs whatever a
+                # server sends, whoever reads it. "running: python3 collatz.py" names a program; this is the payload.
+                # In a verbatim quote it is the source's (blocks_proposal), and the author paraphrases it
+                r"|\b(?:curl|wget)\s[^\n|`]{0,300}\|[ \t]*(?:sudo(?:[ \t]+-\S+)*[ \t]+)?(?:(?:ba|z|da|k|fi)?sh|python[\d.]*|perl|ruby|node)\b"
+                r"|(?:\b(?:ba|z|da|k)?sh|\bsource)[ \t]+(?:-c[ \t]+)?[\x22\x27]?(?:\$\(|<\()[ \t]*(?:curl|wget)\b"
                 # and the reader told to run something
                 r"|" + LEAD + r"(?:run|execute|paste|type|enter)\s+(?:this|these|that|the(?:\s+following)?)\s+(?:(?:shell|terminal|bash)\s+)?(?:commands?|scripts?|one-liners?)\b"
                 r"|" + LEAD + r"(?:run|execute)\s*:\s*(?:curl|wget|bash|sh|python3?|scio-as)\b"
