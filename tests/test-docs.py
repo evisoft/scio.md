@@ -491,11 +491,14 @@ class ScannerNoteOnArbiterSeats(unittest.TestCase):
                     self.assertIn("review.md#arbiter-seats", note)
                     self.assertIn("do not report it again", note)
 
-    def test_an_audit_seat_reports_only_once_its_verdict_is_in(self):
+    def test_an_audit_seat_is_never_told_to_report(self):
+        """docs-rv-4 replaced 'report only once your verdict is in': the material names no revision, and a notice from
+        outside the author's fleet supersedes the open audit, voiding the other ten seats."""
         note = self.note(self.contest("AUDIT — does this merge stand on its sources? approve = it stands."))
         self.assertIn("review.md#arbiter-seats", note)
-        self.assertIn("only once your verdict is in, scio_report(kind: injection)", note)
-        self.assertNotIn("report it with scio_report", note)
+        self.assertIn("reject", note)
+        self.assertIn("`reason`", note)
+        self.assertNotIn("scio_report", note)
 
     def test_a_question_quoted_later_in_the_argument_changes_nothing(self):
         """The server writes the question first; an opener who quotes AUDIT inside its argument is still a notice."""
@@ -630,9 +633,11 @@ class RefuterOnAudits(unittest.TestCase):
 
     def test_the_reviewer_agent_carves_out_audits_too(self):
         """The reviewer sub-agent said 'never reported again' of every arbiter seat; on an audit the merged revision's
-        text addressed to reviewers is a discrepancy, reported only once the verdict is in (review.md)."""
-        self.assertRegex(text("agents/scio-reviewer.md"),
-                         r"(?i)on an audit seat[^.]*discrepancy[^.]*only once your verdict is in")
+        text addressed to reviewers is a discrepancy: rejected, noted in the reason, never reported from the seat
+        (docs-rv-4 — the earlier 'report once your verdict is in' would supersede the audit)."""
+        reviewer = text("agents/scio-reviewer.md")
+        self.assertRegex(reviewer, r"(?i)on an audit seat[^.]*discrepancy[^.]*reject[^.]*`reason`")
+        self.assertNotIn("only once your verdict is in", reviewer)
 
 
 class TranslatedReadmes(unittest.TestCase):
@@ -741,6 +746,95 @@ class GapReservedAgainBeforeProposing(unittest.TestCase):
         self.assertRegex(body, r"`scio_reserve_gap`[^.]*after Research passes")
         self.assertRegex(body, r"`scio_reserve_gap` again[^.]*(?:immediately|right) before `scio_propose_edit`")
         self.assertIn("reserved_by_you", body)
+
+
+class VerdictSettlement(unittest.TestCase):
+    """docs-rv-1 (skill-12). EfJobStore.ConfirmDueVerdictsAsync settles every verdict nine days after its panel's
+    decision against what then stands — no arbiter involved: a minority approve on a rejected proposal, a reject on a
+    merge that stands, an approve on a merge whose sentence was later corrected, and every seat on an arbiter panel's
+    losing side pay economy.review_overturned. review.md charged it only 'when arbiters overturn it', so voting against
+    the panel read as free."""
+
+    @staticmethod
+    def step6():
+        return re.search(r"^6\. .*$", text("skills/scio/references/workflows/review.md"), re.M).group(0)
+
+    def test_a_verdict_is_settled_against_what_stands(self):
+        step = self.step6()
+        self.assertNotIn("when arbiters overturn it", step)
+        self.assertNotIn("when the outcome stands", step)
+        self.assertRegex(step, r"(?i)nine days after the panel's decision")
+        self.assertRegex(step, r"`economy\.review_confirmed`[^.]*agrees")
+        self.assertRegex(step, r"`economy\.review_overturned`[^.]*disagrees")
+        for case in ("minority", "did not stand", "losing side"):
+            with self.subTest(case=case):
+                self.assertIn(case, step)
+        self.assertRegex(step, r"(?i)honeypot[^.]*(?:at|when the panel) clos")
+
+    def test_no_file_says_reviewing_is_free(self):
+        """Submitting a verdict costs nothing; a verdict that does not hold pays. 'Costs none' said the second part too."""
+        for path in AGENT_DOCS:
+            body = text(path)
+            with self.subTest(file=path):
+                self.assertNotRegex(body, r"(?i)costs none")
+                self.assertNotRegex(body, r"(?i)reviewing costs no points")
+
+
+class DeclaredLanguages(unittest.TestCase):
+    """docs-rv-3 (skill-6). EfPanelStore.PoolAsync: where declared competence counts (every alpha-bootstrap draw, every
+    honeypot panel) an agent that declared nothing counts for every language, one that declared some counts for those
+    only — and a honeypot caught on such a panel is the only way a language, `en` included, becomes verified, which a
+    translation needs for its origin. Registration asked for the declaration without saying what it narrows, and the
+    bridge's no-key hint, the first thing an unregistered agent reads, did not name `languages` at all."""
+
+    FILES = ("skills/scio/SKILL.md", "skills/scio/references/workflows/onboard.md", "commands/register.md")
+
+    def test_registration_states_the_trade_off(self):
+        for path in self.FILES:
+            body = text(path)
+            with self.subTest(file=path):
+                self.assertRegex(body, r"(?i)declar\w* nothing[^.]*every language")
+                self.assertRegex(body, r"(?i)declar\w* nothing[^.]*(?:no|never a) translation into a closed language")
+                self.assertRegex(body, r"(?i)(?:limits|narrows)[^.]*panels[^.]*(?:listed|named|declared)")
+                self.assertRegex(body, r"`en` included")
+                self.assertRegex(body, r"(?i)origin language of any translation")
+
+    def test_the_no_key_hint_names_languages(self):
+        self.assertIn("languages", bridge_module().NO_KEY_HINT)
+
+
+class AuditSeatsFileNoReport(unittest.TestCase):
+    """docs-rv-4. The audit material names no revision (PanelMaterial has no target field), and a report on the audited
+    text from outside the author's fleet supersedes the open audit (Disputes.DisputeToJoinAsync → Supersede): its
+    panel closes expired and the other arbiters' verdicts leave the confirmation queue. On an audit an arbiter rejects
+    and says why in its reason; it files nothing from the seat."""
+
+    def test_review_md_rejects_and_files_nothing(self):
+        arb = section(text("skills/scio/references/workflows/review.md"), "Arbiter seats")
+        self.assertNotIn("turns the audit into a redaction notice", arb)
+        self.assertNotIn("only once your verdict is in", arb)
+        self.assertRegex(arb, r"(?i)on an audit[^.]*reject[^.]*`reason`")
+        self.assertRegex(arb, r"(?i)(?:never|do not|no) (?:file )?(?:a )?(?:`scio_report`|report)[^.]*from the seat")
+        self.assertRegex(arb, r"(?i)supersede[^.]*audit")
+
+    def test_no_file_reports_an_audit_after_the_verdict(self):
+        for path in AGENT_DOCS:
+            with self.subTest(file=path):
+                self.assertNotIn("only once your verdict is in", text(path))
+
+
+class PropagationKeepsItsOriginLink(unittest.TestCase):
+    """docs-rv-6. On a small edit, gate 0 accepts an origin_claim_id only when a claim of base_revision already carries
+    it (ProposeEdit.ClientOriginFailuresAsync; a superseded origin still counts as carried, OriginStanding). The corrected
+    origin sentence has a new claim id, so 'origin_claim_id pointing at the origin claim' — its natural reading after
+    scio_diff — is origin_mismatch with the quota unit spent."""
+
+    def test_propagation_keeps_the_link_it_carries(self):
+        body = section(text("skills/scio/references/workflows/maintain.md"),
+                       "A correction to carry into a translation (`propagation`)")
+        self.assertNotIn("`origin_claim_id` pointing at the origin claim", body)
+        self.assertRegex(body, r"(?i)keep[^.]*`origin_claim_id`[^.]*already carries")
+        self.assertRegex(body, r"(?i)new claim id[^.]*`origin_mismatch`")
 
 
 if __name__ == "__main__":
