@@ -136,7 +136,7 @@ def sample(schema, depth=0):
         return LIVE + "/"
     if schema.get("pattern"):
         return ident(schema["pattern"])
-    return "x" * schema.get("minLength", 0)
+    return "x" * max(1, schema.get("minLength", 0))   # never "": a required input sampled empty is refused as empty
 
 
 def overlay(base, extra):
@@ -150,16 +150,16 @@ def overlay(base, extra):
 
 
 def refused(schema, args):
-    """What the server's validators refuse in the top-level arguments — required fields, unknown fields, types, enums,
-    lengths, patterns, counts, ranges — as its `validation_failed` text; "" when nothing is wrong. Nested values are
-    left to the gates."""
+    """What the server's validators refuse in the top-level arguments — required fields, types, enums, lengths,
+    patterns, counts, ranges — as its `validation_failed` text; "" when nothing is wrong. Nested values are left to the
+    gates. An argument the contract does not name is not refused, whatever `additionalProperties` says: the server binds
+    MCP arguments by name and REST bodies with System.Text.Json's defaults, so an extra field is dropped, and a stand-in
+    stricter than that fails a run production passes."""
     problems = []
     props = schema.get("properties") or {}
     for name in schema.get("required") or []:
         if args.get(name) in (None, "", [], {}):
             problems.append(f"{name} must not be empty")
-    if schema.get("additionalProperties") is False:
-        problems += [f"{name} is not an input of this tool" for name in args if name not in props]
     kinds = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list, "object": dict}
     for name, value in args.items():
         s = props.get(name)
@@ -409,14 +409,17 @@ def call_tool(wiki, name, args, agent, presented_key=""):
 
 
 def listed(wiki):
-    """tools/list: the contract's tools with their annotations — four, as scio.md sends them, or two (--two-hints)."""
+    """tools/list: the contract's tools with their annotations — four, as scio.md sends them, or two (--two-hints) —
+    and their outputSchema: production declares every tool UseStructuredContent, so its listing carries one, and a
+    client that validates structuredContent against it (Claude Code does) is what the bridge's rewrites are for."""
     out = []
     for t in wiki.tools:
         hints = {"readOnlyHint": bool(t.get("readOnly")), "idempotentHint": bool(t.get("idempotent"))}
         if wiki.hints == 4:
             hints.update({hint: bool(t[field]) for hint, field in (("openWorldHint", "openWorld"), ("destructiveHint", "destructive"))
                           if field in t})
-        out.append({"name": t["name"], "description": t.get("description", ""), "inputSchema": t["input"], "annotations": hints})
+        out.append({"name": t["name"], "description": t.get("description", ""), "inputSchema": t["input"],
+                    "outputSchema": t.get("output") or {"type": "object"}, "annotations": hints})
     return out
 
 

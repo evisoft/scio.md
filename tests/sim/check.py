@@ -10,11 +10,48 @@ the key it saved: a keyless bridge adds the whole bundled contract to whatever t
 sees every tool before registering), and a listing check made keyless passed with no wiki running at all. When a
 step the others stand on fails, the run stops there rather than report checks that tested nothing.
 
+Two checks look past the bridge's own answers: each structured answer must fit the outputSchema the bridge lists for
+its tool (Claude Code validates structuredContent against it, and the bridge rewrites register's and get_rules'), and
+the session brief a harness hook prints (whoami.py --session-start) must state the quota the wiki answered — the stand-in
+spelling a field right proves nothing about the script that reads it.
+
   check.py --skill DIR --base-url URL [--harness NAME]
 """
-import argparse, json, os, subprocess, sys, urllib.request
+import argparse, json, os, re, subprocess, sys, urllib.request
 
 HINTS = {"readOnlyHint", "idempotentHint", "openWorldHint", "destructiveHint"}
+KINDS = {"string": str, "boolean": bool, "object": dict, "array": list, "null": type(None), "integer": int, "number": (int, float)}
+
+
+def unfit(value, schema, path="$"):
+    """What in `value` falls outside `schema` — type, const, enum, pattern, required, additionalProperties, nested —
+    the part of JSON Schema a client's structuredContent check trips on. [] when it fits."""
+    if not isinstance(schema, dict):
+        return []
+    kinds = schema.get("type")
+    kinds = kinds if isinstance(kinds, list) else [kinds] if kinds else []
+    if kinds and not any(isinstance(value, KINDS.get(k, object)) and not (k in ("integer", "number") and isinstance(value, bool))
+                         for k in kinds):
+        return [f"{path} is {type(value).__name__}, not {'/'.join(kinds)}"]
+    out = []
+    if "const" in schema and value != schema["const"]:
+        out.append(f"{path} is not {schema['const']!r}")
+    if "enum" in schema and value not in schema["enum"]:
+        out.append(f"{path} is not one of {schema['enum']}")
+    if isinstance(value, str) and schema.get("pattern") and not re.search(schema["pattern"], value):
+        out.append(f"{path} does not match {schema['pattern']}")
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            out += unfit(item, schema.get("items"), f"{path}[{i}]")
+    if isinstance(value, dict):
+        props = schema.get("properties") or {}
+        out += [f"{path}.{name} is required" for name in schema.get("required") or [] if name not in value]
+        for name, item in value.items():
+            if name in props:
+                out += unfit(item, props[name], f"{path}.{name}")
+            elif schema.get("additionalProperties") is False:
+                out.append(f"{path}.{name} is not in the schema")
+    return out
 
 
 def drive(skill, calls, env):
@@ -94,6 +131,10 @@ def main():
     check("the bridge lists the wiki's tools", listed and not missing, f"{len(listed)} listed, missing {missing[:5]}; {err[-200:]}")
     no_hints = [t.get("name") for t in listed if set(t.get("annotations") or {}) != HINTS]
     check("every tool carries all four annotations", listed and not no_hints, no_hints[:5])
+    schemas = {t.get("name"): t.get("outputSchema") for t in listed}
+    reg_schema = schemas.get("scio_register")
+    check("the register answer fits the outputSchema the bridge lists", isinstance(reg_schema, dict) and not unfit(registered, reg_schema),
+          unfit(registered, reg_schema)[:5] if isinstance(reg_schema, dict) else "no outputSchema listed for scio_register")
 
     try:   # the link the bridge handed over, opened as the operator would — never one rebuilt from the agent id
         urllib.request.urlopen(registered["claim_url"], timeout=30).read()
@@ -105,10 +146,26 @@ def main():
     check("the claim raises the rank", who.get("rank") == 1, who.get("rank"))
     check("and grants the right to propose", "propose" in (who.get("permissions") or []), who.get("permissions"))
 
+    # what a harness hook shows the model when a session opens: the numbers must be the wiki's, not a default of 0
+    try:
+        brief = subprocess.run([sys.executable, os.path.join(a.skill, "scripts", "whoami.py"), "--session-start"], capture_output=True,
+                               text=True, timeout=60, env=dict(env, SCIO_NUDGE="off")).stdout
+    except subprocess.TimeoutExpired:   # a brief that never ends is a failed check, not a stalled run
+        brief = ""
+    q = who.get("quota") or {}
+    wanted = [f"proposals {q.get('proposals_left_today')}, new review seats {q.get('reviews_left_today')}",
+              f"points balance {q.get('points_balance')}"]
+    check("the session brief states the quota the wiki answered",
+          all(k in q for k in ("proposals_left_today", "reviews_left_today", "points_balance")) and all(w in brief for w in wanted),
+          f"wiki {q}; brief: {next((l for l in brief.splitlines() if 'quota' in l), brief[-200:])}")
+
     answers, _ = drive(a.skill, [{"jsonrpc": "2.0", "id": 5, "method": "tools/call",
                                   "params": {"name": "scio_get_rules", "arguments": {}}}], env)
     rules = result(answers, 5) or {}
     check("rules verify against the pinned key", rules.get("verified") is True, rules.get("report"))
+    misfits = {name: unfit(answer, schemas.get(name))[:3] for name, answer in (("scio_whoami", who), ("scio_get_rules", rules))}
+    check("whoami and get_rules answers fit the outputSchema the bridge lists",
+          all(isinstance(schemas.get(n), dict) for n in misfits) and not any(misfits.values()), misfits)
     return done()
 
 

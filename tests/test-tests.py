@@ -538,6 +538,42 @@ class StandInContractTests(unittest.TestCase):
         self.assertEqual(who["rank"], 1)
         self.assertGreater(who["quota"]["points_balance"], 0)
 
+    def test_whoami_py_prints_the_quota_the_wiki_answered(self):
+        """ident-20: the stand-in spelling the fields right proves nothing about the script that reads them."""
+        key, _ = self.claimed_agent("claude-haiku-5")
+        q = self.data(self.call("scio_whoami", {}, key))["quota"]
+        self.assertTrue(q["proposals_left_today"] and q["reviews_left_today"] and q["points_balance"], q)   # 0 would match a default
+        with tempfile.TemporaryDirectory(prefix="scio-brief-") as home:
+            skill = StandIn.fake.skill_copy(self.wiki.base, Path(home) / "skill")
+            keys = Path(home) / "keys"
+            keys.write_text(f"haiku={key}\n# default haiku\n", encoding="utf-8")
+            for args in ([], ["--session-start"]):
+                with self.subTest(args=args):
+                    out = subprocess.run([PY, str(skill / "scripts/whoami.py"), *args], capture_output=True, text=True, timeout=60,
+                                         cwd=home, env=clean_env(HOME=home, SCIO_KEYS_FILE=str(keys), SCIO_NUDGE="off")).stdout
+                    self.assertIn("rank R1", out)
+                    self.assertIn(f"proposals {q['proposals_left_today']}, new review seats {q['reviews_left_today']}", out)
+                    self.assertIn(f"points balance {q['points_balance']}", out)
+
+    def test_an_argument_the_contract_does_not_name_is_ignored_as_the_server_ignores_it(self):
+        """The server binds MCP arguments by name and REST bodies with System.Text.Json's defaults: an extra field is
+        dropped, never refused. A stand-in that refused it would fail a simulation production passes."""
+        searched = self.call("scio_search", {"query": "Nothing written yet", "foo": 1})
+        self.assertFalse(searched.get("isError"), searched)
+        self.data(self.call("scio_register", {"display_name": "t", "model_family": "claude", "model_version": "claude-opus-5",
+                                              "alias": "kept-by-a-bridge-that-forgot"}))
+
+    def test_tools_list_carries_each_tools_output_schema(self):
+        """Production declares every tool UseStructuredContent = true, so its listing has an outputSchema — the schema
+        Claude Code validates structuredContent against, and the one the bridge rewrites for scio_register."""
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}).encode()
+        req = urllib.request.Request(self.wiki.base + "/mcp", data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            tools = json.loads(r.read())["result"]["tools"]
+        for t in tools:
+            with self.subTest(tool=t["name"]):
+                self.assertEqual(t.get("outputSchema"), self.contract[t["name"]]["output"])
+
     def test_source_verdicts_use_the_contract_enums(self):
         key, _ = self.claimed_agent("gemini-2.5-pro")
         self.wiki.sources["https://example.org/report"] = "The river is 120 km long."
@@ -566,17 +602,40 @@ class StandInContractTests(unittest.TestCase):
         self.conforms("scio_get_article", article)
         self.assertIn("120 km", article["body"])
 
+    def an_article_and_a_seat_for(self, key):
+        """A merged article to read and an open panel seat for `key`: what the stateful tools need to answer."""
+        author, _ = self.claimed_agent("grok-4")
+        claims = [{"ordinal": 1, "text": "The lake is 12 km wide.", "source_url": "https://example.org/lake",
+                   "quote": "The lake is 12 km wide.", "accessed_at": "2026-09-18T10:00:00.000000+00:00"}]
+        panels = {}
+        for slug in ("lake", "pond"):
+            proposed = self.data(self.call("scio_propose_edit", {"slug": slug, "lang": "en", "kind": "article", "summary": "A lake.",
+                                                                 "body": "The lake is 12 km wide.[^c1] ^c1\n", "claims": claims,
+                                                                 "idempotency_key": "k-" + slug + "-0001"}, author))
+            panels[slug] = self.wiki.proposals[proposed["proposal_id"]]["panel"]
+            if slug == "lake":   # merged: three approvals of the first tier
+                for model in ("claude-haiku-5", "gpt-5", "kimi-k2"):
+                    reviewer, _ = self.claimed_agent(model)
+                    self.data(self.call("scio_get_tasks", {}, reviewer))   # draws the seat
+                    self.data(self.call("scio_review", {"panel_id": panels["lake"], "verdict": "approve",
+                                                        "claim_labels": [{"index": 1, "label": "supported"}]}, reviewer))
+        self.data(self.call("scio_get_tasks", {}, key))
+        return "lake", panels["pond"]
+
     def test_every_tool_answers_inside_its_output_schema(self):
+        """R8: every tool is called and every answer checked — a refusal of the sampler's own input used to be skipped,
+        and ten tools were never checked at all."""
         key, _ = self.claimed_agent("qwen-3")
+        slug, panel_id = self.an_article_and_a_seat_for(key)
+        given = {"scio_get_article": {"slug": slug}, "scio_get_claims": {"slug": slug},
+                 "scio_get_panel": {"panel_id": panel_id}, "scio_review": {"panel_id": panel_id, "verdict": "approve"}}
         for name, tool in sorted(self.contract.items()):
             if name == "scio_register":
                 continue
-            arguments = StandIn.fake.sample(tool["input"])
+            arguments = dict(StandIn.fake.sample(tool["input"]), **given.get(name, {}))
             result = self.call(name, arguments, key)
             with self.subTest(tool=name):
-                if result.get("isError"):   # an input the sample cannot make valid (a slug nobody wrote) is refused as the server would
-                    self.assertNotIn("Traceback", result["content"][0]["text"])
-                    continue
+                self.assertFalse(result.get("isError"), f"{arguments} → {result['content'][0]['text']}")
                 self.conforms(name, self.data(result))
 
 
@@ -591,16 +650,37 @@ class SimulationCheckTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.home = Path(tmp.name)
 
-    def check(self, base):
+    def check(self, base, mutate=None):
+        """check.py against `base`, with the skill copy's file `mutate[0]` rewritten from mutate[1] to mutate[2]."""
         skill = StandIn.fake.skill_copy(base, self.home / "skill")
+        if mutate:
+            path = skill / mutate[0]
+            text = path.read_text(encoding="utf-8")
+            self.assertIn(mutate[1], text, "the mutation no longer applies: update it with the code it mutates")
+            path.write_text(text.replace(mutate[1], mutate[2]), encoding="utf-8")
         return subprocess.run([PY, str(TESTS / "sim/check.py"), "--skill", str(skill), "--base-url", base],
-                              capture_output=True, text=True, timeout=180,
+                              capture_output=True, text=True, timeout=180, cwd=str(self.home),
                               env=clean_env(HOME=str(self.home), SCIO_SIMULATION="1"))
 
     def test_the_checks_pass_against_the_stand_in(self):
         done = self.check(StandIn.wiki.base)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("8/8 deterministic checks passed", done.stdout)
+        self.assertRegex(done.stdout, r"\n  (\d+)/\1 deterministic checks passed")
+        self.assertIn("ok   the session brief states the quota the wiki answered", done.stdout)
+        self.assertIn("ok   the register answer fits the outputSchema the bridge lists", done.stdout)
+
+    def test_a_session_brief_that_misreads_the_quota_fails(self):
+        """ident-20: whoami.py reading a field name production does not send."""
+        done = self.check(StandIn.wiki.base, ("scripts/whoami.py", "q.get('proposals_left_today', 0)", "q.get('proposals_left', 0)"))
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        self.assertIn("FAIL the session brief states the quota the wiki answered", done.stdout)
+
+    def test_a_register_answer_outside_the_listed_output_schema_fails(self):
+        """The bridge strips api_key from the answer; unless it also rewrites the listed outputSchema, a client that
+        validates structuredContent (Claude Code does) refuses the answer."""
+        done = self.check(StandIn.wiki.base, ("server/scio_bridge.py", 'out_schema = t.get("outputSchema")', "out_schema = None"))
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        self.assertIn("FAIL the register answer fits the outputSchema the bridge lists", done.stdout)
 
     def test_the_listing_checks_fail_when_the_stand_in_lists_nothing(self):
         with patch.object(StandIn.wiki, "tools", [t for t in StandIn.wiki.tools if t["name"] in ("scio_register", "scio_whoami", "scio_get_rules")]):
