@@ -109,6 +109,25 @@ class SchemaCheckTests(unittest.TestCase):
 
 
 # ------------------------------------------------------------------------------------------------ the master suite
+def subprocess_calls(source):
+    """(run | Popen, line, keyword names, source of the enclosing function) for every subprocess.run and
+    subprocess.Popen call in `source` — read from the syntax tree: a pattern over the text miscounts the parentheses
+    inside string literals, and a call it never matches is a call it can never fail for."""
+    import ast
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    found = []
+    for node in ast.walk(tree):
+        f = getattr(node, "func", None)
+        if (isinstance(node, ast.Call) and isinstance(f, ast.Attribute) and f.attr in ("run", "Popen")
+                and isinstance(f.value, ast.Name) and f.value.id == "subprocess"):
+            outer = node
+            while outer in parents and not isinstance(outer, (ast.FunctionDef, ast.Module)):
+                outer = parents[outer]
+            found.append((f.attr, node.lineno, {k.arg for k in node.keywords}, ast.get_source_segment(source, outer) or ""))
+    return found
+
+
 class MasterSuiteTests(unittest.TestCase):
     """TESTS-2, TESTS-15: tests/test-security.py under the environment an operator's launcher leaves behind (scio-as
     exports SCIO_AGENT), and what it leaves in the temporary directory."""
@@ -126,9 +145,11 @@ class MasterSuiteTests(unittest.TestCase):
                        SCIO_WORK_DIR=os.path.join(outer, "work"), SCIO_AUTO_APPROVE="1",
                        CLAUDE_PLUGIN_ROOT=outer, TMPDIR=scratch, **{NESTED: "1"})
             env["SCIO_" + "API" + "_KEY"] = "sk_live_OPERATOR_KEY_0123456789"   # spelled in parts: the guard denies the literal name
+            here = os.path.join(outer, "checkout")   # the directory a maintainer runs the suite from
+            os.mkdir(here)
             try:
                 run = subprocess.run([PY, str(TESTS / "test-security.py"), "--no-suites"], capture_output=True, text=True,
-                                     env=env, timeout=240)
+                                     env=env, cwd=here, timeout=240)
             except subprocess.TimeoutExpired as e:   # its output arrives as bytes whatever text= said
                 out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
                 self.fail("the suite hung under SCIO_AGENT=ghost; its last lines:\n" + out[-1500:])
@@ -137,15 +158,25 @@ class MasterSuiteTests(unittest.TestCase):
             self.assertIn("0 failure(s)", run.stdout)
             self.assertNotIn("test-review.py", run.stdout, "--no-suites runs this file's checks only")
             self.assertEqual(sorted(os.listdir(scratch)), [], "the suite left temporary files behind")
+            # a workspace's .scio/work/agent picks the agent the plugin uses there: the suite must not pin one in the
+            # checkout it runs from
+            self.assertEqual(sorted(os.listdir(here)), [], "the suite wrote into the directory it was run from")
 
     def test_every_subprocess_the_suite_starts_has_a_deadline(self):
         """A double that never answers must fail a check, not stall the release (release.sh runs this suite)."""
         source = (TESTS / "test-security.py").read_text(encoding="utf-8")
         body = source.split("def ask(", 1)[1].split("return got", 1)[0]
         self.assertIn("timeout", body, "ask() reads the bridge's stdout with no deadline")
-        for call in re.findall(r"subprocess\.run\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)", source):
-            with self.subTest(call=call[:90]):
-                self.assertIn("timeout=", call)
+        calls = subprocess_calls(source)
+        # every call in the text is seen: a scan that skips one cannot fail for it
+        self.assertEqual(len([c for c in calls if c[0] == "run"]), source.count("subprocess.run("))
+        self.assertEqual(len([c for c in calls if c[0] == "Popen"]), source.count("subprocess.Popen("))
+        for kind, line, keywords, reader in calls:
+            with self.subTest(call=f"subprocess.{kind} at line {line}"):
+                if kind == "run":
+                    self.assertIn("timeout", keywords)
+                else:   # a Popen's deadline lives in whatever reads it: the function around it must wait with one
+                    self.assertRegex(reader, r"timeout=", "a Popen read with no deadline")
 
 
 # ------------------------------------------------------------------------------------------------ the contract copies

@@ -19,6 +19,10 @@ import shutil, tempfile as _tempfile
 SCRATCH = _tempfile.mkdtemp(prefix="scio-suite-")
 atexit.register(shutil.rmtree, SCRATCH, True)   # at exit: after the doubles and every child process are done
 _tempfile.tempdir = SCRATCH
+# … and so does what a child writes relative to where it starts: with no SCIO_WORK_DIR, the work root is
+# <cwd>/.scio/work, and a registration there pins that workspace's agent (.scio/work/agent). Run from a checkout, the
+# suite used to leave `fable` pinned in it — the agent the plugin then used for a maintainer working there.
+os.chdir(SCRATCH)
 # The environment every child starts from: nothing an operator's shell or launcher exported. `scio-as` exports
 # SCIO_AGENT, and a SCIO_AGENT that names no test alias made the bridge keyless — B4 failed and B17 then waited for
 # ever on a notification that never came. What a check needs, it sets itself.
