@@ -32,7 +32,7 @@ def normalise(s):
 
 def configure():
     """The paths every check compares against. Called inside main's guarded block: whatever raises here is a refusal."""
-    global keys_path, CFG_DIR, KEYS_DIR, CWD, CFG_REL, REAL_KEY, _home_real, _cwd_real, GUARDED
+    global keys_path, CFG_DIR, KEYS_DIR, CWD, CFG_REL, REAL_KEY, _home_real, _cwd_real, GUARDED, ROOTS
     keys_path = os.environ.get("SCIO_KEYS_FILE") or os.path.join(DEFAULT_DIR, "keys")
     CFG_DIR = normalise(DEFAULT_DIR).rstrip("/")                 # …/.config/scio
     KEYS_DIR = normalise(os.path.dirname(os.path.abspath(keys_path))).rstrip("/")   # where a custom SCIO_KEYS_FILE lives
@@ -43,7 +43,7 @@ def configure():
     CFG_REL = CFG_DIR.rsplit("/", 2)[-2] + "/" + CFG_DIR.rsplit("/", 1)[-1]   # .config/scio, for a relative spelling after cd ~
     REAL_KEY = os.path.realpath(os.path.expanduser(normalise(keys_path)))
     _home_real, _cwd_real = os.path.realpath(HOME), os.path.realpath(os.getcwd())
-    GUARDED = guarded_ancestors()
+    GUARDED, ROOTS = guarded_ancestors(), home_roots()
 
 
 def mentioned(path, nblob):
@@ -87,6 +87,20 @@ def _holds(outer, inner):
     return inner == outer or inner.startswith(outer.rstrip(os.sep) + os.sep)
 
 
+def home_roots():
+    """The directories above the keys file that hold HOME — HOME itself, /home, / (ROOTS). They are no GUARDED directory,
+    since what holds the workspace is read all day (`grep -r foo .`), yet reading one whole with its hidden files reads
+    the keys file too: an archive or a copy of HOME, a recursive grep of it."""
+    out, d = set(), os.path.dirname(REAL_KEY)
+    while True:
+        if _holds(d, _home_real):
+            out.add(d)
+        parent = os.path.dirname(d)
+        if parent == d:
+            return out
+        d = parent
+
+
 def guarded_ancestors():
     out, d = set(), os.path.dirname(REAL_KEY)
     while d and os.path.dirname(d) != d:
@@ -117,6 +131,24 @@ WRAPPERS = {
 }
 KEYWORDS = {"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until"}
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.S)
+# a redirection, with its target glued (`2>/dev/null`, `</proc/self/environ`) or in the next word (`< /dev/null`)
+REDIRECT = re.compile(r"\d*(?:<<<|<<-?|<>|<&|>&|>>|>\||&>>|&>|[<>])(.*)", re.S)
+# shells that run a string as a command line (`sh -c env`, `bash -lc 'env | base64'`), with the options whose value is the
+# next word; su and runuser take the string as the value of -c. What such a string runs is a command like any other
+SHELLS = {"sh", "bash", "rbash", "zsh", "dash", "ksh", "mksh", "ash", "yash", "fish"}
+SHELL_VALUE_OPTIONS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file", "--init-command"}
+SU = {"su", "runuser"}
+# a command line inside a command line inside…: past this depth nobody is writing a real command, and the guard refuses
+MAX_NESTING = 16
+
+
+class Command:
+    """A simple command: its words as the shell would pass them (`raw`), the command they run once wrappers are looked
+    through (`toks`), and the command line it runs in turn, if it hands one to a shell or to eval (`sub`)."""
+    __slots__ = ("raw", "toks", "sub")
+
+    def __init__(self, raw, toks, sub):
+        self.raw, self.toks, self.sub = raw, toks, sub
 
 
 def _split(piece):
@@ -126,16 +158,108 @@ def _split(piece):
         return piece.split()
 
 
+# where a piece may end or a quote change, outside quotes and inside double quotes: the rest is copied in one slice
+_SPECIAL = re.compile(r"[\\'\"$()`;&|\n]")
+_SPECIAL_QUOTED = re.compile(r"[\\\"$`]")
+
+
+def pieces(command):
+    """The simple-command strings of a command line, cut at every operator, pipe, subshell and substitution — never
+    inside single quotes, and inside double quotes only at a substitution (`"$(env)"` runs env), so the string given to
+    `bash -c '…'` or `python3 -c '…'` stays one word. One linear pass."""
+    out, cur, stack = [], [], []
+    i, n = 0, len(command)
+
+    def cut():
+        out.append("".join(cur))
+        del cur[:]
+
+    def reopen():   # back inside double quotes after a substitution: the next piece's words are still one quoted word
+        if stack and stack[-1] == '"':
+            cur.append('"')
+
+    while i < n:
+        top = stack[-1] if stack else ""
+        m = (_SPECIAL_QUOTED if top == '"' else _SPECIAL).search(command, i)
+        if not m:
+            cur.append(command[i:])
+            break
+        cur.append(command[i:m.start()])
+        i = m.start()
+        c = command[i]
+        if c == "\\":
+            cur.append(command[i:i + 2])
+            i += 2
+        elif c == "$" and not command.startswith("(", i + 1):
+            cur.append(c)
+            i += 1
+        elif top == '"':
+            if c == '"':
+                stack.pop()
+                cur.append(c)
+                i += 1
+            else:   # a substitution: the quote closes in this piece, and what it runs is a command of its own
+                cur.append('"')
+                cut()
+                stack.append("`" if c == "`" else "$(")
+                i += 1 if c == "`" else 2
+        elif c == "'":
+            j = command.find("'", i + 1)
+            j = n - 1 if j < 0 else j
+            cur.append(command[i:j + 1])
+            i = j + 1
+        elif c == '"':
+            stack.append('"')
+            cur.append(c)
+            i += 1
+        elif c == "$":
+            cut()
+            stack.append("$(")
+            i += 2
+        elif c == "(":
+            cut()
+            stack.append("(")
+            i += 1
+        elif c == ")":
+            cut()
+            if top in ("$(", "("):
+                stack.pop()
+                reopen()
+            i += 1
+        elif c == "`":
+            cut()
+            if top == "`":
+                stack.pop()
+                reopen()
+            else:
+                stack.append("`")
+            i += 1
+        else:   # ; & | and a newline
+            cut()
+            i += 1
+    cut()
+    return out
+
+
+def _skip_redirect(toks, i):
+    """The index past a redirection at toks[i] and its target, or i when toks[i] is none."""
+    m = REDIRECT.fullmatch(toks[i])
+    return i if not m else i + (1 if m.group(1) else 2)
+
+
 def unwrap(toks):
-    """The command a simple command runs: assignments (FOO=1), shell keywords ({, if, !…) and wrappers (sudo, timeout,
-    busybox, env with a command after it…) dropped with their options. `env` with options or assignments only is itself
-    the command — it prints the environment. Iterative: `env -S '<command line>'` is split and unwrapped in turn."""
+    """(the command a simple command runs, the command line it hands to a shell or to eval — or None). Assignments
+    (FOO=1), redirections, shell keywords ({, if, !…) and wrappers (sudo, timeout, busybox, env with a command after
+    it…) are dropped with their options. `env` with options, assignments or redirections only is itself the command —
+    it prints the environment. Iterative: `env -S '<command line>'` is split and unwrapped in turn."""
     i = 0
     while i < len(toks):
         t = toks[i]
         name = os.path.basename(t)
         if t in KEYWORDS or ASSIGNMENT.fullmatch(t):
             i += 1
+        elif _skip_redirect(toks, i) != i:
+            i = _skip_redirect(toks, i)
         elif name in WRAPPERS:
             i += 1
             while i < len(toks) and toks[i].startswith("-") and toks[i] != "-":
@@ -156,22 +280,68 @@ def unwrap(toks):
                     j += 2
                 elif u.startswith("-") or ASSIGNMENT.fullmatch(u):
                     j += 1
+                elif _skip_redirect(toks, j) != j:
+                    j = _skip_redirect(toks, j)
                 else:
                     break
             if j < 0:
                 continue
             if j >= len(toks):
-                return toks[i:]   # options and assignments only: env prints the environment
+                return toks[i:], None   # options, assignments and redirections only: env prints the environment
             i = j
         else:
             break
-    return toks[i:]
+    toks = toks[i:]
+    return toks, (command_string(toks) if toks else None)
 
 
-def simple_commands(command):
-    """The simple commands of a command line as token lists, unwrapped — cut at every operator, pipe, subshell and
-    substitution. Linear in the command: shlex over each piece once."""
-    return [unwrap(_split(piece)) for piece in re.split(r"&&|\|\||[;&|\n()`]|\$\(", command)]
+def command_string(toks):
+    """The command line a shell, su or eval is given to run: `sh -c '<line>'`, `bash -o pipefail -lc '<line>'`, `su -c
+    '<line>' root`, `eval <words>` (joined, as eval joins them). None when there is none (`bash script.sh`)."""
+    prog, args = os.path.basename(toks[0]), toks[1:]
+    if prog == "eval":
+        return " ".join(args)
+    if prog in SU:
+        for k, a in enumerate(args):
+            if a in ("-c", "--command"):
+                return args[k + 1] if k + 1 < len(args) else ""
+            if a.startswith("--command="):
+                return a.split("=", 1)[1]
+            if a.startswith("-c") and not a.startswith("--"):
+                return a[2:]
+        return None
+    if prog not in SHELLS:
+        return None
+    given, k = False, 0
+    while k < len(args):
+        a = args[k]
+        if a == "--":
+            k += 1
+            break
+        if a in SHELL_VALUE_OPTIONS:
+            k += 2
+            continue
+        if a in ("--command", "-c") or (a[:1] in ("-", "+") and not a.startswith("--") and "c" in a[1:]):
+            given = True   # -c, -lc, -ec, fish's --command
+        elif a.startswith("--command="):
+            return a.split("=", 1)[1]
+        elif not a.startswith(("-", "+")):
+            break
+        k += 1
+    return args[k] if given and k < len(args) else None
+
+
+def simple_commands(command, depth=0):
+    """The simple commands of a command line (Command), cut at every operator, pipe, subshell and substitution, each
+    unwrapped, and the command line a shell or eval is given read the same way. Linear in the command at each depth."""
+    if depth > MAX_NESTING:
+        raise ValueError(f"command lines nested more than {MAX_NESTING} deep")
+    out = []
+    for piece in pieces(command):
+        raw = _split(piece)
+        toks, inner = unwrap(raw)
+        out.append(Command(raw, toks, simple_commands(inner, depth + 1) if inner else None))
+    return out
 
 
 def recursive_flag(prog, args):
@@ -188,6 +358,18 @@ def recursive_flag(prog, args):
         elif a.startswith("-") and (any(c in letters for c in a[1:]) or (a == "-d" and following == "recurse")):
             return True
     return False
+
+
+def reads_hidden(prog, args):
+    """Whether a recursive read takes hidden files — what the keys file under ~/.config is. rg and ag skip them unless
+    told (`--hidden`, rg's `-.` and `-uu`, ag's `-u`); every other reader takes them."""
+    if prog == "rg":
+        us = sum(a.count("u") for a in args if re.fullmatch(r"-[A-Za-z.]+", a))
+        return us >= 2 or any(a in ("--hidden", "-.") or (re.fullmatch(r"-[A-Za-z]*\.[A-Za-z.]*", a) is not None) for a in args) \
+            or sum(a == "--unrestricted" for a in args) >= 2
+    if prog == "ag":
+        return any(a in ("--hidden", "--unrestricted", "-u") or re.fullmatch(r"-[A-Za-z]*u[A-Za-z]*", a) is not None for a in args)
+    return True
 
 
 def expand(token, cwd):
@@ -234,19 +416,30 @@ def change_directory(args, cwd, pushd=False):
     return cwd
 
 
-def walk(commands):
+def walk(commands, cwd=None, start=True):
     """(tokens, directory) for each simple command, the directory it runs in after the `cd`s and `pushd`s before it —
-    None once it cannot be known. A cd is yielded too (with the directory it starts from)."""
-    cwd = _cwd_real
-    for toks in commands:
-        if not toks:
+    None once it cannot be known. A cd is yielded too (with the directory it starts from). A command line handed to a
+    shell or to eval runs where that command runs, and its cds end with it."""
+    cwd = _cwd_real if start else cwd
+    for c in commands:
+        if not c.toks:
             continue
-        yield toks, cwd
-        prog = os.path.basename(toks[0])
+        yield c.toks, cwd
+        if c.sub:
+            yield from walk(c.sub, cwd, start=False)
+        prog = os.path.basename(c.toks[0])
         if prog in ("cd", "chdir", "pushd"):
-            cwd = change_directory(toks[1:], cwd, pushd=prog == "pushd")
+            cwd = change_directory(c.toks[1:], cwd, pushd=prog == "pushd")
         elif prog == "popd":
             cwd = None
+
+
+def every_command(commands):
+    """Every Command of a command line, those a shell or eval runs included."""
+    for c in commands:
+        yield c
+        if c.sub:
+            yield from every_command(c.sub)
 
 
 def names(token, cwd, targets):
@@ -291,9 +484,96 @@ def path_operands(args):
             yield value
 
 
+TAR = {"tar", "bsdtar", "gtar"}
+# tar's options whose value is the next word (or, in a short cluster, the rest of it) — the archive, a list, a format…
+TAR_VALUE_LETTERS = set("fCTXbHgIKNV")
+TAR_VALUE_OPTIONS = {"--file", "--files-from", "--exclude-from", "--blocking-factor", "--format", "--listed-incremental",
+                     "--use-compress-program", "--starting-file", "--newer", "--label", "--exclude", "--transform", "--xform",
+                     "--owner", "--group", "--mode", "--mtime", "--directory"}
+# searchers that read the working directory when given no path (GNU grep -r, rg, ag…)
+SEARCHERS = {"grep", "egrep", "fgrep", "zgrep", "rg", "ag", "ack", "ugrep"}
+# commands whose last operand is where they write, not what they read: `cp -r /tmp/x ~` reads nothing of HOME
+WRITES_LAST = {"cp", "scp", "rsync", "rclone", "mv", "ln", "link"}
+
+
+def _in(directory, cwd):
+    """The directory `cd <directory>` would reach from cwd (None when it cannot be known)."""
+    return change_directory(["--", directory], cwd)
+
+
+def operands_with_base(prog, args, cwd):
+    """(path, the directory it is relative to) for each path a command names: its operands and a path attached to an
+    option, after tar's -C/--directory (`tar -C ~ -c .config`, `tar -cf - -C ~ .config`) and git's -C, which move the
+    ones that follow. The value of an option is no operand (`tar -cf out.tar`, `-C ~`)."""
+    base = cwd
+    if prog == "git":
+        k = 0
+        while k < len(args) and args[k].startswith("-"):
+            a = args[k]
+            if a == "-C":
+                base, k = _in(args[k + 1] if k + 1 < len(args) else "", base), k + 2
+            elif a.startswith("-C"):
+                base, k = _in(a[2:], base), k + 1
+            elif a in ("-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"):
+                k += 2
+            else:
+                k += 1
+        for p in path_operands(args[k:]):
+            yield p, base
+        return
+    if prog not in TAR:
+        for p in path_operands(args):
+            yield p, base
+        return
+    k, options = 0, True
+    while k < len(args):
+        a = args[k]
+        k += 1
+        if not options or a == "-" or not a.startswith("-"):
+            if k == 1 and options and re.fullmatch(r"[A-Za-z]+", a):
+                # old-style `tar cCf <dir> <archive> …`: each value letter takes the next word, in order
+                for letter in a:
+                    if letter in TAR_VALUE_LETTERS and k < len(args):
+                        if letter == "C":
+                            base = _in(args[k], base)
+                        k += 1
+                continue
+            yield a, base
+        elif a == "--":
+            options = False
+        elif a.startswith("--"):
+            name, eq, value = a.partition("=")
+            if name == "--directory":
+                base = _in(value if eq else (args[k] if k < len(args) else ""), base)
+                k += 0 if eq else 1
+            elif name in TAR_VALUE_OPTIONS and not eq:
+                k += 1
+        else:
+            for j, letter in enumerate(a[1:], 1):
+                if letter in TAR_VALUE_LETTERS:
+                    value = a[j + 1:]
+                    if not value:
+                        value, k = (args[k] if k < len(args) else ""), k + 1
+                    if letter == "C":
+                        base = _in(value, base)
+                    break
+
+
+def find_passes_over_the_key(args):
+    """Whether find's predicates keep the keys file out of what -exec reads: a -name (or -path) that the file's name (or
+    path) does not match. find's logic is not evaluated — one name that can match it, or none at all, is a read."""
+    names = [args[k + 1] for k, a in enumerate(args[:-1]) if a in ("-name", "-iname")]
+    paths = [args[k + 1] for k, a in enumerate(args[:-1]) if a in ("-path", "-ipath", "-wholename", "-iwholename")]
+    key = os.path.basename(REAL_KEY).lower()
+    return bool(names or paths) and not any(component_matches(key, n.lower()) for n in names) \
+        and not any(fnmatch.fnmatchcase(REAL_KEY.lower(), p.lower()) for p in paths)
+
+
 def reads_keys_through_a_directory(command, commands):
     """Whether a command line reads the keys file through a directory that holds it, or names the file by a glob.
-    Each simple command is judged on its own, after the `cd`s before it: `cd ~/.config && grep -r . .` is caught."""
+    Each simple command is judged on its own, after the `cd`s before it: `cd ~/.config && grep -r . .` is caught. HOME
+    and what holds it (ROOTS) hold the keys file too: archiving, copying or searching them whole reads it
+    (`tar c ~`, `grep -r . ~`, `cp -r ~ /tmp/h`); searching the workspace does not."""
     piped_to_xargs = bool(re.search(r"\|\s*xargs\b", command))
     key_name = os.path.basename(REAL_KEY)
     for toks, cwd in walk(commands):
@@ -303,30 +583,45 @@ def reads_keys_through_a_directory(command, commands):
                                             else component_matches(key_name, re.split(r"[/\\]", t)[-1])):
                 return True
         prog = os.path.basename(toks[0])
-        recursive = (prog in RECURSIVE_ANYWAY or prog in ALIASING or (prog == "git" and "grep" in toks[1:2])
+        grep = prog == "git" and "grep" in toks[1:]
+        recursive = (prog in RECURSIVE_ANYWAY or prog in ALIASING or grep
                      or (prog in RECURSIVE_FLAG and recursive_flag(prog, toks[1:]))
                      or (prog == "find" and (piped_to_xargs or any(t in ("-exec", "-execdir", "-ok", "-okdir") for t in toks[1:]))))
         if not recursive:
             continue
-        operands = list(path_operands(toks[1:]))
-        if cwd is None:
-            if not operands or any(is_relative(t) for t in operands):
-                return True   # a directory the guard lost track of may be the one that holds the keys
-            cwd = "/"
-        if cwd in GUARDED or any(names(t, cwd, GUARDED) for t in operands):
+        operands = list(operands_with_base(prog, toks[1:], cwd))
+        if any(base is None and is_relative(t) for t, base in operands) or (cwd is None and not operands):
+            return True   # a directory the guard lost track of may be the one that holds the keys
+        operands = [(t, base if base is not None else "/") for t, base in operands]
+        # the directory it runs in, or the one tar -C or git -C moves it to, counts as an operand (`git -C ~/.config grep`)
+        if (cwd is not None and cwd in GUARDED) or any(base in GUARDED or names(t, base, GUARDED) for t, base in operands):
             return True
+        # HOME and above: what reads hidden files whole — a tracked file is all git grep reads, and a find that names
+        # other files (`find ~ -name '*.py' -exec grep TODO {} +`) passes over the key
+        if grep or not reads_hidden(prog, toks[1:]) or (prog == "find" and find_passes_over_the_key(toks[1:])):
+            continue
+        sources = operands[:-1] if prog in WRITES_LAST and len(operands) > 1 else operands
+        if any(names(t, base, ROOTS) for t, base in sources):
+            return True
+        if prog in SEARCHERS and cwd in ROOTS and len(operands) <= 1:
+            return True   # a search given no path (`grep -r sk_` from HOME) reads the directory it runs in
     return False
 
 
-# --- the environment printed whole, while it holds the key: env, printenv, export, declare -p, set, /proc/*/environ,
+# --- the environment printed whole, while it holds the key: env, printenv, export, declare -p, set, ps e, /proc/*/environ,
 # and a one-line program that prints os.environ or process.env. A command given to env (`env FOO=1 cmd`) prints nothing.
 # Each is searched on its own, never joined by a `[\s\S]*`: a pattern that spans the command backtracks over a long one,
 # and a hook that outlives its timeout is killed — which the harness reads as an allow.
 ENV_CODE_DUMP = re.compile(r"\bos\.environb?\b(?!\s*(?:\[|\.get\b|\.setdefault\b|\.pop\b|\.update\b))|\bprocess\.env\b(?!\s*[.\[])")
 ENV_CODE_PRINT = re.compile(r"\b(?:print|pprint|dumps?|write|repr|log|stringify|str|echo|dir|table|inspect)\b")
 ENV_CODE_WHOLE = re.compile(r"%ENV\b|\bin\s+ENVIRON\b|\bgetenv\(\s*\)|\$_(?:ENV|SERVER)\b")
+# the programs such a program runs in: its code is one word of the command line (-c, -e, a here-string, a piped echo)
+INTERPRETER = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node(?:js)?|bun|deno|ruby|irb|perl|php|lua[\d.]*|Rscript|osascript)")
 # programs that read a path's name or metadata, not its contents: `ls /proc/self/*` prints no environment
 NAMES_ONLY = {"ls", "stat", "file", "du", "readlink", "realpath", "basename", "dirname", "test", "["}
+# ps's options whose value is the next word (`ps -C node`, `ps -o pid,cmd`, BSD `ps U user`): no option cluster of theirs
+PS_VALUE_DASH = set("CGgoOpqstuU")
+PS_VALUE_BSD = set("pqtUoOk")
 
 
 def reads_environ(toks, cwd):
@@ -344,16 +639,53 @@ def reads_environ(toks, cwd):
     return False
 
 
-def dumps_environment(command, commands):
-    if re.search(r"/proc/[^/\s'\"]+/environ\b", command):
+def ps_prints_environment(args):
+    """Whether ps prints each process's environment: an `e` in a BSD option cluster (`ps e`, `ps eww`, `ps auxe`), or
+    `-E` (BSD and macOS ps). `ps -e` is every process, not its environment."""
+    value_next = False
+    for a in args:
+        if value_next:
+            value_next = False
+            continue
+        if a == "-E":
+            return True
+        if a.startswith("-"):
+            value_next = not a.startswith("--") and len(a) > 1 and a[-1] in PS_VALUE_DASH or a in ("--pid", "--ppid", "--sid",
+                                                                                                  "--tty", "--user", "--group", "--format", "--sort")
+        elif re.fullmatch(r"[A-Za-z]+", a):
+            if "e" in a:
+                return True
+            value_next = a[-1] in PS_VALUE_BSD
+    return False
+
+
+def prints_environment_in_code(command, commands):
+    """Whether a program run by an interpreter prints os.environ or process.env whole: both names in one word of the
+    command line — the code after -c or -e, a here-string, the echo piped into it — or in a here-document's body. Not the
+    two anywhere on the line: `git log -S os.environ` and `grep process.env src | tee log.txt` print nothing."""
+    every = list(every_command(commands))
+    if not any(c.toks and INTERPRETER.fullmatch(os.path.basename(c.toks[0])) for c in every):
+        return False
+    if any(ENV_CODE_DUMP.search(t) and ENV_CODE_PRINT.search(t) for c in every for t in c.raw):
         return True
-    if (ENV_CODE_DUMP.search(command) and ENV_CODE_PRINT.search(command)) or ENV_CODE_WHOLE.search(command):
+    i = command.find("<<")
+    while i >= 0 and command.startswith("<<<", i):
+        i = command.find("<<", i + 3)
+    newline = command.find("\n", i) if i >= 0 else -1
+    body = command[newline + 1:] if newline >= 0 else ""
+    return bool(ENV_CODE_DUMP.search(body) and ENV_CODE_PRINT.search(body))
+
+
+def dumps_environment(command, commands):
+    if re.search(r"/proc/[^/\s'\"]+/environ\b", command) or ENV_CODE_WHOLE.search(command):
         return True
     if re.search(r"\bruby\b", command) and re.search(r"\bENV\b(?!\s*\[|\.fetch)", command):
         return True
+    if prints_environment_in_code(command, commands):
+        return True
     for toks, cwd in walk(commands):
         prog, rest = os.path.basename(toks[0]), toks[1:]
-        if prog == "env":   # unwrap left it: options and assignments only
+        if prog == "env":   # unwrap left it: options, assignments and redirections only
             return True
         elif prog == "printenv" and all(t.startswith("-") for t in rest):
             return True
@@ -362,6 +694,8 @@ def dumps_environment(command, commands):
         elif prog in ("declare", "typeset") and all(t.startswith("-") for t in rest):
             return True
         elif prog == "set" and not rest:
+            return True
+        elif prog == "ps" and ps_prints_environment(rest):
             return True
         elif prog in ("node", "nodejs", "bun", "deno") and any(t in ("-p", "--print") or re.fullmatch(r"-[a-oq-z]*p[a-z]*", t) for t in rest) \
                 and any(ENV_CODE_DUMP.search(t) for t in rest):
