@@ -12,6 +12,7 @@ import base64
 import hashlib
 import http.server
 import importlib.util
+import itertools
 import json
 import os
 import re
@@ -393,6 +394,72 @@ class SetupTests(Scratch):
         r = self.register_models("opus=claude-opus-5,sonnet=claude-sonnet-5")   # sonnet cannot reach the (closed) server
         self.assertNotEqual(r.returncode, 0)
 
+    def test_an_unknown_alias_leaves_the_hermes_env_as_it_was(self):
+        """R-HERMES-ENV: ~/.hermes/.env was opened for writing (truncated) before the alias's key was looked up, so an
+        unknown alias emptied it — the model provider's key and every other secret in it were lost."""
+        self.already_registered()
+        home = self.base / "home"
+        env_file = home / ".hermes/.env"
+        env_file.parent.mkdir(parents=True)
+        env_file.write_text("OPENROUTER_API_KEY=sk-or-secret\nSCIO_API_KEY=sk_old\n")
+        os.chmod(env_file, 0o600)
+        no_hermes = str(self.base / "empty-path")   # no `hermes` binary: nothing is installed
+        r = self.setup("--harness", "hermes", "--alias", "nosuch", "--yes", home=home, PATH=no_hermes)
+        out = r.stdout + r.stderr
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no key for 'nosuch'", out)
+        self.assertNotIn("next:", out)
+        self.assertEqual(env_file.read_text(), "OPENROUTER_API_KEY=sk-or-secret\nSCIO_API_KEY=sk_old\n")
+        self.assertFalse((home / ".hermes/config.yaml").exists(), "the refusal comes before anything is written")
+        # a known alias replaces SCIO_API_KEY and keeps every other line, privately
+        os.chmod(env_file, 0o644)
+        r = self.setup("--harness", "hermes", "--alias", "claude-opus-5", "--yes", home=home, PATH=no_hermes)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(env_file.read_text(), f"OPENROUTER_API_KEY=sk-or-secret\nSCIO_API_KEY={KEY}\n")
+        self.assertEqual(oct(mode(env_file)), oct(0o600))
+        self.assertEqual(sorted(p.name for p in env_file.parent.iterdir()), [".env", "config.yaml"], "no temporary file is left behind")
+
+    def test_hooks_name_the_interpreter_that_ran_setup(self):
+        """R-HOOKS-PY: the guards were rewritten as `python3 "<absolute path>"`. With the Microsoft Store alias first on PATH
+        (exit 9009) every hook fell through to its `|| echo deny` fallback: every shell and MCP call in Cursor denied."""
+        fake = self.base / "bin"
+        fake.mkdir()
+        stub = fake / "python3"
+        stub.write_text("#!/bin/sh\necho 'Python was not found; run without arguments to install from the Microsoft Store' >&2\nexit 9009\n")
+        stub.chmod(0o755)
+        path = f"{fake}{os.pathsep}{os.environ.get('PATH', '')}"
+        tree = copy_tree(self.base / "hooks-tree", host=CLOSED)   # setup rewrites the hooks files of the tree it runs from
+        setup_py = tree / "skills/scio/scripts/setup.py"
+        interpreter = f'"{sys.executable}" '
+        for harness, rel, could_not_run in (("cursor", "hooks/hooks-cursor.json", '"permission": "deny"'),
+                                            ("antigravity", "hooks.json", '"decision": "deny"')):
+            with self.subTest(harness=harness):
+                hooks_file = tree / rel
+                r = self.setup("--harness", harness, "--yes", home=self.base / f"home-{harness}", setup_py=setup_py, PATH=path)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                commands = re.findall(r'"command":\s*("(?:[^"\\]|\\.)*")', hooks_file.read_text())
+                self.assertTrue(commands)
+                for command in map(json.loads, commands):
+                    self.assertTrue(command.startswith(interpreter), command)
+                    self.assertIn(str(tree / "skills/scio/scripts"), command)
+                guard = next(c for c in map(json.loads, commands) if "hook.py" in c)
+                self.assertIn("|| echo '{" + could_not_run, guard)   # the fallback for a guard that cannot start stays
+                # run as the harness runs it, with the stub first on PATH: the guard starts and answers, no fallback
+                ran = subprocess.run(["sh", "-c", guard], input=json.dumps({"command": "ls", "cwd": str(self.base)}), capture_output=True,
+                                     text=True, timeout=60, cwd=self.base, env=clean_env(HOME=str(self.base / "home"), PATH=path,
+                                                                                         SCIO_KEYS_FILE=str(self.base / "keys"),
+                                                                                         SCIO_TRUST_FILE=str(self.base / "trust")))
+                self.assertNotIn("could not run", ran.stdout + ran.stderr)
+                # a hooks file an earlier setup.py rewrote with a bare `python3` is repaired by running setup again, and the
+                # result is stable
+                hooks_file.write_text(hooks_file.read_text().replace(json.dumps(interpreter)[1:-1], "python3 "))
+                self.assertIn('"command": "python3 \\"', hooks_file.read_text())
+                self.assertEqual(self.setup("--harness", harness, "--yes", home=self.base / f"home-{harness}", setup_py=setup_py, PATH=path).returncode, 0)
+                again = hooks_file.read_text()
+                self.assertNotIn('"command": "python3', again)
+                self.assertEqual(self.setup("--harness", harness, "--yes", home=self.base / f"home-{harness}", setup_py=setup_py, PATH=path).returncode, 0)
+                self.assertEqual(hooks_file.read_text(), again)
+
 
 # ================================================================================================ rules verification
 class VerifyWithoutCryptographyTests(Scratch):
@@ -459,6 +526,76 @@ class VerifyWithoutCryptographyTests(Scratch):
             r = self.run_verify(doc)
             self.assertEqual(r.returncode, 1)
             self.assertIn("INVALID", r.stdout + r.stderr)
+
+    def test_a_cryptography_build_without_ed25519_falls_back_to_the_bundled_verifier(self):
+        """R-VERIFY-UNSUPPORTED: with OpenSSL < 1.1.1 or an old LibreSSL underneath, `cryptography` imports fine and raises
+        UnsupportedAlgorithm from Ed25519PublicKey.from_public_bytes. verify-rules.py died with a traceback (exit 1), which
+        the bridge reported as rules that failed verification."""
+        package = self.base / "old-build/cryptography"
+        (package / "hazmat/primitives/asymmetric").mkdir(parents=True)
+        for init in ("", "hazmat", "hazmat/primitives", "hazmat/primitives/asymmetric"):
+            (package / init / "__init__.py").write_text("")
+        (package / "exceptions.py").write_text("class InvalidSignature(Exception):\n    pass\n\n\nclass UnsupportedAlgorithm(Exception):\n    pass\n")
+        (package / "hazmat/primitives/asymmetric/ed25519.py").write_text(
+            "from cryptography.exceptions import UnsupportedAlgorithm\n\n\nclass Ed25519PublicKey:\n    @classmethod\n"
+            "    def from_public_bytes(cls, data):\n"
+            "        raise UnsupportedAlgorithm('ed25519 is not supported by this version of OpenSSL.')\n")
+        served = self.base / "served.json"
+
+        def run(doc):
+            served.write_text(json.dumps(doc))
+            return subprocess.run([sys.executable, str(SCRIPTS / "verify-rules.py"), str(served), "--key", SIGNER.pub_b64], capture_output=True,
+                                  text=True, timeout=60, cwd=self.base, env=clean_env(PYTHONPATH=str(self.base / "old-build")))
+
+        r = run(signed_doc(A, A_AT))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"ok: rules {A}", r.stdout)
+        r = run(dict(signed_doc(A, A_AT), signature=base64.b64encode(b"\x01" * 64).decode()))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("INVALID", r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+
+class PendingRulesLocallyTests(Scratch):
+    """R-PENDING-LOCAL: where there is no bridge (REST, a connector) SKILL.md sends the agent to verify_rules on scio-local
+    or to verify-rules.py; both presented a version published ahead of its effective_at as the rules to adopt."""
+
+    def verify(self, doc):
+        served = self.base / "served.json"
+        served.write_text(json.dumps(doc))
+        return subprocess.run([sys.executable, str(SCRIPTS / "verify-rules.py"), str(served), "--key", SIGNER.pub_b64], capture_output=True,
+                              text=True, timeout=60, cwd=self.base, env=clean_env())
+
+    def test_the_script_says_a_pending_version_is_not_yet_in_force(self):
+        r = self.verify(signed_doc(B, B_AT))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)   # a valid signature: refresh-rules.py --version relies on it
+        self.assertIn(f"ok: rules {B}", r.stdout)
+        self.assertIn(f"not yet in force until {B_AT}", r.stdout)
+        self.assertIn("do not adopt these early", r.stdout)
+        r = self.verify(signed_doc(A, A_AT))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("not yet in force", r.stdout)
+
+    def test_scio_local_answers_in_force_false_for_a_pending_version(self):
+        skill = copy_tree(self.base / "tree", host=CLOSED, skill_only=True) / "skills/scio"
+        pin_key(skill, SIGNER.pub_b64)
+        local = load("identity_scio_local", skill / "server/scio_local.py")
+        with patch.dict(os.environ, {"SCIO_WORK_DIR": str(self.base / "work")}):
+            pending = json.loads(local.t_verify_rules({"rules": signed_doc(B, B_AT, in_force=A)}))
+            current = json.loads(local.t_verify_rules({"rules": signed_doc(A, A_AT)}))
+            forged = json.loads(local.t_verify_rules({"rules": dict(signed_doc(A, A_AT), signature=base64.b64encode(b"\x01" * 64).decode())}))
+        self.assertTrue(pending["ok"], pending["report"])
+        self.assertIs(pending["in_force"], False)
+        self.assertIn(B_AT, pending["next"])
+        self.assertIn("do not adopt these early", pending["next"])
+        self.assertTrue(current["ok"], current["report"])
+        self.assertIs(current["in_force"], True)
+        self.assertNotIn("do not adopt", current["next"])
+        self.assertFalse(forged["ok"])
+        self.assertIsNone(forged["rules"])
+        self.assertNotIn("in_force", forged)   # nothing verified, nothing in force
+        described = local.TOOLS["verify_rules"][0]
+        self.assertIn("in_force", described)
 
 
 # ================================================================================================ the rules bundle
@@ -558,6 +695,20 @@ class RulesBundleTests(Scratch):
                 self.assertEqual((self.skill / "SKILL.md").read_text(), before, "nothing changes when the version is refused")
         self.assertNotEqual(self.refresh("--check", "--version", B).returncode, 0)
 
+    def test_the_equals_spelling_of_version_is_understood_and_unknown_arguments_are_refused(self):
+        """R-VERSION-EQ: `--version=<v>` was ignored silently — a plain refresh to the rules in force, exit 0 — so a release
+        meant to carry the next rules went out without them. Any other argument it did not know was ignored the same way."""
+        self.assertEqual(self.refresh().returncode, 0)
+        r = self.refresh(f"--version={B}")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.bundled(), B)
+        before = (self.skill / "SKILL.md").read_text()
+        for args in (("--versoin", A), ("--check", "--verbose"), ("--versio", A), (A,)):
+            with self.subTest(args=args):
+                r = self.refresh(*args)
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertEqual((self.skill / "SKILL.md").read_text(), before, "nothing changes on an argument it does not know")
+
 
 # ================================================================================================ the bridge on a pending version
 class BridgePendingRulesTests(Scratch):
@@ -644,6 +795,12 @@ class SkillDocsTests(unittest.TestCase):
         self.assertIn("verifications_left_today", write)
         self.assertIn("from_snapshot", write)
 
+    def test_skill_md_says_a_pending_version_is_not_adopted(self):
+        """R-PENDING-LOCAL: 'Adopt only an answer with verified: true' held for a version published ahead of its date too."""
+        rules = next(line for line in (SKILL / "SKILL.md").read_text(encoding="utf-8").splitlines() if line.startswith("- `rules_version`"))
+        self.assertIn("`in_force`", rules)
+        self.assertIn("effective_at", rules)
+
 
 # ================================================================================================ the unattended watch
 class WatchTests(Scratch):
@@ -651,9 +808,13 @@ class WatchTests(Scratch):
 
     REFUSED = (None, "refused: scio.md rejected the key (HTTP 401)")
 
-    def drive(self, answers, polls=40, run_for=0):
+    def drive(self, answers, polls=40, run_for=0, repeat=False):
+        """watch() on a simulated clock. fetch_me answers `answers` in order, then the last one for ever — or, with
+        `repeat`, the whole sequence again and again."""
         s = load("identity_supervise", SCRIPTS / "supervise.py")
         clock, sleeps, said, feed = [1_000_000.0], [], [], list(answers)
+        if repeat:
+            feed = itertools.cycle(answers)
 
         class Done(Exception):
             pass
@@ -665,6 +826,8 @@ class WatchTests(Scratch):
                 raise Done
 
         def fake_fetch():
+            if repeat:
+                return next(feed)
             return feed.pop(0) if len(feed) > 1 else feed[0]
 
         with patch.object(s, "fetch_me", fake_fetch), patch.object(s, "run", lambda cmd, log: (0, "")), \
@@ -691,6 +854,16 @@ class WatchTests(Scratch):
         code, sleeps, said = self.drive([self.REFUSED] * 20 + [(me(), None)] + [self.REFUSED], polls=60)
         self.assertEqual(code, 3)
         self.assertEqual(sleeps.count(3600), 20 + 24)
+
+    def test_a_network_error_during_a_refusal_does_not_restart_its_day(self):
+        """R-WATCH-RESET: any answer but a refusal reset the day's count, a transport error included — so with a hiccup every
+        few hours the watch never gave up and announced the suspension again after each one."""
+        for hiccup in ((None, "URLError"), (None, "HTTP 503"), (None, "unexpected answer")):
+            with self.subTest(hiccup=hiccup[1]):
+                code, sleeps, said = self.drive([self.REFUSED] * 5 + [hiccup], polls=400, repeat=True)
+                self.assertEqual(code, 3, "still watching a key refused for days")
+                self.assertLessEqual(sum(sleeps), 26 * 3600)
+                self.assertEqual(sum("suspended" in line for line in said), 1, "the reason is said once for the whole refusal")
 
     def test_the_watch_still_stops_at_once_without_a_key_and_honours_for(self):
         code, sleeps, said = self.drive([(None, "stop: no key — register first")])

@@ -29,18 +29,25 @@ PY = sys.executable or shutil.which("python3") or "python3"
 ROOT = os.path.dirname(os.path.dirname(SKILL))   # the plugin / repo root
 
 
+# A guard command as the plugin ships it (`python3 ${…}/skills/scio/scripts/x.py`) or as setup.py wrote it before
+# (`python3 "<abs>/x.py"`, `"<interpreter>" "<abs>/x.py"`, Windows separators included), with the script's own flags and
+# any `|| …` fallback: every form is rewritten to the one below, so running setup again repairs an older rewrite.
+GUARD_CMD = re.compile(r'^(?:python3?|"[^"]+")\s+(?:"[^"]*?[/\\]skills[/\\]scio[/\\]scripts[/\\]([^"/\\\s]+?\.py)"'
+                       r'|(?:\S*/)?skills/scio/scripts/([^"/\\\s]+?\.py))((?:\s+--[a-z][a-z-]*)*)(?:\s*\|\|.*)?$')
+
+
 def write_hooks_absolute(path, deny_json):
-    """Rewrite a harness hooks file so every guard runs by absolute path and a guard that cannot start answers deny:
-    Cursor and Antigravity run hook commands from the workspace, where `python3 skills/scio/scripts/x.py` does not
-    exist — the adapter would never start and the harness would fall through to allow."""
+    """Rewrite a harness hooks file so every guard runs by absolute path, with the interpreter running setup, and a guard
+    that cannot start answers deny: Cursor and Antigravity run hook commands from the workspace, where
+    `python3 skills/scio/scripts/x.py` does not exist — the adapter would never start and the harness would fall through
+    to allow. `python3` from PATH can be the Windows Store alias (exit 9009): the fallback would then deny every call."""
     if not os.path.exists(path):
         return
     txt = open(path, encoding="utf-8").read()
     def fix(m):
         cmd = json.loads('"' + m.group(1) + '"')   # the real command, not its JSON spelling: re-encoding an escaped string doubles every backslash
         # a script's own flags (whoami.py --session-start) stay; the `|| echo deny` fallback is re-added below
-        cmd = re.sub(r"^python3 (?:\S*/)?skills/scio/scripts/(\S+?\.py)((?:\s+--[a-z][a-z-]*)*)(?:\s*\|\|.*)?$",
-                     lambda mm: f'python3 "{os.path.join(ROOT, "skills", "scio", "scripts", mm.group(1))}"{mm.group(2)}', cmd)
+        cmd = GUARD_CMD.sub(lambda mm: f'"{PY}" "{os.path.join(ROOT, "skills", "scio", "scripts", mm.group(1) or mm.group(2))}"{mm.group(3)}', cmd)
         if "hook.py" in cmd and "||" not in cmd:
             cmd += " || echo '" + deny_json.replace("'", "") + "'"
         return '"command": ' + json.dumps(cmd)
@@ -196,6 +203,24 @@ def merge_json(path, mutate, at_most=None):
             os.remove(tmp)
         raise
     print(f"wrote {path}")
+
+
+def write_env_key(envp, key):
+    """Set SCIO_API_KEY in a harness's .env and keep every other line — the model provider's key, other secrets. The whole
+    file is written to a fresh private temporary file and moved into place: truncating the real one first lost all of it
+    when anything failed before the write (an unknown alias did). A symlinked .env is written through to its target."""
+    if os.path.islink(envp):
+        envp = os.path.realpath(envp)
+    lines = [l for l in (open(envp, encoding="utf-8").read().splitlines() if os.path.exists(envp) else []) if not l.startswith("SCIO_API_KEY=")]
+    fd, tmp = tempfile.mkstemp(prefix=".env.", suffix=".tmp", dir=os.path.dirname(envp))   # created 600
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines + [f"SCIO_API_KEY={key}"]) + "\n")
+        os.replace(tmp, envp)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 def strip_toml_tables(text, prefixes):
@@ -398,6 +423,7 @@ elif h == "hermes":
     # trust defaults to `full` (no per-call approval). Skills live in ~/.hermes/skills — install ours from skills.sh.
     home = os.path.expanduser("~/.hermes")
     cpath = os.path.join(home, "config.yaml")
+    key = key_for(a.alias) if a.alias else None   # an unknown alias stops here, before anything is written
     confirm([cpath] + ([os.path.join(home, ".env")] if a.alias else []))
     os.makedirs(home, exist_ok=True)
     trust = {"trust": "full"} if a.trust else {}   # Hermes' own default applies otherwise (it is `full` in current releases — set trust: ask in config.yaml to change it)
@@ -421,13 +447,9 @@ elif h == "hermes":
             open(cpath, "a", encoding="utf-8").write(block)
             print("pyyaml not installed: appended a mcp_servers block")
     print(f"wrote {cpath}")
-    if a.alias:  # Hermes usually runs as a service: put the key where its ${SCIO_API_KEY} resolves
+    if key:  # Hermes usually runs as a service: put the key where its ${SCIO_API_KEY} resolves
         envp = os.path.join(home, ".env")
-        lines = [l for l in (open(envp, encoding="utf-8").read().splitlines() if os.path.exists(envp) else []) if not l.startswith("SCIO_API_KEY=")]
-        fd = os.open(envp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines + [f"SCIO_API_KEY={key_for(a.alias)}"]) + "\n")
-        os.chmod(envp, 0o600)   # the mode above applies only when the file is created; an older .env keeps its own
+        write_env_key(envp, key)
         print(f"wrote SCIO_API_KEY to {envp} (mode 600)")
     cmd = ["hermes", "skills", "install", "skills-sh/evisoft/scio.md/scio"]
     if shutil.which("hermes"):
@@ -450,11 +472,7 @@ elif h == "openclaw":
     os.makedirs(home, mode=0o700, exist_ok=True)
     env = {}
     if key:
-        lines = [l for l in (open(envp, encoding="utf-8").read().splitlines() if os.path.exists(envp) else []) if not l.startswith("SCIO_API_KEY=")]
-        fd = os.open(envp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines + [f"SCIO_API_KEY={key}"]) + "\n")
-        os.chmod(envp, 0o600)   # the mode above applies only when the file is created; an older .env keeps its own
+        write_env_key(envp, key)
         env = {"SCIO_API_KEY": {"source": "env", "provider": "default", "id": "SCIO_API_KEY"}}
     defs = {
         "scio": {"command": PY, "args": [BRIDGE, "--harness", "openclaw"], "env": env},

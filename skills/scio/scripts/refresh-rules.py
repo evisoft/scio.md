@@ -24,7 +24,7 @@ in force which the platform does not publish, or which should already be in forc
 tampering — the next release refreshes it, and meanwhile every session brief says the rules changed and the bridge serves
 the verified ones; failing CI for it turned every push and pull request red from the instant a version took effect until
 a release shipped."""
-import json, os, re, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request
+import argparse, json, os, re, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scio_common import USER_AGENT, OPENER, API, parse_instant
@@ -34,12 +34,15 @@ SKILL = os.path.dirname(HERE)
 api = API
 VERSION_RE = re.compile(r"\d{4}-\d{2}-\d{2}")   # a rules version is a date
 
-args = sys.argv[1:]
-check_only = "--check" in args
-wanted = None
-if "--version" in args:
-    i = args.index("--version")
-    wanted = args[i + 1] if i + 1 < len(args) else ""
+# argparse, strictly: `--version=<v>` read as a plain refresh (exit 0, the pending rules left out of a release meant to carry
+# them), and an argument it does not know — a typo — must stop the run, not be ignored.
+ap = argparse.ArgumentParser(prog="refresh-rules.py", allow_abbrev=False,
+                             description="Refresh the bundled rules from the signed documents the platform serves (see the module docstring).")
+ap.add_argument("--check", action="store_true", help="verify and compare the bundle without writing: exit 1 when it cannot be trusted")
+ap.add_argument("--version", metavar="VERSION", help="carry this published version, not yet in force (a release during its notice period)")
+opts = ap.parse_args()
+check_only, wanted = opts.check, opts.version
+if wanted is not None:
     if check_only:
         sys.exit("scio: --check compares the bundle with the version it names; --version is for writing one — use one of them")
     if not VERSION_RE.fullmatch(wanted):

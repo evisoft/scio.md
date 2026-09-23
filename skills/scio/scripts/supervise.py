@@ -177,7 +177,8 @@ def watch(cmd, log, poll, tasks_every, run_for, max_rounds, max_restarts):
                     "stale — the operator checks the keys file; stopping"); return 3
             pause = REFUSED_RETRY if not run_for else max(0, min(REFUSED_RETRY, run_for - (now - started)))
             time.sleep(pause); continue
-        refused_since = None
+        if me is not None:   # only an accepted key ends a refusal: a network error or a 5xx in the middle of one is no answer
+            refused_since = None
         if problem:
             if problem.startswith("stop: "):
                 say(problem[6:]); return 3

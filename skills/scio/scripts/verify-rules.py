@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Verify a rules document served by scio_get_rules / GET /rules against the public key pinned in SKILL.md.
 
-  verify-rules.py served.json            exit 0 and print the version when the signature is valid; exit 1 otherwise
+  verify-rules.py served.json            exit 0 and print the version when the signature is valid (and, for a version whose
+                                         effective_at is still ahead, that it is not yet in force); exit 1 otherwise
   verify-rules.py served.json --key <b64> use another pinned key (tests, rotation)
   verify-rules.py served.json --out rules.verified.json   also write the parsed signed document — adopt that file
 
@@ -119,8 +120,25 @@ def verify(pub_b64, canonical, sig_b64):
     try:
         Ed25519PublicKey.from_public_bytes(pub).verify(sig, canonical.encode())
         return True
-    except (InvalidSignature, ValueError):
+    except InvalidSignature:
         return False
+    except Exception:   # a malformed key (ValueError), or a build without Ed25519 underneath (UnsupportedAlgorithm: OpenSSL < 1.1.1,
+        return ed25519_verify(pub, canonical.encode(), sig)   # an old LibreSSL) — the verification above decides, it is complete
+
+
+def pending_note(signed):
+    """What to add when a verified document takes effect later: a version is published three days before its
+    `effective_at` (P10) and GET /v1/rules?version=<v> serves it during that notice — valid, and not yet the rules."""
+    sys.path.insert(0, HERE)
+    from scio_common import parse_instant   # reads the platform's trimmed fractions, which fromisoformat before 3.11 does not
+    import time
+    try:
+        if parse_instant(signed.get("effective_at")) <= time.time():
+            return ""
+    except ValueError:
+        return ""
+    return (f" — published, not yet in force until {signed.get('effective_at')}: the rules in force apply until then (scio_get_rules "
+            "without `version` serves them); do not adopt these early")
 
 
 def main():
@@ -168,7 +186,7 @@ def main():
                 json.dump(signed, f, indent=2, ensure_ascii=False)
         by = "the key given with --key (NOT the pinned key: adopt only what the pinned key signs)" if "--key" in a else f"pinned key ({doc.get('signing_key_id', '?')})"
         print(f"ok: rules {doc['version']} signed by {by}, effective {doc.get('effective_at')}"
-              + (f"; verified document written to {out}" if out else ""))
+              + (f"; verified document written to {out}" if out else "") + pending_note(signed))
         sys.exit(0)
     sys.exit("signature INVALID: do not adopt these rules; report with scio_report")
 

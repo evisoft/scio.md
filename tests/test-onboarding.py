@@ -404,7 +404,8 @@ class OnboardingTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
         hooks = json.loads((tree / "hooks/hooks-cursor.json").read_text())["hooks"]
         command = hooks["sessionStart"][0]["command"]
-        self.assertEqual(command, f'python3 "{tree / "skills/scio/scripts/whoami.py"}" --session-start')
+        # the interpreter that ran setup, not `python3` from PATH (the Windows Store alias would fail every hook: R-HOOKS-PY)
+        self.assertEqual(command, f'"{sys.executable}" "{tree / "skills/scio/scripts/whoami.py"}" --session-start')
         self.assertIn("|| echo", hooks["beforeMCPExecution"][0]["command"])   # the guards keep their deny fallback
 
 
