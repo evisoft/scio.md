@@ -10,6 +10,7 @@ import re
 import runpy
 import shutil
 import socket
+import socketserver
 from contextlib import redirect_stdout
 from pathlib import Path
 import subprocess
@@ -381,7 +382,11 @@ class HardeningTests(unittest.TestCase):
                 answer = bridge.forward({"jsonrpc": "2.0", "id": 7, "method": "ping"})
                 self.assertIn("error", answer)
 
-    def run_release(self, diff_status=1, commit_status=0, fail_command=""):
+    def run_release(self, diff_status=1, commit_status=0, fail_command="", status="", suite="", contract=None):
+        """release.sh in a copy of the checkout, with git, gh and claude as doubles that log their arguments. python3
+        runs for real the steps that write files (versions, the contract's copies, the manifests) and is a double for
+        the rest; `suite` is what the security suite double prints, and it fails when that says FAIL. The contract is
+        the stand-in's snapshot — never the network."""
         temporary = tempfile.TemporaryDirectory(prefix="release-", dir=self.base)
         self.addCleanup(temporary.cleanup)
         base = Path(temporary.name)
@@ -393,22 +398,74 @@ class HardeningTests(unittest.TestCase):
         log = base / "release-commands"
         commands = {
             "git": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$RELEASE_TEST_LOG"\n'
-                   'case "$1" in commit) exit "$RELEASE_TEST_COMMIT";; diff) exit "$RELEASE_TEST_DIFF";; esac\n'
+                   'case "$1" in commit) exit "$RELEASE_TEST_COMMIT";; diff) exit "$RELEASE_TEST_DIFF";; '
+                   'status) printf "%s" "$RELEASE_TEST_STATUS"; exit 0;; esac\n'
                    '[ "$1" != "$RELEASE_TEST_FAIL_COMMAND" ]\n',
             "gh": '#!/bin/sh\nprintf "gh %s\\n" "$*" >> "$RELEASE_TEST_LOG"\n',
-            "python3": '#!/bin/sh\ncase "$1" in scripts/gen-manifest.py) exec "$RELEASE_TEST_PYTHON" "$@";; esac\n',
+            "python3": '#!/bin/sh\ncase "$1" in\n'
+                       '  scripts/gen-manifest.py|scripts/bump-version.py|scripts/sync-contract.py) exec "$RELEASE_TEST_PYTHON" "$@";;\n'
+                       '  tests/test-security.py) printf "%s\\n" "$RELEASE_TEST_SUITE"; case "$RELEASE_TEST_SUITE" in *FAIL*) exit 1;; esac;;\n'
+                       'esac\n',
             "claude": '#!/bin/sh\nprintf "claude %s\\n" "$*" >> "$RELEASE_TEST_LOG"\n',
         }
         for name, text in commands.items():
             path = binaries / name
             path.write_text(text)
             path.chmod(0o755)
-        result = subprocess.run(["bash", str(checkout / "scripts/release.sh"), "0.6.2"], capture_output=True, text=True,
+        log.write_text("")
+        result = subprocess.run(["bash", str(checkout / "scripts/release.sh"), "0.6.2",
+                                 str(contract or (ROOT / "tests/wiki/tools.json"))], capture_output=True, text=True,
                                 env=dict(self.env, PATH=str(binaries) + os.pathsep + os.environ["PATH"],
                                          RELEASE_TEST_LOG=str(log), RELEASE_TEST_PYTHON=sys.executable,
                                          RELEASE_TEST_DIFF=str(diff_status), RELEASE_TEST_COMMIT=str(commit_status),
-                                         RELEASE_TEST_FAIL_COMMAND=fail_command), timeout=15)
+                                         RELEASE_TEST_FAIL_COMMAND=fail_command, RELEASE_TEST_STATUS=status,
+                                         RELEASE_TEST_SUITE=suite or "0 failure(s)"), timeout=60)
         return result, log.read_text().splitlines()
+
+    def test_release_refuses_a_tree_that_is_not_clean(self):
+        """The release commit is immutable once tagged: an experiment lying in the checkout must not ride along."""
+        result, seen = self.run_release(status="?? scripts/experiment.py\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("scripts/experiment.py", result.stderr)
+        self.assertFalse(any(line.startswith(("add", "commit ", "tag ", "push ", "gh release ")) for line in seen), seen)
+        self.assertEqual((self.release_checkout / ".claude-plugin/plugin.json").read_text(encoding="utf-8"),
+                         (ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"), "nothing was bumped")
+
+    def test_release_stages_only_the_files_it_rewrites(self):
+        result, seen = self.run_release()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        added = [line for line in seen if line.startswith("add ")]
+        self.assertEqual(len(added), 1, seen)
+        self.assertNotIn(" -A", added[0])
+        for path in ("skills/scio/MANIFEST.sha256", "PLUGIN.sha256", "skills/scio/references/tools.md",
+                     "skills/scio/server/tools.json", "tests/wiki/tools.json", ".claude-plugin/plugin.json"):
+            self.assertIn(path, added[0].split())
+
+    def test_release_regenerates_the_contract_copies_from_one_source_and_stops_without_it(self):
+        result, _ = self.run_release()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshot = (ROOT / "tests/wiki/tools.json").read_bytes()
+        self.assertEqual((self.release_checkout / "tests/wiki/tools.json").read_bytes(), snapshot)
+        gen = load_module("release_gen_tools_md", ROOT / "scripts/gen-tools-md.py")
+        self.assertEqual((self.release_checkout / "skills/scio/references/tools.md").read_text(encoding="utf-8"),
+                         gen.render(json.loads(snapshot)))
+        result, seen = self.run_release(contract=self.base / "no-such-contract.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no-such-contract.json", result.stdout + result.stderr)
+        self.assertFalse(any(line.startswith(("add", "commit ", "tag ", "gh release ")) for line in seen), seen)
+
+    def test_release_shows_what_failed_in_the_suite(self):
+        result, seen = self.run_release(suite="  FAIL  B4: a new session reads the saved key\n1 failure(s)")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("B4: a new session reads the saved key", result.stderr)
+        self.assertFalse(any(line.startswith(("commit ", "tag ")) for line in seen), seen)
+
+    def test_release_needs_neither_gnu_sed_nor_sha256sum(self):
+        """BSD sed reads the argument after -i as a backup suffix, and stock macOS has no sha256sum."""
+        release = (ROOT / "scripts/release.sh").read_text(encoding="utf-8")
+        code = "\n".join(line for line in release.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotRegex(code, r"\bsed\s+-i\b")
+        self.assertNotRegex(code, r"\bsha256sum\b")
 
     def test_release_stops_before_tagging_when_commit_fails(self):
         result, seen = self.run_release(commit_status=1)
@@ -485,12 +542,29 @@ class ManifestVersionTests(unittest.TestCase):
         self.assertEqual(len(set(declared.values())), 1, declared)
 
     def test_release_bumps_every_file_that_carries_a_version(self):
-        """Two sed lines, one per spelling. A manifest added to neither goes stale without a sound."""
-        release = (ROOT / "scripts/release.sh").read_text(encoding="utf-8")
-        bumped = " ".join(line for line in release.splitlines() if line.startswith("sed -i "))
+        """scripts/bump-version.py lists them, one pattern per spelling. A manifest missing from it goes stale without a sound."""
+        bumped = {rel for rel, _ in load_module("bump_version", ROOT / "scripts/bump-version.py").FILES}
         for path in list(self.JSON_MANIFESTS) + list(self.SKILL_MANIFESTS):
             with self.subTest(manifest=path):
                 self.assertIn(path, bumped)
+        self.assertIn("scripts/bump-version.py", (ROOT / "scripts/release.sh").read_text(encoding="utf-8"))
+
+    def test_the_bump_rewrites_every_version_and_nothing_else(self):
+        with tempfile.TemporaryDirectory() as d:
+            copy = Path(d) / "repo"
+            shutil.copytree(ROOT, copy, ignore=shutil.ignore_patterns(".git", ".scio", "__pycache__"))
+            before = {rel: (copy / rel).read_text(encoding="utf-8") for rel in list(self.JSON_MANIFESTS) + list(self.SKILL_MANIFESTS)}
+            done = subprocess.run([sys.executable, str(copy / "scripts/bump-version.py"), "9.8.7"], capture_output=True,
+                                  text=True, timeout=30)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            for rel, text in before.items():
+                with self.subTest(manifest=rel):
+                    after = (copy / rel).read_text(encoding="utf-8")
+                    self.assertIn("9.8.7", after)
+                    old = re.search(r'"version": "([0-9.]+)"|version: "([0-9.]+)"', text)
+                    self.assertEqual(after, text.replace(old.group(0), old.group(0).replace(old.group(1) or old.group(2), "9.8.7")))
+            refused = subprocess.run([sys.executable, str(copy / "scripts/bump-version.py"), "v1"], capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(refused.returncode, 0)
 
     def test_no_manifest_is_missing_from_the_check(self):
         """The list above is hand-kept; this finds a version-carrying file nobody added to it."""
@@ -549,14 +623,17 @@ class LocalWikiTests(unittest.TestCase):
         self.assertEqual(served, {t["name"] for t in self.wiki.tools})
 
     def test_an_onboarding_runs_against_it_without_touching_the_wiki(self):
-        got, err = self.bridge({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                                "params": {"name": "scio_register", "arguments": {"model_version": "claude-opus-5"}}})
+        # registered as the skill instructs (a name, the family, the exact model id): the server refuses anything less,
+        # and so does the stand-in, so a bridge that dropped a field would fail here as it would on scio.md
+        got, err = self.bridge({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "scio_register",
+                                "arguments": {"display_name": "suite", "model_family": "claude", "model_version": "claude-opus-5"}}})
         registered = self.answer(got, 2)
         self.assertNotIn("api_key", registered, "the bridge must not hand the key back to the model")
         self.assertTrue(os.path.exists(self.env["SCIO_KEYS_FILE"]), err[-400:])
 
-        agent = next(a for a in self.wiki.agents.values() if a["agent_id"] == registered["agent_id"])
-        urllib.request.urlopen(f"{self.wiki.base}/claim/{agent['agent_id']}", timeout=20).read()
+        # the link the bridge handed over, as the operator opens it — it carries a token, not the agent id
+        self.assertNotIn(registered["agent_id"], registered["claim_url"])
+        urllib.request.urlopen(registered["claim_url"], timeout=20).read()
 
         got, _ = self.bridge({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                               "params": {"name": "scio_whoami", "arguments": {}}})
@@ -609,17 +686,39 @@ class LiveRegistrationTests(unittest.TestCase):
                 self.assertIn("live_registration_refused()", body)
 
     def test_the_script_stops_before_the_network(self):
-        """End to end: with CI set, register.py must exit non-zero and open no connection."""
+        """End to end: with CI set, register.py must exit non-zero and open no connection. The only network the run
+        has is a local proxy that records every connection and forwards none: if the seatbelt ever regressed, this test
+        would fail on what the proxy saw — never by registering an agent named 'probe' on scio.md."""
+        seen = []
+
+        class Trap(socketserver.BaseRequestHandler):
+            def handle(self):
+                seen.append(self.request.recv(512))   # the CONNECT line, then the connection is dropped
+
+        trap = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Trap)
+        trap.daemon_threads = True
+        threading.Thread(target=trap.serve_forever, daemon=True).start()
+        self.addCleanup(trap.server_close)
+        self.addCleanup(trap.shutdown)
+        proxy = f"http://127.0.0.1:{trap.server_address[1]}"
         with tempfile.TemporaryDirectory() as home:
-            env = dict(os.environ, CI="true", HOME=home, SCIO_KEYS_FILE=os.path.join(home, "keys"))
+            env = {k: v for k, v in os.environ.items() if not k.startswith("SCIO_") and k.lower() not in ("no_proxy", "all_proxy")}
+            env.update(CI="true", HOME=home, SCIO_KEYS_FILE=os.path.join(home, "keys"),
+                       HTTPS_PROXY=proxy, https_proxy=proxy, HTTP_PROXY=proxy, http_proxy=proxy)
             env.pop(scio_common.LIVE_REGISTER_OVERRIDE, None)
-            env.pop("SCIO_" + "API" + "_KEY", None)   # spelled in parts: the guard hook denies the literal name
-            with patch.dict(os.environ, {}, clear=False):
-                result = subprocess.run([sys.executable, str(ROOT / "skills/scio/scripts/register.py"), "probe"],
-                                        capture_output=True, text=True, env=env, timeout=30)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("automated run", result.stdout + result.stderr)
-        self.assertFalse(os.path.exists(os.path.join(home, "keys")))
+            # First, that the trap catches what the scripts' opener sends — or the check below would prove nothing, and a
+            # regression would reach the network. A reserved name (.invalid): nothing is registered anywhere.
+            subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import scio_common as c\n"
+                            "try: c.OPENER.open('https://proxy-trap.invalid/v1/agents', timeout=5)\nexcept Exception: pass" % str(SCRIPTS)],
+                           capture_output=True, text=True, env=env, timeout=30)
+            self.assertTrue(any(b"proxy-trap.invalid" in line for line in seen), f"the proxy trap saw nothing: {seen}")
+            del seen[:]
+            result = subprocess.run([sys.executable, str(ROOT / "skills/scio/scripts/register.py"), "probe"],
+                                    capture_output=True, text=True, env=env, timeout=30)
+            self.assertEqual(seen, [], "register.py opened a connection")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("automated run", result.stdout + result.stderr)
+            self.assertFalse(os.path.exists(os.path.join(home, "keys")), "a key was saved")
 
 
 class RedteamFixtureTests(unittest.TestCase):

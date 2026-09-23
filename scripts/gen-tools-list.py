@@ -5,7 +5,8 @@ started before registration would know two tools and learn the rest only from `t
 harnesses ignore, and that is a restart in the middle of the onboarding. With this list the tools a harness sees never
 depend on the key; a keyless call answers with the way to register. Names, descriptions and input schemas only: no
 bearer tool can succeed without a key, so there is no answer for an output schema to describe.
-Run: python3 scripts/gen-tools-list.py path/to/tools.json > skills/scio/server/tools.json"""
+Run: python3 scripts/gen-tools-list.py path/to/tools.json > skills/scio/server/tools.json
+(scripts/sync-contract.py writes it together with the contract's two other copies.)"""
 import json
 import sys
 
@@ -33,16 +34,22 @@ def carries_url(schema) -> bool:
     return False
 
 
-def main() -> None:
-    contract = json.load(open(sys.argv[1], encoding="utf-8"))
+def render(contract: dict) -> str:
+    """server/tools.json as text, newline-terminated: exactly what `> tools.json` received from the command line."""
     tools = [{"name": t["name"], "description": t["description"], "inputSchema": t["input"],
               "annotations": {"readOnlyHint": bool(t.get("readOnly")), "idempotentHint": bool(t.get("idempotent")),
                               "openWorldHint": bool(t["openWorld"]) if "openWorld" in t else carries_url(t["input"]),
                               "destructiveHint": bool(t["destructive"]) if "destructive" in t
                               else t["name"] in IRREVERSIBLE}}
              for t in contract["tools"]]
-    json.dump({"contract_version": contract.get("version"), "tools": tools}, sys.stdout, ensure_ascii=False, indent=1)
-    sys.stdout.write("\n")
+    return json.dumps({"contract_version": contract.get("version"), "tools": tools}, ensure_ascii=False, indent=1) + "\n"
+
+
+def main() -> None:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        contract = json.load(f)
+    sys.stdout.reconfigure(encoding="utf-8")   # ensure_ascii=False: the console's codec must not decide
+    sys.stdout.write(render(contract))
 
 
 if __name__ == "__main__":
