@@ -8,7 +8,8 @@ stand-in, and nothing said so. This reads the configuration the harness itself w
 
   wired.py --harness codex|gemini|kimi --home HOME --base-url URL      the file setup.py wrote under HOME
   wired.py --harness claude --plugin DIR --base-url URL                the plugin directory given to --plugin-dir
-  wired.py --harness grok --home HOME --base-url URL                   the plugin `grok plugin install` copied
+  wired.py --harness grok --home HOME --base-url URL                   the plugins `grok plugin install` copied: exactly
+                                                                       one may define scio
 """
 import argparse, glob, json, os, re, sys
 
@@ -40,6 +41,10 @@ def bridge_of_codex(home):
         return None
 
 
+class Ambiguous(Exception):
+    """More than one server a harness may launch as `scio`: a check of one of them says nothing about the run."""
+
+
 def configured_bridge(harness, home, plugin):
     """(the bridge the harness will launch, where that was read) — (None, what was looked at) when nothing is set."""
     if harness == "claude":
@@ -47,12 +52,19 @@ def configured_bridge(harness, home, plugin):
         return (bridge_of_mcp_json(path, os.path.abspath(plugin)) if plugin and os.path.exists(path) else None), path
     if harness == "grok":   # --home's .grok, then GROK_HOME when the run set one (grok and setup.py honour it)
         homes = [os.path.join(home, ".grok")] + ([os.environ["GROK_HOME"]] if os.environ.get("GROK_HOME") else [])
+        where = " or ".join(os.path.join(g, "installed-plugins") for g in homes)
+        # Every installed plugin that defines `scio`, not the first that looks right: grok may launch any of them, and
+        # the published plugin installed beside the copy talks to scio.md while the copy passes the check.
+        found = {}
         for grok in homes:
             for path in sorted(glob.glob(os.path.join(grok, "installed-plugins", "*", ".mcp.json"))):
-                found = bridge_of_mcp_json(path, os.path.dirname(path))
-                if found and aimed_at(found):
-                    return found, path
-        return None, " or ".join(os.path.join(g, "installed-plugins") for g in homes)
+                bridge = bridge_of_mcp_json(path, os.path.dirname(path))
+                if bridge:
+                    found.setdefault(os.path.realpath(path), (bridge, path))
+        if len(found) > 1:
+            raise Ambiguous(f"{len(found)} installed plugins define scio ({', '.join(p for _, p in found.values())}): "
+                            "which one grok launches is not known — install only the copy")
+        return next(iter(found.values()), (None, where))
     if harness == "codex":
         return bridge_of_codex(home), os.path.join(home, ".codex", "config.toml")
     path = {"gemini": os.path.join(home, ".gemini", "settings.json"),
@@ -80,7 +92,11 @@ def main():
     ap.add_argument("--plugin", help="claude: the plugin directory the session loads with --plugin-dir")
     ap.add_argument("--base-url", required=True)
     a = ap.parse_args()
-    bridge, where = configured_bridge(a.harness, a.home, a.plugin)
+    try:
+        bridge, where = configured_bridge(a.harness, a.home, a.plugin)
+    except Ambiguous as e:
+        print(f"  FAIL {a.harness}: {e}")
+        return 1
     if not bridge:
         print(f"  FAIL {a.harness} launches no scio server (read {where})")
         return 1

@@ -679,6 +679,25 @@ class SimulationWiringTests(unittest.TestCase):
         self.fake.skill_copy(self.base, installed / "skills/scio")
         self.assertEqual(self.wired("grok").returncode, 0)
 
+    def test_a_second_installed_plugin_is_not_hidden_behind_the_first(self):
+        """R9: grok may launch whichever installed plugin defines `scio`; one aimed at scio.md beside the copy must fail."""
+        grok = self.home / ".grok/installed-plugins"
+        for name, skill in (("plugin-0001", None), ("plugin-0002", ROOT / "skills/scio")):
+            (grok / name / "skills").mkdir(parents=True)
+            shutil.copy(ROOT / ".mcp.json", grok / name / ".mcp.json")
+            if skill is None:
+                self.fake.skill_copy(self.base, grok / name / "skills/scio")
+            else:
+                shutil.copytree(skill, grok / name / "skills/scio", ignore=shutil.ignore_patterns("__pycache__", ".scio"))
+        both = self.wired("grok")
+        self.assertNotEqual(both.returncode, 0, both.stdout)
+        self.assertIn("plugin-0002", both.stdout)
+        shutil.rmtree(grok / "plugin-0002/skills/scio")   # two copies, both aimed at the stand-in: which one runs is still unknown
+        self.fake.skill_copy(self.base, grok / "plugin-0002/skills/scio")
+        self.assertNotEqual(self.wired("grok").returncode, 0)
+        shutil.rmtree(grok / "plugin-0002")
+        self.assertEqual(self.wired("grok").returncode, 0)
+
     def test_the_container_wires_claude_and_grok_to_the_copy_and_checks_it(self):
         run = (TESTS / "sim/run.sh").read_text(encoding="utf-8")
         self.assertIn("--plugin-dir", run, "Claude Code loads the redirected plugin, not whatever the image happens to have")
