@@ -4,6 +4,9 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  # the deployed contract and rules change between pull requests too: a daily run is where drift shows up first
+  schedule:
+    - cron: "17 6 * * *"
 # this job installs third-party packages (pip, npm, npx) and needs nothing but the checkout: say so here rather than rely on
 # the repository's default token permissions (CodeQL actions/missing-workflow-permissions)
 permissions:
@@ -38,13 +41,10 @@ jobs:
         run: python3 tests/test-extraction.py
       - name: Onboarding suite (session brief and reminders, the server's instants, the unattended watch)
         run: python3 tests/test-onboarding.py
-      - name: Manifest equals the installable tree
+      - name: Manifests equal what git ships (the skill, and what the harness loads from the plugin root)
         run: |
-          cp skills/scio/MANIFEST.sha256 /tmp/committed
-          python3 scripts/gen-manifest.py >/dev/null
-          diff /tmp/committed skills/scio/MANIFEST.sha256 && echo "manifest current"
-          (cd skills/scio && sha256sum -c MANIFEST.sha256 --quiet) && echo "hashes verified"
-          ! grep -E 'redteam|test-security|gen-manifest|__pycache__|\.pyc' skills/scio/MANIFEST.sha256
+          python3 scripts/gen-manifest.py --check
+          ! grep -E 'redteam|test-security|gen-manifest|__pycache__|\.pyc|\.scio/' skills/scio/MANIFEST.sha256 PLUGIN.sha256
       - name: Bundled rules match the live signed rules
         run: python3 skills/scio/scripts/refresh-rules.py --check
       - name: Claude Code plugin validation
@@ -54,3 +54,27 @@ jobs:
           claude plugin validate .
       - name: Agent Skills validation
         run: npx -y skills-ref validate skills/scio
+  # The oldest Python the runtime scripts support. The instants the server writes (a trimmed fraction, `Z`) are what
+  # 3.10's datetime.fromisoformat refuses and 3.12's accepts: the regression tests for them can fail only here.
+  python-3-10:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+      - name: Every suite on Python 3.10
+        run: pip install cryptography >/dev/null && python3 tests/test-security.py
+  # The three copies of the tool contract the plugin carries (tools.md, server/tools.json, the stand-in's snapshot)
+  # against the contract scio.md serves. Drift is a release to cut, not a fault in the pull request that happens to
+  # run when the platform deploys: reported here and on the daily run, never blocking.
+  contract-drift:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Bundled contract copies match the deployed contract (https://scio.md/v1/tools.json)
+        run: python3 scripts/sync-contract.py --check

@@ -1,6 +1,16 @@
-# Keeps the simulation build context small; tests/sim/Dockerfile copies the repository.
+# Keeps the simulation build context small, and secrets out of it: tests/sim/Dockerfile copies only the paths it
+# names, and nothing below ever reaches the daemon — a key file left in the checkout cannot end up in an image layer.
 .git
 .scio
 .remember
 **/__pycache__
 node_modules
+.env
+.env.*
+**/.env
+**/.env.*
+.claude
+**/*.local.*
+**/*.key
+**/*.pem
+**/keys

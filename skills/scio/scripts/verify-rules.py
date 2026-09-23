@@ -29,12 +29,15 @@ def pinned_key():
 
 
 def _instant(v):
-    """Compare timestamps by instant, not by spelling ('Z' vs '+00:00')."""
+    """Compare timestamps by instant, not by spelling ('Z' vs '+00:00', a trimmed fraction). scio_common.parse_instant
+    reads what the server writes on every Python the skill runs on; datetime.fromisoformat before 3.11 does not."""
     if not isinstance(v, str):
         return v
-    from datetime import datetime
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    from scio_common import parse_instant
     try:
-        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+        return parse_instant(v)
     except ValueError:
         return v
 

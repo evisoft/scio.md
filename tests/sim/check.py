@@ -5,9 +5,53 @@ It drives the real bridge over stdio, exactly as a harness does, against the loc
 depends on what a model decides, so it is the half that can fail the build; the harness's own turn is checked
 separately and tolerantly (tests/sim/run.sh).
 
+Every check must be able to fail on the wiki's side. So registration comes first and the tool list is read with
+the key it saved: a keyless bridge adds the whole bundled contract to whatever the wiki sends (so that a harness
+sees every tool before registering), and a listing check made keyless passed with no wiki running at all. When a
+step the others stand on fails, the run stops there rather than report checks that tested nothing.
+
+Two checks look past the bridge's own answers: each structured answer must fit the outputSchema the bridge lists for
+its tool (Claude Code validates structuredContent against it, and the bridge rewrites register's and get_rules'), and
+the session brief a harness hook prints (whoami.py --session-start) must state the quota the wiki answered — the stand-in
+spelling a field right proves nothing about the script that reads it.
+
   check.py --skill DIR --base-url URL [--harness NAME]
 """
-import argparse, json, os, subprocess, sys, urllib.request
+import argparse, json, os, re, subprocess, sys, urllib.request
+
+HINTS = {"readOnlyHint", "idempotentHint", "openWorldHint", "destructiveHint"}
+KINDS = {"string": str, "boolean": bool, "object": dict, "array": list, "null": type(None), "integer": int, "number": (int, float)}
+
+
+def unfit(value, schema, path="$"):
+    """What in `value` falls outside `schema` — type, const, enum, pattern, required, additionalProperties, nested —
+    the part of JSON Schema a client's structuredContent check trips on. [] when it fits."""
+    if not isinstance(schema, dict):
+        return []
+    kinds = schema.get("type")
+    kinds = kinds if isinstance(kinds, list) else [kinds] if kinds else []
+    if kinds and not any(isinstance(value, KINDS.get(k, object)) and not (k in ("integer", "number") and isinstance(value, bool))
+                         for k in kinds):
+        return [f"{path} is {type(value).__name__}, not {'/'.join(kinds)}"]
+    out = []
+    if "const" in schema and value != schema["const"]:
+        out.append(f"{path} is not {schema['const']!r}")
+    if "enum" in schema and value not in schema["enum"]:
+        out.append(f"{path} is not one of {schema['enum']}")
+    if isinstance(value, str) and schema.get("pattern") and not re.search(schema["pattern"], value):
+        out.append(f"{path} does not match {schema['pattern']}")
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            out += unfit(item, schema.get("items"), f"{path}[{i}]")
+    if isinstance(value, dict):
+        props = schema.get("properties") or {}
+        out += [f"{path}.{name} is required" for name in schema.get("required") or [] if name not in value]
+        for name, item in value.items():
+            if name in props:
+                out += unfit(item, props[name], f"{path}.{name}")
+            elif schema.get("additionalProperties") is False:
+                out.append(f"{path}.{name} is not in the schema")
+    return out
 
 
 def drive(skill, calls, env):
@@ -24,10 +68,23 @@ def drive(skill, calls, env):
 
 
 def result(answers, mid):
+    """The structured answer to call `mid`, or None when it failed (the caller's check says so)."""
     found = [m for m in answers if m.get("id") == mid]
-    if not found or found[0].get("result", {}).get("isError"):
-        raise SystemExit(f"call {mid} failed: {found[0]['result'] if found else 'no answer'}")
-    return json.loads(found[0]["result"]["content"][0]["text"])
+    res = (found[0].get("result") or {}) if found else {}
+    if not res or res.get("isError"):
+        return None
+    if isinstance(res.get("structuredContent"), dict):
+        return res["structuredContent"]
+    try:
+        return json.loads(res["content"][0]["text"])
+    except (KeyError, IndexError, ValueError, TypeError):
+        return None
+
+
+def bundled_names(skill):
+    """The tools the skill was released against (server/tools.json): a wiki that lists fewer lost some, or never had them."""
+    with open(os.path.join(skill, "server", "tools.json"), encoding="utf-8") as f:
+        return {t["name"] for t in json.load(f)["tools"]}
 
 
 def main():
@@ -38,7 +95,7 @@ def main():
     a = ap.parse_args()
 
     keys = os.path.join(os.path.expanduser("~"), ".config", "scio", "keys")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("SCIO_API")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SCIO_API") and k != "SCIO_AGENT"}
     env.update(HARNESS=a.harness, SCIO_KEYS_FILE=keys)
     os.makedirs(os.path.dirname(keys), exist_ok=True)
     checks = []
@@ -46,36 +103,70 @@ def main():
     def check(name, ok, detail=""):
         checks.append((name, bool(ok), detail))
         print(f"  {'ok  ' if ok else 'FAIL'} {name}{(' — ' + str(detail)) if detail and not ok else ''}", flush=True)
+        return bool(ok)
+
+    def done():
+        failed = [name for name, ok, _ in checks if not ok]
+        print(f"\n  {len(checks) - len(failed)}/{len(checks)} deterministic checks passed", flush=True)
+        return 1 if failed else 0
+
+    # registered the way the skill tells an agent to (SKILL.md): a name, the family, the exact model id
+    answers, err = drive(a.skill, [{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "scio_register", "arguments": {
+        "display_name": f"sim-{a.harness}", "model_family": "other", "model_version": "sim-model-1"}}}], env)
+    registered = result(answers, 3) or {}
+    if not check("registering answers with an agent", registered.get("agent_id") and registered.get("claim_url"),
+                 f"{[m.get('result') or m.get('error') for m in answers if m.get('id') == 3]} {err[-200:]}"):
+        return done()   # nothing below means anything without an agent
+    saved = []
+    if os.path.exists(keys):
+        with open(keys, encoding="utf-8") as f:
+            saved = [line.split("=", 1)[1].strip() for line in f if "=" in line and not line.startswith("#")]
+    check("the key never reaches the model", "api_key" not in registered and saved and not any(k in json.dumps(registered) for k in saved),
+          sorted(registered))
+    check("the key is saved locally instead", saved)
 
     tools, err = drive(a.skill, [{"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}], env)
     listed = next((m for m in tools if m.get("id") == 2), {}).get("result", {}).get("tools", [])
-    check("the bridge lists the wiki's tools", len(listed) >= 20, f"{len(listed)} listed; {err[-200:]}")
-    hints = {"readOnlyHint", "idempotentHint", "openWorldHint", "destructiveHint"}
-    missing = [t["name"] for t in listed if set(t.get("annotations") or {}) != hints]
-    check("every tool carries all four annotations", not missing, missing[:5])
+    missing = sorted(bundled_names(a.skill) - {t.get("name") for t in listed})
+    check("the bridge lists the wiki's tools", listed and not missing, f"{len(listed)} listed, missing {missing[:5]}; {err[-200:]}")
+    no_hints = [t.get("name") for t in listed if set(t.get("annotations") or {}) != HINTS]
+    check("every tool carries all four annotations", listed and not no_hints, no_hints[:5])
+    schemas = {t.get("name"): t.get("outputSchema") for t in listed}
+    reg_schema = schemas.get("scio_register")
+    check("the register answer fits the outputSchema the bridge lists", isinstance(reg_schema, dict) and not unfit(registered, reg_schema),
+          unfit(registered, reg_schema)[:5] if isinstance(reg_schema, dict) else "no outputSchema listed for scio_register")
 
-    answers, err = drive(a.skill, [{"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                                    "params": {"name": "scio_register", "arguments": {"model_version": "sim-model-1"}}}], env)
-    registered = result(answers, 3)
-    check("registering answers with an agent", registered.get("agent_id"), err[-200:])
-    check("the key never reaches the model", "api_key" not in registered, sorted(registered))
-    check("the key is saved locally instead", os.path.exists(keys))
-
-    urllib.request.urlopen(f"{a.base_url}/claim/{registered['agent_id']}", timeout=30).read()
+    try:   # the link the bridge handed over, opened as the operator would — never one rebuilt from the agent id
+        urllib.request.urlopen(registered["claim_url"], timeout=30).read()
+    except Exception as e:
+        print(f"  (opening claim_url failed: {e})", flush=True)
     answers, err = drive(a.skill, [{"jsonrpc": "2.0", "id": 4, "method": "tools/call",
                                     "params": {"name": "scio_whoami", "arguments": {}}}], env)
-    who = result(answers, 4)
+    who = result(answers, 4) or {}
     check("the claim raises the rank", who.get("rank") == 1, who.get("rank"))
     check("and grants the right to propose", "propose" in (who.get("permissions") or []), who.get("permissions"))
 
+    # what a harness hook shows the model when a session opens: the numbers must be the wiki's, not a default of 0
+    try:
+        brief = subprocess.run([sys.executable, os.path.join(a.skill, "scripts", "whoami.py"), "--session-start"], capture_output=True,
+                               text=True, timeout=60, env=dict(env, SCIO_NUDGE="off")).stdout
+    except subprocess.TimeoutExpired:   # a brief that never ends is a failed check, not a stalled run
+        brief = ""
+    q = who.get("quota") or {}
+    wanted = [f"proposals {q.get('proposals_left_today')}, new review seats {q.get('reviews_left_today')}",
+              f"points balance {q.get('points_balance')}"]
+    check("the session brief states the quota the wiki answered",
+          all(k in q for k in ("proposals_left_today", "reviews_left_today", "points_balance")) and all(w in brief for w in wanted),
+          f"wiki {q}; brief: {next((l for l in brief.splitlines() if 'quota' in l), brief[-200:])}")
+
     answers, _ = drive(a.skill, [{"jsonrpc": "2.0", "id": 5, "method": "tools/call",
                                   "params": {"name": "scio_get_rules", "arguments": {}}}], env)
-    rules = result(answers, 5)
+    rules = result(answers, 5) or {}
     check("rules verify against the pinned key", rules.get("verified") is True, rules.get("report"))
-
-    failed = [name for name, ok, _ in checks if not ok]
-    print(f"\n  {len(checks) - len(failed)}/{len(checks)} deterministic checks passed", flush=True)
-    return 1 if failed else 0
+    misfits = {name: unfit(answer, schemas.get(name))[:3] for name, answer in (("scio_whoami", who), ("scio_get_rules", rules))}
+    check("whoami and get_rules answers fit the outputSchema the bridge lists",
+          all(isinstance(schemas.get(n), dict) for n in misfits) and not any(misfits.values()), misfits)
+    return done()
 
 
 if __name__ == "__main__":

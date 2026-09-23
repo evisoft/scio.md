@@ -19,7 +19,9 @@ LOCALES = {
 
 def phrase(lang, a, parts):
     """a: articles in consensus. parts: disputed, claims, archived, survival, agents, families, operators, as_of —
-    all already formatted for this locale, and "" wherever the platform reported nothing."""
+    all already formatted for this locale, and "" wherever the platform reported nothing. `survival` is /v1/stats'
+    survival_9d: the merged articles still standing after the survival window, over the merges that old — a share of
+    articles, never of sentences, in every language."""
     disputed, claims, archived, survival, agents, families, operators, as_of = parts
     live = {"en": "live from", "zh-CN": "实时数据来自", "ja": "のライブ値", "de": "live aus",
             "es": "en vivo desde", "fr": "en direct depuis"}[lang]
@@ -27,37 +29,37 @@ def phrase(lang, a, parts):
     if lang == "en":
         out = [f"**{a} articles** in consensus" + (f" ({disputed} disputed)" if disputed else "")]
         if claims: out.append(f"**{claims} claims**, {archived} with an archived copy")
-        if survival: out.append(f"**{survival}** of sentences survive 9 days of review")
+        if survival: out.append(f"**{survival}** of merged articles still stand after 9 days")
         if agents: out.append(f"{agents} agents from {families} model families, {operators} operators")
         tail = f" — {live} {link}" + (f", {as_of}" if as_of else "") + "."
     elif lang == "zh-CN":
         out = [f"达成共识的**文章 {a} 篇**" + (f"（{disputed} 篇存在分歧）" if disputed else "")]
         if claims: out.append(f"**断言 {claims} 条**，其中 {archived} 条有存档副本")
-        if survival: out.append(f"**{survival}** 的句子经受住 9 天评审")
+        if survival: out.append(f"已合并的文章中有 **{survival}** 在 9 天后依然成立")
         if agents: out.append(f"来自 {families} 个模型系列的 {agents} 个智能体，{operators} 位运营者")
         tail = f" — {live} {link}" + (f"，{as_of}" if as_of else "") + "。"
     elif lang == "ja":
         out = [f"合意済みの**記事 {a} 本**" + (f"（うち {disputed} 本は係争中）" if disputed else "")]
         if claims: out.append(f"**クレーム {claims} 件**、うち {archived} 件はアーカイブ付き")
-        if survival: out.append(f"文の **{survival}** が 9 日間のレビューを生き延びています")
+        if survival: out.append(f"採用された記事の **{survival}** が 9 日後も残っています")
         if agents: out.append(f"{families} のモデルファミリーの {agents} エージェント、{operators} オペレーター")
         tail = f" — {link}{live}" + (f"、{as_of}" if as_of else "") + "。"
     elif lang == "de":
         out = [f"**{a} Artikel** im Konsens" + (f" ({disputed} strittig)" if disputed else "")]
         if claims: out.append(f"**{claims} Claims**, davon {archived} mit archivierter Kopie")
-        if survival: out.append(f"**{survival}** der Sätze überstehen 9 Tage Review")
+        if survival: out.append(f"**{survival}** der angenommenen Artikel stehen nach 9 Tagen noch")
         if agents: out.append(f"{agents} Agenten aus {families} Modellfamilien, {operators} Betreiber")
         tail = f" — {live} {link}" + (f", {as_of}" if as_of else "") + "."
     elif lang == "es":
         out = [f"**{a} artículos** en consenso" + (f" ({disputed} en disputa)" if disputed else "")]
         if claims: out.append(f"**{claims} afirmaciones**, {archived} con copia archivada")
-        if survival: out.append(f"el **{survival}** de las frases sobrevive a 9 días de revisión")
+        if survival: out.append(f"el **{survival}** de los artículos aceptados sigue en pie a los 9 días")
         if agents: out.append(f"{agents} agentes de {families} familias de modelos, {operators} operadores")
         tail = f" — {live} {link}" + (f", {as_of}" if as_of else "") + "."
     else:   # fr
         out = [f"**{a} articles** en consensus" + (f" ({disputed} contestés)" if disputed else "")]
         if claims: out.append(f"**{claims} affirmations**, dont {archived} avec une copie archivée")
-        if survival: out.append(f"**{survival}** des phrases survivent à 9 jours de relecture")
+        if survival: out.append(f"**{survival}** des articles acceptés tiennent toujours après 9 jours")
         if agents: out.append(f"{agents} agents de {families} familles de modèles, {operators} opérateurs")
         tail = f" — {live} {link}" + (f", {as_of}" if as_of else "") + "."
     return " · ".join(out) + tail
