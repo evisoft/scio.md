@@ -1,7 +1,7 @@
 """Shared constants for the skill's scripts. One User-Agent for everything that talks to scio.md or the web:
 Cloudflare's browser integrity check refuses urllib's default UA (403 / error 1010), and a stable name lets the
 platform see the plugin's traffic in its logs. The version comes from SKILL.md's frontmatter so it moves with the skill."""
-import hashlib, json, os, re, time, urllib.error, urllib.request
+import contextlib, hashlib, json, os, re, tempfile, threading, time, urllib.error, urllib.request
 from urllib.parse import urlparse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,10 +34,32 @@ def env_work_dir():
     return "" if _PLACEHOLDER.match(v) else v.strip()
 
 
+FALLBACK_WORK_ROOT = os.path.join("~", ".local", "share", "scio", "work")
+
+
+def default_work_root():
+    """<workspace>/.scio/work, or "" when it must not be the root: the workspace is not writable, or `.scio` or
+    `.scio/work` there is a link (a symlink, a Windows junction) or resolves anywhere but where it stands. A repository
+    can carry either as a symlink and a clone recreates it; trusting where it lands made "inside the task folder" mean
+    the whole filesystem (a link to /) or the operator's home (../../..) for read_file, write_file, build_proposal, the
+    bridge's proposal_file and every approval that relies on the root."""
+    cwd = os.getcwd()
+    if not os.access(cwd, os.W_OK):
+        return ""
+    dot, root = os.path.join(cwd, ".scio"), os.path.join(cwd, ".scio", "work")
+    isjunction = getattr(os.path, "isjunction", lambda p: False)   # Python 3.12+; before it, realpath below catches one
+    if any(os.path.islink(p) or isjunction(p) for p in (dot, root)):
+        return ""
+    if os.path.normcase(os.path.realpath(root)) != os.path.normcase(os.path.join(os.path.realpath(cwd), ".scio", "work")):
+        return ""
+    return root
+
+
 def work_root():
-    """The shared task root, without creating directories as a side effect."""
-    return env_work_dir() or (os.path.join(os.getcwd(), ".scio", "work") if os.access(os.getcwd(), os.W_OK)
-                              else os.path.expanduser("~/.local/share/scio/work"))
+    """The shared task root, without creating directories as a side effect: SCIO_WORK_DIR (the operator's explicit
+    choice, trusted even as a link), else the workspace's own `.scio/work` when it is safe (default_work_root), else a
+    private folder under the operator's home."""
+    return env_work_dir() or default_work_root() or os.path.expanduser(FALLBACK_WORK_ROOT)
 
 
 def inside_work_root(path):
@@ -54,7 +76,9 @@ def ensure_work_root():
     reach the user's repository. One implementation for everything that writes under the root (workdir.py, the bridge)."""
     root = work_root()
     os.makedirs(root, mode=0o700, exist_ok=True)
-    if not env_work_dir() and os.access(os.getcwd(), os.W_OK):
+    if work_root() != root:   # a link appeared at .scio while the root was being made: it is never adopted
+        raise OSError(f"the task work root changed while it was being created ({root}): refused")
+    if not env_work_dir() and root == os.path.join(os.getcwd(), ".scio", "work"):   # the default root, vetted above
         try:   # exclusive creation never follows an existing .gitignore symlink
             with open(os.path.join(os.getcwd(), ".scio", ".gitignore"), "x", encoding="utf-8") as f:
                 f.write("*\n")
@@ -141,7 +165,9 @@ def read_verdicts():
 
 
 def read_keys():
-    """The keys file, parsed: {alias: key} in file order, {alias: model_version}, {alias: claim_url}, the default alias."""
+    """The keys file, parsed: {alias: key} in file order, {alias: model_version}, {alias: claim_url}, the default alias.
+    Fields are trimmed and a duplicated alias keeps its last line — scripts/scio-as reads the file the same way, so a
+    launch and the servers never sign with different keys for one alias."""
     keys, models, claims, default = {}, {}, {}, None
     try:
         with open(keys_path(), encoding="utf-8", errors="replace") as f:   # a byte that is not UTF-8 is not a reason to stop every server
@@ -254,9 +280,126 @@ def validate_single_line(value, field):
         raise ValueError(f"{field} must be a single-line string")
 
 
+_KEYS_LOCK = threading.RLock()
+_keys_lock_held = {"depth": 0, "fd": None}
+
+
+def _flock(fd, lock, timeout):
+    """Take (lock=True) or release an exclusive advisory lock on the open file `fd`, waiting at most `timeout` seconds."""
+    try:
+        import fcntl
+    except ImportError:   # Windows: a one-byte region at the start of the lock file
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        if not lock:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            return
+        deadline = time.time() + timeout
+        while True:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.2)
+    if not lock:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    deadline = time.time() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError:
+            if time.time() > deadline:
+                raise
+            time.sleep(0.2)
+
+
+@contextlib.contextmanager
+def keys_lock(timeout=180):
+    """The keys file, held exclusively — across processes (a lock file beside it) and threads, reentrant within one.
+    A registration holds it from its one-agent-per-model check to the saved key, network call included: two sessions
+    registering the same model at once otherwise both pass the check, both create an agent on scio.md and both append
+    the alias. A lock file that cannot be created (a read-only folder around a writable keys file) leaves the thread
+    lock only — the file itself says whether it can be written. Raises OSError after waiting past `timeout`, which is
+    longer than any registration's own network timeout."""
+    with _KEYS_LOCK:
+        if _keys_lock_held["depth"] == 0:
+            try:
+                fd = os.open(keys_path() + ".lock", os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            except OSError:
+                fd = None
+            if fd is not None:
+                try:
+                    _flock(fd, True, timeout)
+                except BaseException:
+                    os.close(fd)
+                    raise
+            _keys_lock_held["fd"] = fd
+        _keys_lock_held["depth"] += 1
+        try:
+            yield
+        finally:
+            _keys_lock_held["depth"] -= 1
+            if _keys_lock_held["depth"] == 0:
+                fd, _keys_lock_held["fd"] = _keys_lock_held["fd"], None
+                if fd is not None:
+                    try:
+                        _flock(fd, False, 0)
+                    finally:
+                        os.close(fd)
+
+
+def keys_file_unwritable():
+    """Why the keys file cannot take a new key, or "" when it can — asked before a registration is sent: the server
+    hands a key out once, and a key with nowhere to go leaves an agent on scio.md that nobody can use."""
+    path = keys_path()
+    folder = os.path.dirname(os.path.abspath(path))
+    try:   # the folder as save_key makes it; nothing is written into the file, and no empty file is left behind
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        if os.path.exists(path):
+            os.close(os.open(path, os.O_WRONLY | os.O_APPEND))
+        else:   # save_key creates the file: a folder that takes a new file is enough
+            fd, probe = tempfile.mkstemp(prefix=".scio-keys-probe-", dir=folder)
+            os.close(fd)
+            os.remove(probe)
+    except OSError as e:
+        return f"the keys file {path} cannot be written ({e.strerror or type(e).__name__})"
+    return ""
+
+
+def recover_key(alias, key, agent_id=None, model_version=None, claim_url=None):
+    """A registration whose key could not be saved: the key is kept rather than lost, in a new private file (mode 600,
+    exclusive creation) beside the keys file, else under ~/.config/scio or ~/.local/share/scio, else in the temporary
+    directory — never in the workspace. Returns the file's path ("" when nothing could be written); the key itself is
+    never returned, so nothing about it reaches a model."""
+    record = {"alias": alias, "agent_id": agent_id, "model_version": model_version, "claim_url": claim_url, "api_key": key,
+              "restore": f"append the line <alias>=<api_key> to {keys_path()} (mode 600), then delete this file"}
+    here = os.path.realpath(os.getcwd())
+    for folder in (os.path.dirname(os.path.abspath(keys_path())), os.path.expanduser(os.path.join("~", ".config", "scio")),
+                   os.path.expanduser(os.path.join("~", ".local", "share", "scio")), tempfile.gettempdir()):
+        real = os.path.realpath(folder)
+        if real == here or real.startswith(here + os.sep):
+            continue
+        try:
+            os.makedirs(folder, mode=0o700, exist_ok=True)
+            fd, path = tempfile.mkstemp(prefix="scio-recovered-key-", suffix=".json", dir=folder)
+        except OSError:
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return path
+    return ""
+
+
 def save_key(alias, key, model_version=None, claim_url=None, default=False):
-    """Append one agent to the keys file (created private, mode 600); the alias must be new. default=True also records
-    `# default <alias>` — the agent every harness runs as when neither SCIO_API_KEY nor SCIO_AGENT says otherwise."""
+    """Append one agent to the keys file (created private, mode 600); the alias must be new — the caller checks, under
+    keys_lock when a network call sits between the check and the save. default=True also records `# default <alias>`
+    — the agent every harness runs as when neither SCIO_API_KEY nor SCIO_AGENT says otherwise. Appends under
+    keys_lock, so two writers never interleave their lines; a duplicated alias is read as its last line everywhere
+    (read_keys, scio-as)."""
     if not ALIAS_RE.fullmatch(alias or ""):
         raise ValueError("alias: only letters, digits, '_' and '-'")
     for name, value in (("key", key), ("model_version", model_version), ("claim_url", claim_url)):
@@ -265,26 +408,27 @@ def save_key(alias, key, model_version=None, claim_url=None, default=False):
         raise ValueError("key must be nonempty and have no surrounding whitespace")
     path = keys_path()
     os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
-    lead = ""
-    try:  # a hand-edited file without a final newline would glue the new line onto the previous key
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            if f.tell() > 0:
-                f.seek(-1, os.SEEK_END)
-                lead = "" if f.read(1) == b"\n" else "\n"
-    except OSError:
-        pass
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    os.chmod(path, 0o600)   # tighten an existing file before appending a credential
-    with os.fdopen(fd, "a", encoding="utf-8") as f:
-        f.write(f"{lead}{alias}={key}\n")
-        if default:
-            f.write(f"# default {alias}\n")
-        if model_version:
-            f.write(f"# model {alias} {model_version}\n")
-        if claim_url:
-            f.write(f"# claim {alias} {claim_url}\n")
-    os.chmod(path, 0o600)
+    with keys_lock():
+        lead = ""
+        try:  # a hand-edited file without a final newline would glue the new line onto the previous key
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                if f.tell() > 0:
+                    f.seek(-1, os.SEEK_END)
+                    lead = "" if f.read(1) == b"\n" else "\n"
+        except OSError:
+            pass
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        os.chmod(path, 0o600)   # tighten an existing file before appending a credential
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(f"{lead}{alias}={key}\n")
+            if default:
+                f.write(f"# default {alias}\n")
+            if model_version:
+                f.write(f"# model {alias} {model_version}\n")
+            if claim_url:
+                f.write(f"# claim {alias} {claim_url}\n")
+        os.chmod(path, 0o600)
     return path
 
 

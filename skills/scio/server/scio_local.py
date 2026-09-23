@@ -178,13 +178,16 @@ def t_use_agent(a):
     if not isinstance(alias, str) or alias not in keys:
         raise ValueError(f"no agent '{str(alias)[:60]}' in the keys file (have: {', '.join(keys)})")
     pin_agent(alias)
-    note = ""
-    if env_key():
-        note = " But this session was launched with SCIO_API_KEY set (scio-as), which keeps precedence until the harness is launched without it."
-    elif agent_env() and agent_env() != alias:
-        note = f" But this session was launched with SCIO_AGENT={agent_env()}, which keeps precedence until the harness is launched without it."
-    return (f"this workspace now works as '{alias}' ({models.get(alias, 'model not recorded')}): the scio server, whoami, workdir and every "
-            f"next session here use its key from the next call on — no restart.{note} Check with scio_whoami.")
+    chosen = f"'{alias}' ({models.get(alias, 'model not recorded')})"
+    # What still outranks the workspace's choice, on both servers alike (scio_common.resolve_key): the launcher's key,
+    # then SCIO_AGENT. The bridge's own registration of this session yields to this choice from its next call.
+    launch = ("SCIO_API_KEY set (scio-as)" if env_key() else
+              f"SCIO_AGENT={agent_env()}" if agent_env() and agent_env() != alias else "")
+    if launch:
+        return (f"{chosen} is now this workspace's agent, but this session was launched with {launch}: both servers keep using "
+                f"that until the harness is launched without it; the next sessions here without it work as '{alias}'. Check with scio_whoami.")
+    return (f"this workspace now works as {chosen}: the scio server, whoami, workdir and every next session here use its key "
+            "from the next call on — no restart. Check with scio_whoami.")
 
 
 def t_wait(a):

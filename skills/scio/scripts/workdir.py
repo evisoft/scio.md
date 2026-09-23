@@ -8,7 +8,8 @@
 <kind> is the workflow (write, review, translate, maintain, gap, contest, request); <ref> is what identifies
 the task on the server (slug, panel_id, task_id, gap_id, dispute_id). The folder name is a hash of the agent's
 key, the kind and the ref, so the same task always maps to the same folder and two agents on one machine
-never share one. Root: $SCIO_WORK_DIR, else <workspace>/.scio/work (git-ignored), else ~/.local/share/scio/work.
+never share one. Root: $SCIO_WORK_DIR, else <workspace>/.scio/work (git-ignored), else ~/.local/share/scio/work —
+also when `.scio` or `.scio/work` in the workspace is a link: a cloned repository must not choose where task folders live.
 
 An article's notes, downloaded sources, draft and proposal.json stay together in a
 git-ignored task folder, separate from project source files and other tasks.

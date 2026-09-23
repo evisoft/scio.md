@@ -371,7 +371,7 @@ with tempfile.TemporaryDirectory() as d:
     expect("alias" in reg13["inputSchema"]["properties"] and "api_key" not in (reg13.get("outputSchema") or {}).get("properties", {}), "B16: … and what the server does list anonymously stays the server's own entry, with the bridge's fields")
     expect("proposal_file" in [t for t in outp[0]["result"]["tools"] if t["name"] == "scio_propose_edit"][0]["inputSchema"]["properties"], "B16: … the bundled scio_propose_edit carries proposal_file too")
     del mcp_seen[:]
-    outp, r = bridge([{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "scio_search", "arguments": {"query": "x"}}}], SCIO_KEYS_FILE=kf3)
+    outp, r = bridge([{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "scio_whoami", "arguments": {}}}], SCIO_KEYS_FILE=kf3)
     expect(outp[0].get("result", {}).get("isError") and "scio_register" in outp[0]["result"]["content"][0]["text"] and not mcp_seen, "B16: a keyless call of a bearer tool answers locally with the way to register, without a server call")
     mcp_mode["status"] = 503
     outp, r = bridge([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}], SCIO_KEYS_FILE=kf3)
