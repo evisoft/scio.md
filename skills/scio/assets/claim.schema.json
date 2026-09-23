@@ -7,22 +7,22 @@
   "required": ["ordinal", "text"],
   "properties": {
     "ordinal": {"type": "integer", "minimum": 1, "description": "N in the [^cN] marker that ends the sentence in the body"},
-    "text": {"type": "string", "description": "The sentence as it appears in the article", "maxLength": 2000},
+    "text": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "The sentence that carries the [^cN] marker, as it appears in the article. Gate 0 refuses claim_text_mismatch unless this text is found in every prose line that cites the claim, both read the same way: markers, block id and wikilink brackets dropped (a link reads as its label, else its target), `*`, backticks and `_` at a word's edge dropped, typographic quotes and dashes as ASCII, whitespace one space, lower case. Nothing else is folded: diacritics, ellipses, [x](y) links and $…$ maths must match as written. Table rows, the front-matter summary and a demonstration's working are not read; a premise cited inline in a demonstrated claim's sentence is exempt there (markdown.md §2)"},
     "kind": {"type": "string", "enum": ["sourced", "demonstrated"], "default": "sourced"},
     "source_url": {"type": "string", "format": "uri", "description": "Never a wikipedia.org, grokipedia.com or scio.md URL (P7)"},
-    "quote": {"type": "string", "description": "Exact span from the source that supports the sentence, in the source's language", "maxLength": 2000},
+    "quote": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Exact span from the source that supports the sentence, in the source's language", "maxLength": 2000},
     "second_source_url": {"type": "string", "format": "uri", "description": "Required in sensitive domains (Part V) and where S3 requires"},
-    "second_quote": {"type": "string", "maxLength": 2000},
+    "second_quote": {"type": "string", "minLength": 1, "pattern": "\\S", "maxLength": 2000},
     "accessed_at": {"type": "string", "format": "date-time"},
     "premises": {
       "type": "array", "minItems": 1,
-      "description": "Demonstrated claims only: what the demonstration starts from. Each is an earlier claim in this article (by ordinal) or a cited source with the exact span (an axiom, definition, law, constant).",
+      "description": "Demonstrated claims only: what the demonstration starts from. Each is an earlier claim of this proposal (claim_ordinal lower than this claim's; premise_unresolved otherwise) or a cited source with the exact span (an axiom, definition, law, constant), never both.",
       "items": {"type": "object", "properties": {
         "claim_ordinal": {"type": "integer", "minimum": 1},
         "source_url": {"type": "string", "format": "uri"},
-        "quote": {"type": "string", "maxLength": 2000},
+        "quote": {"type": "string", "minLength": 1, "pattern": "\\S", "maxLength": 2000},
         "accessed_at": {"type": "string", "format": "date-time"}
-      }, "oneOf": [{"required": ["claim_ordinal"]}, {"required": ["source_url", "quote", "accessed_at"]}], "additionalProperties": false}
+      }, "oneOf": [{"required": ["claim_ordinal"]}, {"required": ["source_url", "quote"]}], "additionalProperties": false}
     },
     "demonstration": {
       "type": "object",
@@ -32,11 +32,11 @@
         "text": {"type": "string", "description": "The written proof or the calculation with every intermediate value", "maxLength": 20000},
         "checker": {"type": "string", "description": "e.g. lean 4.12, coq 8.19, python 3.12 — required for proof_assistant and program"},
         "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Uploaded via scio_upload_media as text; the file the checker runs"},
-        "output": {"type": "string", "description": "Exact output of the checker or program", "maxLength": 5000}
+        "output": {"type": "string", "description": "Exact output of the checker or program", "maxLength": 20000}
       },
       "required": ["method"], "additionalProperties": false
     },
-    "scope": {"type": "string", "description": "Demonstrated claims: the model and conditions under which the result holds (e.g. classical mechanics, n ≥ 1, 1 atm)", "maxLength": 500},
+    "scope": {"type": "string", "minLength": 1, "description": "Demonstrated claims: the model and conditions under which the result holds (e.g. classical mechanics, n ≥ 1, 1 atm)", "maxLength": 500},
     "wikidata_id": {"type": "string", "pattern": "^Q[0-9]+$"},
     "origin_claim_id": {"type": "string", "description": "The claim this one translates or propagates"}
   },
@@ -45,6 +45,6 @@
      "then": {"required": ["premises", "demonstration", "scope"]},
      "else": {"required": ["source_url", "quote", "accessed_at"]}}
   ],
-  "dependentRequired": {"second_source_url": ["second_quote"], "second_quote": ["second_source_url"]},
+  "dependentRequired": {"source_url": ["quote", "accessed_at"], "quote": ["source_url"], "second_source_url": ["second_quote"], "second_quote": ["second_source_url"]},
   "additionalProperties": false
 }

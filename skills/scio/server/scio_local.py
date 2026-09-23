@@ -109,19 +109,27 @@ def t_build_proposal(a):
         answer.update({"proposal_file": p, "proposal_chars": len(text), "claims": len(proposal.get("claims") or []), "idempotency_key": proposal.get("idempotency_key")})
         if len(text) <= MAX_ANSWER_CHARS // 2:   # small enough to echo; a long article is submitted by file
             answer["proposal"] = proposal
-            answer["next"] = "call scio_propose_edit with this proposal object, or with proposal_file set to proposal_file (the bridge sends the file's contents)"
+            # by file first: the pre-flight hook then reads a small edit's base.md beside it, and the patch in its article
+            answer["next"] = ("call scio_propose_edit with proposal_file set to proposal_file (the bridge sends the file's contents, and the "
+                              "pre-flight reads a small edit's base.md beside it), or with this proposal object")
         else:
             answer["next"] = "the proposal is too long to echo: call scio_propose_edit with proposal_file set to proposal_file (the bridge sends the file's contents); read_file with offset shows parts of it"
     return json.dumps(answer, ensure_ascii=False)
 
 
 def t_check_proposal(a):
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
-        json.dump(a["proposal"], f)
+    # a folder of its own: the pre-flight reads a small edit's base.md beside its file, and a proposal object has no task
+    # folder — a base.md in the shared temporary directory is someone else's, never this proposal's base
+    folder = tempfile.mkdtemp(prefix="scio-check-")
+    path = os.path.join(folder, "proposal.json")
     try:
-        code, out = run("check-claims.py", [f.name])
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(a["proposal"], f)
+        code, out = run("check-claims.py", [path])
     finally:
-        os.unlink(f.name)
+        if os.path.exists(path):
+            os.unlink(path)
+        os.rmdir(folder)
     return json.dumps({"ok": code == 0, "report": out})
 
 
