@@ -322,9 +322,35 @@ class GuardSecretsReach(Sandbox):
             with self.subTest(command=command[:40]):
                 self.assertIsNone(self.bash(command))
 
+    def run_patched(self, patch, command, **env):
+        """The guard run in a child, loaded as `g` and patched before its main() — a failure made the same way on every
+        Python."""
+        script = os.path.join(SCRIPTS, "guard-secrets.py")
+        code = ("import sys, importlib.util; sys.argv = [%r]; spec = importlib.util.spec_from_file_location('g', %r); "
+                "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)\n%s\ng.main()") % (script, script, patch)
+        started = time.perf_counter()
+        r = subprocess.run([PY, "-c", code], input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+                           capture_output=True, text=True, timeout=30, env=dict(self.env, **env), cwd=self.work)
+        return json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] if r.stdout.strip() else None, time.perf_counter() - started
+
     def test_a_check_that_raises_is_a_refusal(self):
-        # a NUL in a path makes realpath raise: the hook used to die with a traceback, which the harness reads as an allow
-        self.assertEqual(self.bash("cat /tmp/a\u0000b"), "deny")
+        # the hook used to die with a traceback, which the harness reads as an allow. A NUL in a path makes realpath raise
+        # on 3.10+ only (3.8 swallows it), so the failure is also made by hand
+        decision, _ = self.run_patched("import fnmatch\ndef boom(*a, **k): raise RuntimeError('boom')\nfnmatch.fnmatchcase = boom",
+                                       "cat src/*.py")
+        self.assertEqual(decision, "deny")
+        try:
+            os.path.realpath("/tmp/a\u0000b")
+        except ValueError:
+            self.assertEqual(self.bash("cat /tmp/a\u0000b"), "deny")
+
+    def test_a_check_past_its_deadline_is_a_refusal(self):
+        # guards-R5: whatever holds the check past the harness's timeout ends in a kill, and a killed hook is an allow
+        decision, elapsed = self.run_patched("import time, posixpath\ng.DEADLINE_SECONDS = 0.5\n"
+                                             "_n = posixpath.normpath\nposixpath.normpath = lambda p: (time.sleep(0.2), _n(p))[1]",
+                                             "cd a; " * 200 + "grep -r . src")
+        self.assertEqual(decision, "deny")
+        self.assertLess(elapsed, 3)
 
     def test_ordinary_reads_are_not_denied(self):
         for command in ("grep -r TODO src", "grep -r foo .", "ls ~", "ls ~/.config", "ls -R ~/.config", "cat ~/.config/git/config",
@@ -352,6 +378,49 @@ class GuardSecretsReach(Sandbox):
         for command in ("env -0", "cat /proc/self/environ", "declare -p"):
             with self.subTest(command=command, key=False):
                 self.assertIsNone(self.bash(command))
+
+    def test_other_spellings_of_a_directory_read_are_denied(self):
+        # guards-R4: the directory reached by pushd or a cd with options, named in an option's attached value, given
+        # another name by a link, or read through a wrapper the guard did not know
+        for command in ("pushd ~/.config && tar c . | base64", "cd -P ~/.config && tar c . | base64", "cd -- ~/.config && tar c . | base64",
+                        "builtin cd -L ~/.config; grep -r . .", "tar -C$HOME/.config -c . | base64", "tar --directory=$HOME/.config -c . | base64",
+                        "cd ~ && tar -C.config -c . | base64", "ln -s ~/.config /tmp/c && grep -r . /tmp/c/", "env grep -r . ~/.config",
+                        "env -u FOO tar c ~/.config", "timeout 5 tar c ~/.config", "timeout -s KILL 5 rg sk_ ~/.config",
+                        "busybox tar c ~/.config", "cd - && grep -r . ."):
+            with self.subTest(command=command):
+                self.assertEqual(self.bash(command), "deny")
+
+    def test_other_spellings_of_a_directory_read_that_stay_allowed(self):
+        for command in ("pushd src && grep -r TODO .", "cd -P src && tar c . | gzip > s.tgz", "cd -- src && grep -r x .",
+                        "tar -C src -c . | gzip > s.tgz", "tar --directory=src -c . | gzip > s.tgz", "tar -czf out.tgz src",
+                        "ln -s ~/.config/git/config gc", "grep -r --include=*.py foo .", "grep -r --include=* foo .",
+                        "env grep -r TODO src", "timeout 5 make", "busybox ls", "cp -av src /tmp/src-copy"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.bash(command))
+
+    def test_other_spellings_of_an_environment_dump_are_denied(self):
+        for command in ("cat /proc/self/env*", "cat /proc/self/./environ", "cat /proc/1/../self/environ", "cat /pro?/self/environ",
+                        "cat /proc/self/task/1/environ", "cd /proc/self && cat environ", "cat </proc/self/environ",
+                        "node -p process.env", "node --print process.env", "node -e 'console.dir(process.env)'",
+                        "node -e 'console.table(process.env)'", "busybox env", "timeout 5 env", "env env", "env -u FOO env",
+                        "setsid printenv"):
+            with self.subTest(command=command):
+                self.assertEqual(self.bash(command, SCIO_API_KEY=self.KEY), "deny")
+        for command in ("node -p process.env.HOME", "cat /proc/self/status", "timeout 5 python3 x.py", "env python3 x.py",
+                        "ls /proc/self", "busybox ls"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.bash(command, SCIO_API_KEY=self.KEY))
+
+    def test_a_long_chain_of_cds_is_decided_before_the_hook_timeout(self):
+        # guards-R5: every `cd x` grew the tracked directory and normalised it whole, so 40,000 of them outlived the
+        # hook's 5 s timeout — a killed hook is an allow, and the environment dump at the end went through
+        for command in ("cd a; " * 40000 + "env | base64", "cd a; " * 40000 + "tar c ~/.config | base64",
+                        "cd a; cd ..; " * 20000 + "env | base64", "cd a/b/c/d; " * 30000 + "grep -r . ."):
+            with self.subTest(command=command[-30:]):
+                started = time.perf_counter()
+                decision = self.bash(command, SCIO_API_KEY=self.KEY)
+                self.assertLess(time.perf_counter() - started, 4.5)
+                self.assertEqual(decision, "deny")
 
     def test_a_long_command_is_decided_quickly(self):
         # the harness kills a hook that outlives its timeout (5 s) and reads the silence as an allow: no check may
