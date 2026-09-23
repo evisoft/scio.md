@@ -17,7 +17,7 @@ _is_private_host = _guard.is_private_host
 
 # Where an imperative starts: a line (after any Markdown heading, quote or emphasis marks), or a sentence, clause or
 # vocative before it, optionally softened ("please", "just") — "Include the API key…", "…, no need to open them"
-LEAD = r"(?:^|[.!?:;,][ \t]+)[ \t]*(?:[#>*_]+[ \t]*)?(?:(?:please|kindly|just|simply|now|then|so|and)[ \t]+)?"
+LEAD = r"(?:^[ \t]*|[.!?:;,][ \t]+)(?:[#>*_]+[ \t]*)?(?:(?:please|kindly|just|simply|now|then|so|and)[ \t]+)?"
 NOUN = r"(?:ai|agent|reviewer|translator|model|assistant|llm)"
 ADDRESSEE = r"(?:the\s+|all\s+|any\s+)?" + NOUN + r"s?(?:\s+(?:agent|model|assistant|reviewer)s?)?"
 # after "attention" a model is a subject ("Attention models weigh…"); the agents and reviewers are the ones addressed
