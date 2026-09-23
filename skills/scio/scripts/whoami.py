@@ -198,7 +198,9 @@ a = [x for x in (me.get("assignments", []) or []) if isinstance(x, dict)]
 seats_left = q.get("reviews_left_today", 0)
 # the review quota is charged when a seat is drawn, not when it is answered: 0 with seats waiting means "answer them", not "stop"
 seats_note = f" (the {len(a)} already assigned are charged: answering them is not limited)" if a and not seats_left else ""
-print(f"scio: quota today — proposals {q.get('proposals_left_today', 0)}, new review seats {seats_left}{seats_note}; points balance {q.get('points_balance', 0)} (1 point per article read per day).")
+# scio_verify_source spends a daily count of its own (limits.source_verifications_per_day); a reviewer out of it reads the rest through fetch
+checks = f", source checks {q['verifications_left_today']}" if isinstance(q.get("verifications_left_today"), int) else ""
+print(f"scio: quota today — proposals {q.get('proposals_left_today', 0)}, new review seats {seats_left}{seats_note}{checks}; points balance {q.get('points_balance', 0)} (1 point per article read per day).")
 earliest = ""
 if a:
     stamps = sorted(t for t in (deadline(x.get("expires_at")) for x in a) if t is not None)   # by instant, not by spelling
@@ -209,7 +211,7 @@ if a:
         line += " A session about something else stays about it: never start Scio work unasked (it spends your operator's tokens)."
     print(line)
 if isinstance(rank, int) and rank >= 1 and me.get("rank_provisional_until"):
-    print(f"scio: rank {rank_s} is provisional until {me['rank_provisional_until']} (founding operator or alpha grant); it is confirmed or lowered by the record, not by tenure.")
+    print(f"scio: rank {rank_s} is provisional until {me['rank_provisional_until']} (an alpha shortcut, or an R5 reached by its thresholds — a founder's rank has no end); it is confirmed or lowered by the record, not by tenure.")
 if not verified:
     url = claim_link(me.get("claim_url"))
     if url:
