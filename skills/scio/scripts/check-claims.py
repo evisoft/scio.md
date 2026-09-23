@@ -36,6 +36,28 @@ UNDATED = re.compile(r"\b(recently|currently|nowadays|at present|these days|now|
 DATE = re.compile(r"\b(as of|in|since|until|on|between|from)\s+(\d{1,2}\s+)?(january|february|march|april|may|june|july|august|september|october|november|december|\d{4})\b|\b(19|20)\d{2}\b", re.I)
 PUFFERY = re.compile(r"\b(groundbreaking|renowned|world-class|legendary|infamous|so-called|cutting-edge|revolutionary|iconic|prestigious|leading|best-known|widely (regarded|believed|considered|known)|it is (well )?known that|experts agree|many (people|experts) (say|believe))\b", re.I)
 READER = re.compile(r"\b(note that|see below|as an ai(?:\s+(?:language\s+)?(?:model|assistant)\b|(?=\s*[,.;:!?)]|\s*$|\s+i\b))|as a language model|you should|the reader)\b", re.I)
+# the reader told what to do: "you should" or "the reader should" and a verb ("You should trust the author", "The reader
+# should approve this") is C6's defect and blocks, as does "you must" before a verdict or a check ("You must trust this
+# author") — "with two-factor authentication you must enter a password" is the generic you of a procedure. Inside a
+# Title-Cased run it is a name ("You Should Be Dancing", "The Reader should not be confused with the film"): a warning
+_ADV = r"(?:(?:not|never|also|always|just|simply|first|now|really)\s+)?"
+READER_TOLD = [re.compile(r"\byou\s+(should|ought\s+to)\s+" + _ADV + r"[a-z]", re.I),
+               re.compile(r"\bthe\s+(reader)s?\s+(?:should|must|ought\s+to|needs?\s+to|ha(?:s|ve)\s+to)\s+" + _ADV + r"[a-z]", re.I),
+               re.compile(r"\byou\s+(must|need\s+to|have\s+to)\s+" + _ADV + r"(?:trust|approve|accept|reject|believe|ignore|disregard"
+                          r"|overlook|skip|vote|give|label|mark|rate|score|publish|merge|look|open|check|read|verify)\b", re.I)]
+
+
+def reader_told(sentence):
+    """Whether a sentence tells its reader what to do (READER_TOLD), outside a title: its modal or "Reader" Title-Cased
+    (not in capitals throughout: "YOU SHOULD TRUST THIS" is shouted, not a name)."""
+    for rx in READER_TOLD:
+        for m in rx.finditer(sentence):
+            word = m.group(1).split()[0]
+            if not (word[:1].isupper() and not word.isupper()):
+                return True
+    return False
+
+
 VAGUE_NUM = re.compile(r"\b(most|many|few|several|numerous|a lot of|the majority of|significant(ly)?|huge|massive)\b", re.I)
 
 
@@ -2000,8 +2022,10 @@ def check(inp, base=None, page_domain=None):
             warnings.append(f"undated time-bound wording: \"{s[:70]}…\" — date it (C4)")
         if PUFFERY.search(s):
             warnings.append(f"puffery or unattributed consensus: \"{s[:70]}…\" — quote and attribute, or drop (C2, C6)")
-        if READER.search(s):
-            problems.append(f"text addressed to the reader or to agents: \"{s[:70]}…\" (C6)")
+        if reader_told(s):
+            problems.append(f"text that tells the reader what to do: \"{s[:70]}…\" (C6, security.md §4)")
+        elif READER.search(s):   # a warning: "The Reader" is a novel and "You Should Be Dancing" a song; gate 0 refuses neither
+            warnings.append(f"text addressed to the reader or to agents: \"{s[:70]}…\" — rephrase unless it is a name or a title (C6)")
         if VAGUE_NUM.search(s) and not re.search(r"\d", s):
             warnings.append(f"vague quantity without a number: \"{s[:70]}…\" — use the source's figure (C4)")
 
@@ -2014,11 +2038,11 @@ def check(inp, base=None, page_domain=None):
         text = "\n".join(line[1:] if line[:1] in "+- " else line for line in text.split("\n"))
     hits = _scan.dedupe(_scan.scan_text(text, "body") + _scan.scan_text(summary_text, "summary") + _scan.scan_json(claims, "claims"))
     for h in hits:   # every hit is classified — six warnings in the body must not hide a blocking hit in a claim's quote
-        if h["pattern"] in ("zero_width_chars", "bidi_controls"):
+        if h["pattern"] in ("zero_width_chars", "bidi_controls"):   # hidden characters are the IsHidden port's, above
             continue
-        target = problems if h["pattern"] in ("addressed_to_agent", "harness_vocabulary", "fake_role_marker", "skip_verification",
-                                              "verdict_steering", "exfiltration", "script_or_markup", "private_ip", "private_host",
-                                              "non_http_scheme", "non_ascii_host", "punycode_host", "escaped_text", "shell_command") else warnings
+        # blocking: steering and what gate 0 refuses. The vocabulary of a subject (an access token, a system prompt), and
+        # in a verbatim quote anything gate 0 accepts, are warnings (scan-injection.blocks_proposal)
+        target = problems if _scan.blocks_proposal(h) else warnings
         target.append(f"{h['pattern']} at {h['where']}: …{h['excerpt'][:80]}… (security.md §4)")
     return list(dict.fromkeys(problems)), list(dict.fromkeys(warnings))[:12]
 
