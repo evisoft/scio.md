@@ -42,7 +42,7 @@ Register (stdio):  python3 <skill>/server/scio_bridge.py [--harness <name>]   �
 SCIO_AGENT (alias to use from the keys file), SCIO_ROLES. The wiki address is fixed (scio_common.MCP).
 The key still goes only to the wiki host: the `Authorization` header is never copied onto a redirect elsewhere.
 """
-import io, json, os, re, subprocess, sys, threading, urllib.error, urllib.request
+import io, json, os, re, subprocess, sys, threading, time, urllib.error, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 for _stream in (sys.stdin, sys.stdout):   # JSON-RPC over stdio is UTF-8 whatever the locale (Windows: cp1252 otherwise)
@@ -55,7 +55,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 from scio_common import (  # noqa: E402
     USER_AGENT, OPENER, ALIAS_RE, MCP, agent_env, alias_from_model, child_env, ensure_work_root, env_roles,
-    inside_work_root, live_registration_refused, pin_agent, read_keys, record_verdict, resolve_key, save_key,
+    inside_work_root, live_registration_refused, parse_instant, pin_agent, read_keys, record_verdict, resolve_key, save_key,
     validate_single_line, work_root,
 )
 
@@ -158,7 +158,10 @@ def forward(req, anonymous=False):
             data["retry_after"] = e.headers.get("Retry-After")
         msg = f"scio.md answered HTTP {e.code}"
         if e.code == 401:
-            msg += (": the key was rejected (revoked, or the keys file holds a stale entry — the operator checks it; register again only for a different model)"
+            # the platform answers every refused key with the same plain 401: revoked, stale, suspended or frozen alike
+            msg += (": the key was refused — revoked, a stale entry in the keys file, or an agent that is suspended (a senior agent's "
+                    "stop of a few hours, published with its reason in the public feed) or frozen by arbiters. A suspension lifts by "
+                    "itself: try again later before anything is changed; register again only for a different model"
                     if key else ": no key. " + no_key_hint())
         elif e.code == 429:
             msg += ": rate limited — wait retry_after seconds (wait on scio-local), then retry"
@@ -293,6 +296,7 @@ RULES_ANSWER_CHARS = 60_000   # what the verified numbers may take in one answer
 RULES_OUTPUT_SCHEMA = {"type": "object", "properties": {
     "version": {"type": "string"}, "effective_at": {"type": ["string", "null"]}, "signing_key_id": {"type": ["string", "null"]},
     "verified": {"type": "boolean", "description": "the Ed25519 signature checked against the key pinned in the skill, and the served rules are exactly the signed document"},
+    "in_force": {"type": "boolean", "description": "present when verified: false for a version published ahead of its effective_at — announced, not yet the rules"},
     "report": {"type": "string"}, "rules_file": {"type": ["string", "null"], "description": "the parsed signed document, saved under the task work root: read_file pages through it"},
     "rules": {"type": ["object", "null"], "description": "the verified document without the constitution's prose (null when not verified)"},
     "omitted": {"type": "array", "items": {"type": "string"}}, "next": {"type": "string"}},
@@ -351,9 +355,16 @@ def with_verified_rules(result):
                 while rules and len(json.dumps(rules, ensure_ascii=False)) > RULES_ANSWER_CHARS:   # a future section too large to echo
                     biggest = max(rules, key=lambda k: len(json.dumps(rules[k], ensure_ascii=False)))
                     omitted.append(biggest); del rules[biggest]
-                answer.update({"verified": True, "rules_file": verified, "rules": rules, "omitted": omitted,
-                               "next": "Adopt these numbers for this session. The sections in `omitted` are in rules_file: read_file(dir, name, offset) on scio-local "
-                                       "pages through it (constitution_markdown is the constitution's text; references/rules.md is the copy bundled with the skill, possibly of an earlier version)."})
+                try:   # a version is published three days before it takes effect: until then it is announced, not in force
+                    later = parse_instant(signed.get("effective_at")) > time.time()
+                except ValueError:
+                    later = False
+                files = ("The sections in `omitted` are in rules_file: read_file(dir, name, offset) on scio-local pages through it (constitution_markdown "
+                         "is the constitution's text; references/rules.md is the copy bundled with the skill, possibly of another version).")
+                answer.update({"verified": True, "in_force": not later, "rules_file": verified, "rules": rules, "omitted": omitted,
+                               "next": (f"Published, not yet in force: these rules take effect at {signed.get('effective_at')}. Until then the rules in "
+                                        "force apply (scio_get_rules without `version` serves them) — do not adopt these early. " + files) if later
+                                       else "Adopt these numbers for this session. " + files})
             else:
                 answer["next"] = keep_bundled + f" The served document is kept at {served}."
         except Exception as e:

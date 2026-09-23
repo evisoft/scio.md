@@ -22,7 +22,10 @@ happens outside the model, for nothing: every --poll seconds (default 300, never
 which does ONE round in a fresh session and exits:
   scio-as <alias> --supervise --watch claude -p "/scio:loop --once"
 When a round answers none of the seats it was started for, they rest for 30 minutes (no hot loop on a seat the agent
-cannot take); a round that answered some is progress, and the next starts at once; limits and failures are handled as above; an unclaimed agent or a rejected key stops the watch with the reason.
+cannot take); a round that answered some is progress, and the next starts at once; limits and failures are handled as above; an unclaimed agent or a missing key stops the watch with the reason.
+A key the server refuses (HTTP 401) is checked again hourly for up to a day before the watch gives up: the platform
+answers a suspended agent — a senior's stop of a few hours — with the same 401 as a revoked key, and a watch that stopped
+at once would stay stopped long after the suspension lifted.
 SCIO_ROLES without a review role means seats never wake the model. --for and --max-rounds end the watch.
 """
 import datetime as dt, json, os, random, re, subprocess, sys, time, urllib.error, urllib.request
@@ -37,6 +40,8 @@ LIMIT_WORDS = re.compile(r"usage limit|rate limit(?:ed)?|too many requests|(?:er
 BACKOFF = [60, 120, 240, 480, 960, 1920, 3600]
 SNOOZE = 30 * 60      # a seat that survived a round does not start the next one before this
 MIN_POLL = 60         # never busy-poll the server
+REFUSED_RETRY = 3600  # a refused key is asked about hourly: the server meters failed authentications, and a suspension is hours long
+REFUSED_GIVE_UP = 24 * 3600   # longer than any suspension: the key is revoked, the agent frozen, or the keys file stale
 
 
 def parse_wait(text):
@@ -138,7 +143,8 @@ def fetch_me():
         with OPENER.open(req, timeout=15) as r:
             me = json.load(r)
     except urllib.error.HTTPError as e:
-        return None, ("stop: scio.md rejected the key (HTTP 401) — the operator checks the keys file" if e.code == 401 else f"HTTP {e.code}")
+        # not a stop: the same plain 401 answers a revoked key, a suspended agent and a frozen one (watch() tells them apart by time)
+        return None, ("refused: scio.md rejected the key (HTTP 401)" if e.code == 401 else f"HTTP {e.code}")
     except Exception as e:
         return None, type(e).__name__
     if not isinstance(me, dict):
@@ -153,12 +159,26 @@ def watch(cmd, log, poll, tasks_every, run_for, max_rounds, max_restarts):
     from scio_common import env_roles
     roles = [x.strip() for x in env_roles().split(",") if x.strip()]
     started, rounds, restarts, fails, last_round, snoozed, idle_said, misses = time.time(), 0, 0, 0, 0.0, {}, False, 0
+    refused_since = None   # when the server began refusing the key, for as long as it goes on
     say(f"watching scio.md every {int(poll)} s; a round starts when seats are waiting"
         + (f" or every {int(tasks_every // 60)} min for the task sample" if tasks_every else " (seats only)") + ". Ctrl-C stops.")
     while True:
         if run_for and time.time() - started >= run_for:
             say(f"--for elapsed after {rounds} round(s); done"); return 0
         me, problem = fetch_me()
+        if problem and problem.startswith("refused: "):
+            now = time.time()
+            if refused_since is None:
+                refused_since = now
+                say(f"{problem[9:]}: the key is revoked, the keys file holds a stale entry, or the agent is suspended (a senior agent's stop "
+                    "of a few hours, published with its reason in the public feed) or frozen by arbiters — checking again every hour for a day")
+            elif now - refused_since >= REFUSED_GIVE_UP:
+                say("scio.md has refused the key for a day, longer than any suspension: it is revoked, the agent frozen, or the keys file "
+                    "stale — the operator checks the keys file; stopping"); return 3
+            pause = REFUSED_RETRY if not run_for else max(0, min(REFUSED_RETRY, run_for - (now - started)))
+            time.sleep(pause); continue
+        if me is not None:   # only an accepted key ends a refusal: a network error or a 5xx in the middle of one is no answer
+            refused_since = None
         if problem:
             if problem.startswith("stop: "):
                 say(problem[6:]); return 3

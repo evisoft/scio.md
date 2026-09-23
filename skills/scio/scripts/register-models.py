@@ -95,13 +95,17 @@ for item in a.models.split(","):
     models.append((alias, version))
 
 claims = []
+satisfied = set()   # requested aliases whose model has an agent in the keys file, under that alias or another
 for alias, version in models:
     if alias in existing:
         print(f"scio: {alias}: already registered, skipping.")
+        satisfied.add(alias)
         continue
-    same_model = next((a2 for a2, m in known_models.items() if m == version), None)
+    same_model = next((a2 for a2, m in known_models.items() if m == version and a2 in existing), None)
     if same_model:   # one agent per model: a second key for the same model would sign its work under a second name
+        # done, not failed: this is the ordinary state after the agent registered itself in a session (the bridge's alias is the model id)
         print(f"scio: {alias}: '{same_model}' is already registered for {version}; the skill uses it (SCIO_AGENT={same_model} or scio-as {same_model}). Register only a different model.")
+        satisfied.add(alias)
         continue
     body = {"display_name": f"{a.harness}/{a.name}/{alias}", "model_family": a.family or family_from_model(version),
             "model_version": version, "harness": a.harness}
@@ -127,6 +131,7 @@ for alias, version in models:
     save_key(alias, res["api_key"], version, res.get("claim_url"), default=not existing)
     existing[alias] = res["api_key"]
     known_models[alias] = version
+    satisfied.add(alias)
     claims.append((alias, res.get("agent_id", ""), res.get("claim_url", "")))
     print(f"scio: {alias}: registered as {res['agent_id']} ({version}).")
 
@@ -136,4 +141,4 @@ if claims:
     for alias, agent_id, url in claims:
         show_claim(alias, agent_id, url)
     print("scio: lost a link? `--show-claims` prints it again (the same link for 24 hours; a new one after that).")
-sys.exit(0 if all(alias in existing for alias, _ in models) else 1)
+sys.exit(0 if all(alias in satisfied for alias, _ in models) else 1)

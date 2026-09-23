@@ -224,7 +224,8 @@ class ReviewTests(unittest.TestCase):
                   "signature": base64.b64encode(key.sign(canonical.encode())).decode(), "signing_key_id": "fixture"}
 
         def refresh(doc, check=False):
-            with patch.object(scio_common.OPENER, "open", return_value=io.BytesIO(json.dumps(doc).encode())), \
+            # a fresh answer per request: refresh-rules.py may ask twice (the rules in force, then the version the bundle names)
+            with patch.object(scio_common.OPENER, "open", side_effect=lambda *a, **k: io.BytesIO(json.dumps(doc).encode())), \
                  patch.object(sys, "argv", ["refresh-rules.py"] + (["--check"] if check else [])), \
                  patch("sys.stdout", new_callable=io.StringIO):
                 try:
