@@ -289,5 +289,47 @@ class GuardSecretsReach(Sandbox):
                 self.assertLess(time.perf_counter() - started, 2.0)
 
 
+# --- guards-4: Cursor's beforeMCPExecution carries the server's command or url, not mcp_server_name ------------------
+class CursorPayload(Sandbox):
+    BRIDGE = "python3 /home/u/.agents/skills/scio/server/scio_bridge.py --harness cursor"
+    LOCAL = "python3 /home/u/.agents/skills/scio/server/scio_local.py"
+
+    def cursor(self, payload):
+        return self.hook("cursor-hook.py", dict({"hook_event_name": "beforeMCPExecution", "cursor_version": "2.1"}, **payload)).get("permission")
+
+    def test_contest_suspend_register_ask_without_mcp_server_name(self):
+        for name in ("scio_contest", "scio_suspend", "scio_register", "MCP:scio_contest"):
+            for where in ({"command": self.BRIDGE}, {"url": "https://scio.md/mcp"}, {}):
+                with self.subTest(name=name, where=where):
+                    self.assertEqual(self.cursor(dict({"tool_name": name, "tool_input": json.dumps({"target_id": "pn_x"})}, **where)), "ask")
+
+    def test_the_preflight_runs_without_mcp_server_name(self):
+        bad = {"body": "An unmarked sentence that carries no claim marker at all.", "claims": []}
+        self.assertEqual(self.cursor({"tool_name": "scio_propose_edit", "tool_input": json.dumps(bad), "command": self.BRIDGE}), "deny")
+
+    def test_the_documented_shape_still_works(self):
+        self.assertEqual(self.cursor({"tool_name": "scio_contest", "mcp_server_name": "scio", "tool_input": {}}), "ask")
+
+    def test_guards_run_on_every_server(self):
+        self.assertEqual(self.cursor({"tool_name": "fetch", "tool_input": json.dumps({"url": "http://127.0.0.1/"}), "command": "npx some-fetch-server"}), "deny")
+        self.assertEqual(self.cursor({"tool_name": "fetch", "tool_input": json.dumps({"url": "http://127.0.0.1/"}), "command": self.LOCAL}), "deny")
+
+    def test_the_server_is_known_by_its_command_whatever_its_name(self):
+        self.assertEqual(self.cursor({"tool_name": "scio_suspend", "mcp_server_name": "my-scio", "command": self.BRIDGE, "tool_input": "{}"}), "ask")
+        # the platform's fetcher is exempt from guard-fetch; a tool of the same name on another server is not
+        private = json.dumps({"url": "http://127.0.0.1/"})
+        self.assertIsNone(self.cursor({"tool_name": "scio_verify_source", "tool_input": private, "command": self.BRIDGE}))
+        self.assertEqual(self.cursor({"tool_name": "scio_verify_source", "tool_input": private, "command": "npx evil-server"}), "deny")
+
+    def test_a_scio_tool_is_not_asked_needlessly(self):
+        self.assertIsNone(self.cursor({"tool_name": "scio_whoami", "tool_input": "{}", "command": self.BRIDGE}))
+
+    def test_a_shell_command_is_still_a_shell_command(self):
+        out = self.hook("cursor-hook.py", {"hook_event_name": "beforeShellExecution", "command": "ls", "cwd": self.work})
+        self.assertIsNone(out.get("permission"))
+        out = self.hook("cursor-hook.py", {"hook_event_name": "beforeShellExecution", "command": "cat ~/.config/scio/keys", "cwd": self.work})
+        self.assertEqual(out.get("permission"), "deny")
+
+
 if __name__ == "__main__":
     unittest.main()
