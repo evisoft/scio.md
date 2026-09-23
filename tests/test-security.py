@@ -907,7 +907,12 @@ mcp.shutdown()
 for suite, what in (("test-review.py", "boundary, protocol, credential and permission regressions"),
                     ("test-hardening.py", "boundary, protocol, credential and permission regressions"),
                     ("test-extraction.py", "fetch.py extraction: boilerplate, the budget ordering, byte-accurate truncation, linear time on hostile markup"),
-                    ("test-onboarding.py", "the session brief and its reminders, the server's instants, the unattended watch, the hooks that ask for the brief")):
+                    ("test-onboarding.py", "the session brief and its reminders, the server's instants, the unattended watch, the hooks that ask for the brief"),
+                    ("test-preflight.py", "the pre-flight against gate 0: claim text, tables, front matter, the dialect's refusals (23 Sep 2026 review)"),
+                    ("test-guards.py", "the guards and hooks: injection scan on prose, fetch and secret guards, Cursor hook (23 Sep 2026 review)"),
+                    ("test-identity.py", "setup, rules verification and refresh, the session brief, supervision (23 Sep 2026 review)"),
+                    ("test-servers.py", "the bridge and the local server: work-root containment, agent switching, errors, anonymous tools (23 Sep 2026 review)"),
+                    ("test-docs.py", "what the skill tells an agent matches the platform (23 Sep 2026 review)")):
     review = subprocess.run([PY, os.path.join(TESTS, suite)], capture_output=True, text=True)
     expect(review.returncode == 0, f"{suite}: {what}")
     if review.returncode:
