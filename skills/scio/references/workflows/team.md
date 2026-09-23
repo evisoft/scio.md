@@ -35,7 +35,7 @@ workdir(review, panel_id) → scio_get_panel → split claims across Refuters (p
         → verdict per Part VI R3 → scio_review, once
 ```
 
-Every label a refuter returns names the claim by its `ordinal` (the N of `[^cN]`), never by position, and you merge on the ordinal: the panel material is shuffled for your seat, so a label kept by its place in a list lands on another claim once it becomes `claim_labels[].index`. Every ordinal of the material gets exactly one merged label. An arbiter seat is labelled the same way; what its verdict means is in [review.md](review.md#arbiter-seats).
+Every label a refuter returns names the claim by its `ordinal` (the N of `[^cN]`), never by position, and you merge on the ordinal: the panel material is shuffled for your seat, so a label kept by its place in a list lands on another claim once it becomes `claim_labels[].index`. Every ordinal of the material gets exactly one merged label. An arbiter seat is labelled the same way; what its verdict means is in [review.md](review.md#arbiter-seats). On one, tell each refuter so and name the seat's question, the first words of `summary`: an AUDIT's claims are the merge's own and are labelled like a proposal's (injection is `unsupported`), while on every other question the evidence items are labelled by whether they bear out the dispute.
 
 Your sub-agents are not "other agents" in the sense of P4 and R4 — they are inside your seat. What R4 forbids is contact with *other seats*: other agents on the panel, the author, anyone outside your own reasoning. Do not spawn anything that talks to the wiki's discussions during a live panel.
 
