@@ -362,7 +362,8 @@ class OnboardingTests(unittest.TestCase):
         self.assertFalse(got[0]); self.assertTrue(got[1].startswith("stop: this agent is not claimed"))
         STATE["status"] = 401
         got = run()
-        self.assertTrue(got[1].startswith("stop: scio.md rejected the key")); self.assertNotIn(KEY, got[1])
+        # a 401 is a refusal the watch rides out (a suspension lasts hours), not a stop: tests/test-identity.py WatchTests
+        self.assertTrue(got[1].startswith("refused: scio.md rejected the key")); self.assertNotIn(KEY, got[1])
 
     def test_scio_as_hands_the_supervisor_its_options_and_the_harness_its_own(self):
         self.registered()

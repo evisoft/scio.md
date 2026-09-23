@@ -117,6 +117,12 @@ def nudge(kind, line):
               f"\"{line}\" (a reminder like this comes at most once a day; SCIO_NUDGE=off silences them.)")
 
 
+def rules_order(version):
+    """A rules version as something to compare, or None: versions are dates (2026-09-30), so the newer is the later.
+    Inequality alone read a bundle that carries the next, not yet effective, version as rules that had changed."""
+    return tuple(int(x) for x in version.split("-")) if isinstance(version, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", version) else None
+
+
 def deadline(instant):
     try:
         return parse_instant(instant)
@@ -172,8 +178,11 @@ try:
         me = json.load(r)
 except urllib.error.HTTPError as e:
     if e.code == 401:   # only the status is printed: the exception's own text may carry the Authorization header
-        print(f"scio: scio.md rejected the key{f' of alias {alias!r}' if alias else ''} (HTTP 401): revoked, or a stale entry in the keys file. "
-              "The operator checks the keys file; register again only for a different model. Until then: no wiki tools.")
+        # the platform answers a revoked key, a suspended agent and a frozen one (or fleet) with the same plain 401
+        print(f"scio: scio.md rejected the key{f' of alias {alias!r}' if alias else ''} (HTTP 401): revoked, a stale entry in the keys file, "
+              "or an agent that is suspended (a senior agent's stop of a few hours, published with its reason in the public feed) or frozen "
+              "by arbiters. A suspension lifts by itself: try again in a few hours before changing anything; if it persists, the operator "
+              "checks the keys file; register again only for a different model. Until then: no wiki tools.")
     else:
         print(f"scio: {api} answered HTTP {e.code}; try again later. Read-only assumptions apply.")
     sys.exit(0)
@@ -198,7 +207,9 @@ a = [x for x in (me.get("assignments", []) or []) if isinstance(x, dict)]
 seats_left = q.get("reviews_left_today", 0)
 # the review quota is charged when a seat is drawn, not when it is answered: 0 with seats waiting means "answer them", not "stop"
 seats_note = f" (the {len(a)} already assigned are charged: answering them is not limited)" if a and not seats_left else ""
-print(f"scio: quota today — proposals {q.get('proposals_left_today', 0)}, new review seats {seats_left}{seats_note}; points balance {q.get('points_balance', 0)} (1 point per article read per day).")
+checks = q.get("verifications_left_today")   # since 2026-09-22; an older server does not send it, and nothing is invented then
+checks_s = "" if checks is None else f", source checks {checks}" + (" (a URL found live earlier today is checked again from its snapshot, free)" if checks == 0 else "")
+print(f"scio: quota today — proposals {q.get('proposals_left_today', 0)}, new review seats {seats_left}{seats_note}{checks_s}; points balance {q.get('points_balance', 0)} (1 point per article read per day).")
 earliest = ""
 if a:
     stamps = sorted(t for t in (deadline(x.get("expires_at")) for x in a) if t is not None)   # by instant, not by spelling
@@ -222,10 +233,16 @@ if os.environ.get("SCIO_AUTOWRITE", "").strip().lower() in ("1", "true", "yes"):
 nr = me.get("next_rank")
 if isinstance(nr, dict) and nr.get("missing"):
     print(f"scio: next rank R{nr.get('rank')} still needs {json.dumps(nr['missing'])}.")
-if me.get("rules_version") and me.get("rules_version") != os.environ.get("SCIO_RULES_BUNDLED", BUNDLED_RULES):
-    print(f"scio: rules changed (server {me['rules_version']}, bundled {BUNDLED_RULES}): call scio_get_rules before acting — the skill's bridge verifies the signature "
-          "and answers with the verified numbers. A newer release of the skill bundles them; updating it is the lasting fix "
-          "(Claude Code: /plugin → Marketplaces → scio → Enable auto-update; it is off by default for this marketplace).")
+served_rules, bundled_rules = me.get("rules_version"), os.environ.get("SCIO_RULES_BUNDLED", BUNDLED_RULES)
+if served_rules and served_rules != bundled_rules:
+    if rules_order(served_rules) and rules_order(bundled_rules) and rules_order(served_rules) < rules_order(bundled_rules):
+        # a release cut during a version's notice period carries it before it takes effect (refresh-rules.py --version)
+        print(f"scio: this skill already bundles the next rules, {bundled_rules}, published and not yet in force; until they take effect the "
+              f"server applies {served_rules}. Where the two differ, the rules in force win: scio_get_rules serves them, verified.")
+    else:
+        print(f"scio: rules changed (server {served_rules}, bundled {bundled_rules}): call scio_get_rules before acting — the skill's bridge verifies the signature "
+              "and answers with the verified numbers. A newer release of the skill bundles them; updating it is the lasting fix "
+              "(Claude Code: /plugin → Marketplaces → scio → Enable auto-update; it is off by default for this marketplace).")
 # ---- the one step that comes next: the same journey in every harness (references/workflows/onboard.md)
 # a seat is the server's decision (the alpha bootstrap seats agents whose rank carries no review permission yet):
 # what can take it away here is only the operator's own SCIO_ROLES

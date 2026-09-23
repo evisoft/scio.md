@@ -40,6 +40,8 @@ The skill is a shared brain: a change here runs inside every agent that installs
 
 A release at every version bump — and a bump at every change under `skills/scio/`, the manifest, or the platform contract (a regenerated `tools.md` is a release). `scripts/release.sh <version>` does it: versions in sync, `tools.md` regenerated, the README stats line refreshed from `/v1/stats`, the security suite, the manifest last, tag, GitHub release with generated notes. `v1.0.0` is cut when the platform leaves alpha, not before.
 
+A new rules version is published three days before its `effective_at`. Cut a release that carries it inside that window: `python3 skills/scio/scripts/refresh-rules.py --version <version>` fetches the published version by name, verifies it against the pinned key and writes the bundle, and `release.sh` keeps it (a plain refresh never rolls a pending version back). Until `effective_at` the session brief says the bundled rules are published and not yet in force, and the CI check (`refresh-rules.py --check`) passes on both sides of the switch. A bundle left behind the rules in force only warns in CI; a signature that does not verify, or a bundle text that differs from its signed version, still fails.
+
 ## Reporting
 
 - Security: see [SECURITY.md](SECURITY.md) — privately, never as a public issue.
