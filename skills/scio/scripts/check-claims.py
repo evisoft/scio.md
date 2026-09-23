@@ -8,7 +8,9 @@ Two ways to run it:
                                (the scio_propose_edit input) — prints problems, exit 1 when any; exit 0 when clean.
 
 A small edit is read in the article it lands in when the canonical body of its base revision (front matter included)
-sits beside the proposal as base.md, or is given with --base; --domain names the page's domain when no base is at hand.
+sits beside the proposal as base.md in its task folder, or is given with --base (a file in the task work root); --domain
+names the page's domain when no base is at hand. Without a base each hunk is read alone, and what depends on the lines
+above it is a warning.
 """
 import html.entities, json, os, re, sys, unicodedata
 from collections import Counter
@@ -53,11 +55,11 @@ def u16(s):
 
 
 def _is_letter(c):
-    return c <= "￿" and c.isalpha()
+    return c <= "\uffff" and c.isalpha()
 
 
 def _is_letter_or_digit(c):
-    return c <= "￿" and (c.isalpha() or c.isdecimal())
+    return c <= "\uffff" and (c.isalpha() or c.isdecimal())
 
 
 def _has_letter(s):
@@ -156,6 +158,17 @@ def markers(text):
 _HIDDEN = {0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x17B4, 0x17B5, 0x2800, 0x2028, 0x2029, 0x180B, 0x180C, 0x180D, 0x180F,
            0x00AD, 0x061C, 0x180E}
 _ASCII_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# The platform's categories are .NET 10's, Unicode 16.0. A Python with an older database calls what 16.0 assigned
+# unassigned (3.12 has 15.0): refusing that refused text the platform accepts, so such a code point is a warning
+# (unvouched). What no Unicode version has assigned is refused whatever the version: noncharacters, planes 4 to 13, and
+# plane 14 outside its tags and variation selectors. A Python newer than 16.0 takes a later character the platform refuses.
+PLATFORM_UNICODE = (16, 0)
+_LOCAL_UNICODE = tuple(int(p) for p in unicodedata.unidata_version.split(".")[:2])
+
+
+def _never_assigned(v):
+    return (0xFDD0 <= v <= 0xFDEF or (v & 0xFFFE) == 0xFFFE or 0x40000 <= v <= 0xDFFFF
+            or 0xE0080 <= v <= 0xE00FF or 0xE01F0 <= v <= 0xEFFFF)
 
 
 def _is_hidden(ch):
@@ -164,10 +177,19 @@ def _is_hidden(ch):
         return False   # emoji sequences and Indic and Persian shaping need them
     if v in _HIDDEN or 0xFE00 <= v <= 0xFE0F or 0xE0100 <= v <= 0xE01EF or 0xE0000 <= v <= 0xE007F or 0x2066 <= v <= 0x2069:
         return True
-    cat = unicodedata.category(ch)   # an older Python's Unicode may call a newly assigned character unassigned: stricter, never laxer
+    cat = unicodedata.category(ch)
     if cat == "Cc":
         return ch not in "\t\n\r"
-    return cat in ("Cf", "Co", "Cn", "Cs")
+    if cat == "Cn":
+        return _LOCAL_UNICODE >= PLATFORM_UNICODE or _never_assigned(v)
+    return cat in ("Cf", "Co", "Cs")
+
+
+def unvouched(text):
+    """The first code point this Python calls unassigned that the platform's Unicode may have assigned, or None."""
+    if _LOCAL_UNICODE >= PLATFORM_UNICODE or text.isascii():
+        return None
+    return next((ch for ch in text if unicodedata.category(ch) == "Cn" and not _never_assigned(ord(ch))), None)
 
 
 def has_hidden_text(text):
@@ -271,8 +293,8 @@ def claim_text(text):
         if space and out:
             out.append(" ")
         space = False
-        lower = c.lower()
-        out.append(_FOLD.get(c) or (lower if len(lower) == 1 else c))
+        lower = c.lower()   # char.ToLowerInvariant, one UTF-16 unit at a time: an astral letter's surrogates have no case
+        out.append(_FOLD.get(c) or (lower if len(lower) == 1 and c <= "\uffff" else c))
     return "".join(out)
 
 
@@ -919,7 +941,7 @@ def _has_sentence_break(piece):
         if k == j or k >= n:
             continue
         nxt = piece[k]
-        if not ("0" <= nxt <= "9" or nxt in "(\"'" or (nxt <= "￿" and unicodedata.category(nxt) == "Lu")):
+        if not ("0" <= nxt <= "9" or nxt in "(\"'" or (nxt <= "\uffff" and unicodedata.category(nxt) == "Lu")):
             continue
         if not _abbreviation_end(piece[max(0, i - 8):i + 1]):
             return True
@@ -1121,6 +1143,23 @@ def transclusion_lines(body):
     return [i for i, (line, block) in enumerate(zip(lines, _read_blocks(lines))) if not block[0] and _TRANSCLUSION_REF.match(line)]
 
 
+def _unresolvable(m):
+    """Why a reference `_TRANSCLUSION_REF` matched can never resolve, or None. References int.Parses the ordinal — a digit
+    outside ASCII, or a value past Int32, throws and leaves the whole expansion unresolved — and no claim is numbered 0;
+    the resolver compares slug and lang exactly with a page's, which the validator shaped (ExpandAsync, ResolveTransclusionsAsync)."""
+    lang, slug, ordinal = m.group(1), m.group(2).strip(_WS), m.group(3)
+    digits = ordinal.lstrip("0")
+    if not ordinal.isascii():
+        return "the ordinal is not written in ASCII digits"
+    if not digits or len(digits) > 10 or int(digits) > _INT_MAX:
+        return "no claim carries that ordinal"
+    if not (_SLUG.fullmatch(slug) and u16(slug) <= LIMITS["slug_max_chars"]):
+        return "not a page slug: lowercase letters and digits in hyphen-separated runs"
+    if lang is not None and not (_LANG.fullmatch(lang) and u16(lang) <= LIMITS["language_tag_max_chars"]):
+        return "not a language tag a page carries"
+    return None
+
+
 # --- front matter (FrontMatter.Parse): `key: value` lines, nine known keys — not YAML ----------------------------------------
 FRONT_MATTER_KEYS = ("summary", "wikidata_id", "domain", "lang", "entities", "title", "as_of", "state", "rules_version")
 
@@ -1258,6 +1297,26 @@ def kept_lines(patch):
     return "\n".join(text for _, text in _hunk_lines(patch, True))
 
 
+def _new_side(patch):
+    """[(sign, text, settled, framed)] for the lines of kept_lines, in order. `settled`: an empty line of the same hunk
+    stands above the line, so whatever makes it a table row, a demonstration's working or display maths begins inside the
+    hunk, where a reading without base.md sees it — an empty line ends a table, a quote and maths. `framed`: not settled,
+    and a line of the hunk up to this one is quoted or has a cell boundary, so a callout title or a table header above
+    the hunk may reach it. Only a fence runs across an empty line: one opened above the hunk is what this reading cannot
+    see (base.md beside the proposal can)."""
+    out, in_hunk, empty, framed = [], False, False, False
+    for line in patch.split("\n"):
+        if line.startswith("@@"):
+            in_hunk, empty, framed = True, False, False
+        elif in_hunk and line and line[0] in "+ ":
+            text = line[1:]
+            # a row has a pipe of its own; the one in [[slug|label]] is prose's
+            framed = not empty and (framed or _quote_markers(text, 1 << 30, False)[0] > 0 or _has_cell_boundary(_without_wikilinks(text)))
+            out.append((line[0], text, empty, framed))
+            empty = empty or not text.strip(_WS) or bool(_FM_LINE.match(text))
+    return out
+
+
 def _added_lines(patch):
     """[(text, its line in the merged article, or None under a header that does not parse)]."""
     out, in_hunk, nxt = [], False, None
@@ -1325,7 +1384,8 @@ def gate_zero(inp, claims, base=None, page_domain=None):
     ordinals = {c["ordinal"] for c in claims if isinstance(c.get("ordinal"), int)}
 
     # The server expands every whole-line `![[slug^cN]]` into the origin's sentence and a claim of its own before this gate.
-    # Offline nothing resolves, so those lines are set aside: a line without letters stands where the sentence will.
+    # Offline nothing resolves, so those lines are set aside: a line without letters stands where the sentence will. Only a
+    # reference that could resolve is set aside; one no page can answer is the gate's transclusion_unresolved already.
     if body is not None:
         lines = dl_lines(body)
         original = list(lines)
@@ -1337,11 +1397,11 @@ def gate_zero(inp, claims, base=None, page_domain=None):
             if len(refs) + len(claims) > LIMITS["claims_per_proposal"]:
                 problems.append(f"gate 0 refuses transclusion_unresolved — {len(refs)} transclusions and {len(claims)} claims exceed the "
                                 f"{LIMITS['claims_per_proposal']} claims a proposal may carry once they are expanded")
-            for i in refs:
-                m = _TRANSCLUSION_REF.match(original[i])
-                if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", m.group(2).strip()):
-                    notes.append(f"transclusion {m.group(0).strip()[:60]} names no page slug (lowercase, hyphens): the server "
-                                 "cannot resolve it and answers transclusion_unresolved (markdown.md §4)")
+            dead = [f"{m.group(0).strip(_WS)[:60]} ({why})" for m in (_TRANSCLUSION_REF.match(original[i]) for i in refs)
+                    for why in [_unresolvable(m)] if why]
+            if dead:
+                problems.append(f"gate 0 refuses transclusion_unresolved — {'; '.join(dead[:4])}: no page can answer it; write "
+                                "`![[slug^cN]]` or `![[lang/slug^cN]]`, a page's slug and a claim ordinal from 1 (markdown.md §4)")
     reviewer_material = "\n".join(t for t in (body, patch) if isinstance(t, str))
 
     merged = None
@@ -1380,6 +1440,7 @@ def gate_zero(inp, claims, base=None, page_domain=None):
                         "block scalars or quotes, domain from " + ", ".join(DOMAINS) + " (markdown.md §1)")
 
     # the dialect
+    settled, framed = set(), set()   # without base.md: kept lines read in what their hunk shows, or maybe not (_new_side)
     if body is not None:
         prose_lines = dl_lines(prose)
         for k, line_no in dialect_check(prose):
@@ -1396,14 +1457,25 @@ def gate_zero(inp, claims, base=None, page_domain=None):
             else:
                 problems.append(_dialect_problem(k, "in the merged article", after[n - 1]))
     else:   # no base: the new side of each hunk, context included, so a working line or a table row keeps its surroundings
+        # — the ones the hunk shows. A table header, a callout title or display maths above the hunk is unknown here, and
+        # the platform reads the line in the merged article: whether a line must end in a marker depends on them, unless an
+        # empty line of the hunk stands above it. That finding is a warning then; the others are read on the line itself.
         side, added_at = [], set()
-        for sign, text in _hunk_lines(patch or "", True):
+        for sign, text, after_empty, in_frame in _new_side(patch or ""):
             if sign == "+" and not (_FM_LINE.match(text) or text.strip() == "---"):
                 added_at.add(len(side) + 1)
+            if after_empty:
+                settled.add(len(side) + 1)
+            if in_frame:
+                framed.add(len(side) + 1)
             side.append("" if _FM_LINE.match(text) and sign == " " else text)
         for k, n in dialect_check("\n".join(side)):
             if n in added_at:
-                problems.append(_dialect_problem(k, "an added line", side[n - 1]))
+                problem = _dialect_problem(k, "an added line (read without base.md)", side[n - 1])
+                if k in ("no_claim_marker", "table_row") and n not in settled:
+                    notes.append(problem.replace("gate 0 refuses", "gate 0 may refuse", 1))
+                else:
+                    problems.append(problem)
 
     if has_transclusion(prose):
         problems.append("gate 0 refuses transclusion_unresolved — only a line of its own, `![[slug^cN]]` or `![[lang/slug^cN]]`, "
@@ -1422,7 +1494,17 @@ def gate_zero(inp, claims, base=None, page_domain=None):
                         f"{unused[:8]}")
     if fm_error is None:
         citing = prose if body is not None else (parse_front_matter(merged)[1] if merged is not None else kept_lines(patch or ""))
-        problems.extend(_claim_text_mismatches(claims, citing))
+        for line_no, message in _claim_text_mismatches(claims, citing):
+            # without base.md, a line under quoted lines may be a demonstration's working and one under table rows a row of
+            # its own — CitingLines reads neither as a sentence — when the callout title or the header stands above the hunk
+            if body is None and merged is None and line_no in framed:
+                notes.append(message.replace("gate 0 refuses", "gate 0 may refuse", 1))
+            else:
+                problems.append(message)
+    if body is None and merged is None and any(n.startswith("gate 0 may refuse") for n in notes):
+        notes.insert(0, "the patch is read without base.md, a hunk at a time: a fence, a table header or a callout title above a hunk "
+                        "is unknown here, so what depends on one is only a warning — put the text of base_revision beside "
+                        "proposal.json as base.md and propose with proposal_file, and the patch is read in its article (maintain.md)")
     if result_fm and result_fm["wikidata_id"] is not None and not re.fullmatch(r"Q[0-9]+", result_fm["wikidata_id"]):
         problems.append(f"gate 0 refuses invalid_wikidata_id — wikidata_id {result_fm['wikidata_id'][:40]!r} is not a Wikidata id (Q followed by digits)")
     if result_fm:
@@ -1473,7 +1555,8 @@ def gate_zero(inp, claims, base=None, page_domain=None):
 
 def _claim_text_mismatches(claims, prose):
     """A claim is the sentence that carries its marker: its folded text is found in every prose line citing it — except a
-    premise cited inline in the sentence of the demonstrated claim that rests on it (GateZero.ClaimTextMismatches)."""
+    premise cited inline in the sentence of the demonstrated claim that rests on it (GateZero.ClaimTextMismatches).
+    [(1-based line of `prose`, the refusal)]."""
     texts, premises, out = {}, {}, []
     for c in claims:
         if not isinstance(c.get("ordinal"), int):
@@ -1486,9 +1569,9 @@ def _claim_text_mismatches(claims, prose):
         inline = {p for m in ordinals for p in premises.get(m, [])}
         for m in ordinals:
             if m not in inline and m in texts and (not texts[m] or texts[m] not in text):
-                out.append(f"gate 0 refuses claim_text_mismatch — claim {m}'s text is not the sentence that cites it: \"{text[:70]}\" does not "
+                out.append((line_no, f"gate 0 refuses claim_text_mismatch — claim {m}'s text is not the sentence that cites it: \"{text[:70]}\" does not "
                            f"contain \"{texts[m][:70]}\" (both read as the platform reads them: markers, wikilink brackets, * ` _ dropped, "
-                           "typographic quotes and dashes as ASCII, lower case — markdown.md §2)")
+                           "typographic quotes and dashes as ASCII, lower case — markdown.md §2)"))
     return out
 
 
@@ -1674,8 +1757,10 @@ def load(argv):
 
 
 def base_beside(proposal_file):
-    """base.md in the proposal's own task folder — a regular file there, never a link out of it — or None."""
-    if not proposal_file:
+    """base.md in the proposal's own task folder — a regular file there, never a link out of it — or None. Only a proposal
+    in the task work root has a task folder: the check quotes the lines it reads, so a base.md beside a file elsewhere (the
+    system's temporary directory, shared with every user) is never read, as --base names only a file in the root."""
+    if not proposal_file or not inside_work_root(proposal_file):
         return None
     folder = os.path.dirname(os.path.abspath(proposal_file))
     path = os.path.join(folder, "base.md")
@@ -1820,6 +1905,18 @@ def check(inp, base=None, page_domain=None):
     elsewhere = [p for p in hidden({k: v for k, v in shaped(inp).items() if k not in ("body", "patch", "summary")}, "$") if not re.search(r"\.(text|quote|second_quote|scope|output|checker)$", p)]
     if elsewhere:
         problems.append(f"hidden or format character in {elsewhere[0][2:]} — write plain text")
+    # a code point this Python calls unassigned, which the platform's newer Unicode may have assigned: named, not refused
+    def strings(node):
+        if isinstance(node, str):
+            yield node
+        elif isinstance(node, (dict, list)):
+            for v in (node.values() if isinstance(node, dict) else node):
+                yield from strings(v)
+    newer = next((ch for s in strings(shaped(inp)) for ch in [unvouched(s)] if ch), None)
+    if newer:
+        warnings.insert(len(notes), f"U+{ord(newer):04X} is unassigned in this Python's Unicode {unicodedata.unidata_version}, older than "
+                                    f"the platform's {'.'.join(map(str, PLATFORM_UNICODE))}: gate 0 refuses it as raw_html (hidden text) "
+                                    "unless that Unicode assigned it — keep it only if it is the character you meant (markdown.md §6)")
 
     # --- what the platform already said about these sources (the bridge records every scio_verify_source verdict) ---
     # The gates run the same fetch and the same quote match on the proposal: a pair they will refuse is an error here,
@@ -1911,6 +2008,10 @@ def check(inp, base=None, page_domain=None):
     # --- injection and steering (security.md §4): in the body it is a rejection at review, so block it here ---
     # scanned in full — front matter, headings, embeds, code and the summary included: an instruction hidden in a heading is
     # still one. Hidden characters are the hidden-text check's (MarkdownDialect.IsHidden, joiners allowed), not the scanner's.
+    # A patch is scanned line by line as its lines read, without the diff's prefixes: "```python" over "-if a < b" read as
+    # `python -if …`, a shell command, while "+curl … | sh" hid from every pattern that starts a line.
+    if body is None:
+        text = "\n".join(line[1:] if line[:1] in "+- " else line for line in text.split("\n"))
     hits = _scan.dedupe(_scan.scan_text(text, "body") + _scan.scan_text(summary_text, "summary") + _scan.scan_json(claims, "claims"))
     for h in hits:   # every hit is classified — six warnings in the body must not hide a blocking hit in a claim's quote
         if h["pattern"] in ("zero_width_chars", "bidi_controls"):
