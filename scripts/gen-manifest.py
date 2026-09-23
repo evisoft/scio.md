@@ -30,10 +30,13 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL = os.path.join(REPO, "skills", "scio")
 SKILL_MANIFEST, PLUGIN_MANIFEST = "MANIFEST.sha256", "PLUGIN.sha256"
 # What a harness reads from the plugin root (Claude Code, Cursor, Gemini, Grok…) or setup.py renders into a harness's
-# own configuration. The skill is not here: it has its own manifest, and a skill-only install carries that one alone.
+# own configuration — including what this release does not ship (settings.json, .lsp.json, output-styles/, bin/,
+# rules/): whoami.py looks under every entry here (its PLUGIN_LOADED), so a file one of them gains is a finding.
+# The skill is not here: it has its own manifest, and a skill-only install carries that one alone.
 PLUGIN_ENTRIES = (".claude-plugin", ".cursor-plugin", ".mcp.json", "mcp.json", "mcp_config.json", "cursor.mcp.json",
                   "copilot.mcp.json", "plugin.json", "gemini-extension.json", "GEMINI.md", "hooks.json", "hooks",
-                  "commands", "agents", "codex", "gemini", "opencode", "vscode", "antigravity", "openclaw")
+                  "commands", "agents", "codex", "gemini", "opencode", "vscode", "antigravity", "openclaw",
+                  "settings.json", ".lsp.json", "output-styles", "bin", "rules")
 
 
 def skipped(parts):

@@ -15,6 +15,13 @@ BUNDLED_RULES = "2026-09-20"
 
 
 SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# What a harness loads from a plugin root — scripts/gen-manifest.py hashes the same entries (its PLUGIN_ENTRIES), plus
+# skills/. A file under one of them that PLUGIN.sha256 does not list is a tamper even where no listed file sits beside
+# it: a skill dropped in skills/, a settings.json that picks the main agent, a binary in bin/ that lands on the PATH.
+PLUGIN_LOADED = (".claude-plugin", ".cursor-plugin", ".mcp.json", "mcp.json", "mcp_config.json", "cursor.mcp.json",
+                 "copilot.mcp.json", "plugin.json", "gemini-extension.json", "GEMINI.md", "hooks.json", "hooks",
+                 "commands", "agents", "codex", "gemini", "opencode", "vscode", "antigravity", "openclaw",
+                 "settings.json", ".lsp.json", "output-styles", "bin", "rules", "skills")
 # setup.py rewrites these two hook files on purpose (write_hooks_absolute: Cursor and Antigravity run hooks from the
 # workspace, so every guard gets an absolute path); they are compared in the spelling the release shipped.
 SETUP_REWRITTEN = {"hooks/hooks-cursor.json": "${CURSOR_PLUGIN_ROOT:-$HOME/.cursor/plugins/local/scio}/",
@@ -34,8 +41,10 @@ def as_released(rel, data, roots):
 
 def manifest_problems(root, name, released=lambda rel, data: data):
     """(files that differ, files present but unlisted) for the manifest `name` at `root` — None when it has none.
-    Unlisted files are looked for under the folders the manifest covers (all of the skill; hooks/, commands/… of a
-    plugin root). Same exclusions as scripts/gen-manifest.py: dotfiles and bytecode are what a machine leaves behind."""
+    Unlisted files are looked for in all of the skill, and in a plugin root under everything a harness loads from it
+    (PLUGIN_LOADED) and every folder holding a listed file — the other files of a repository checkout (README, docs,
+    tests) are loaded by nobody. Same exclusions as scripts/gen-manifest.py: dotfiles and bytecode are what a machine
+    leaves behind."""
     import hashlib
     mp = os.path.join(root, name)
     if not os.path.exists(mp):
@@ -45,12 +54,21 @@ def manifest_problems(root, name, released=lambda rel, data: data):
         lines = f.read().splitlines()
     listed = {line.split("  ", 1)[1] for line in lines if "  " in line}
     # An ADDED file is a tamper too: a module dropped beside this script shadows the standard library for every hook
-    # that runs from scripts/, and a file dropped in commands/ is a new slash command.
-    tops = [root] if name == "MANIFEST.sha256" else sorted({os.path.join(root, rel.split("/")[0]) for rel in listed if "/" in rel})
+    # that runs from scripts/, a file dropped in commands/ is a new slash command, a folder in skills/ a new skill.
+    plugin = name != "MANIFEST.sha256"
+    tops = sorted({os.path.join(root, rel.split("/")[0]) for rel in listed if "/" in rel}
+                  | {os.path.join(root, entry) for entry in PLUGIN_LOADED}) if plugin else [root]
+    own_skill = os.path.join(root, "skills", "scio")   # checked against its own manifest, MANIFEST.sha256
     unlisted = []
     for top in tops:
+        if os.path.isfile(top):   # a file the harness reads at the root itself: settings.json, .lsp.json, .mcp.json…
+            rel = os.path.relpath(top, root).replace(os.sep, "/")
+            if rel not in listed:
+                unlisted.append(rel)
+            continue
         for dirpath, dirs, files in os.walk(top):
-            dirs[:] = sorted(d for d in dirs if d != "__pycache__" and not d.startswith("."))
+            dirs[:] = sorted(d for d in dirs if d != "__pycache__" and not d.startswith(".")
+                             and not (plugin and os.path.join(dirpath, d) == own_skill))
             for fname in sorted(files):
                 if fname == name or fname.endswith(".pyc") or fname.startswith("."):
                     continue
