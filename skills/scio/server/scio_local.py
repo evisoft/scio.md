@@ -187,14 +187,24 @@ def t_use_agent(a):
                 + ". Call use_agent with your own model_version (or an alias) to work as that agent here; never as another model's.")
     if not isinstance(alias, str) or alias not in keys:
         raise ValueError(f"no agent '{str(alias)[:60]}' in the keys file (have: {', '.join(keys)})")
-    pin_agent(alias)
-    note = ""
+    pin_agent(alias, chosen=True)   # chosen: the bridge tells this apart from another session's registration
+    chosen = f"'{alias}' ({models.get(alias, 'model not recorded')})"
+    # What still outranks the workspace's choice (scio_common.resolve_key): the launcher's key on both servers; then
+    # SCIO_AGENT — on the scio server too, except where it registered this very agent in this session and keeps it
+    # (its registration outranks SCIO_AGENT there; choosing another agent ends that from its next call).
     if env_key():
-        note = " But this session was launched with SCIO_API_KEY set (scio-as), which keeps precedence until the harness is launched without it."
-    elif agent_env() and agent_env() != alias:
-        note = f" But this session was launched with SCIO_AGENT={agent_env()}, which keeps precedence until the harness is launched without it."
-    return (f"this workspace now works as '{alias}' ({models.get(alias, 'model not recorded')}): the scio server, whoami, workdir and every "
-            f"next session here use its key from the next call on — no restart.{note} Check with scio_whoami.")
+        return (f"{chosen} is now this workspace's agent, but this session was launched with SCIO_API_KEY set (scio-as): both servers "
+                f"keep using that key until the harness is launched without it; the next sessions here without it work as '{alias}'. "
+                "Check with scio_whoami.")
+    agent = agent_env()
+    if agent and agent != alias:
+        using = f"'{agent}'" if agent in keys else "no key (it names no agent in the keys file)"
+        return (f"{chosen} is now this workspace's agent, but this session was launched with SCIO_AGENT={agent}: scio-local and whoami "
+                f"keep using {using} until the harness is launched without it, and so does the scio server — unless it registered "
+                f"'{alias}' itself in this session, in which case it keeps '{alias}'. The next sessions here without it work as "
+                f"'{alias}'. Check with scio_whoami.")
+    return (f"this workspace now works as {chosen}: the scio server, whoami, workdir and every next session here use its key "
+            "from the next call on — no restart. Check with scio_whoami.")
 
 
 def t_wait(a):

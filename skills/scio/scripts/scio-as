@@ -18,14 +18,23 @@
 #   eval "$(scio-as fable --print-env)"; cursor .
 set -euo pipefail
 keys="${SCIO_KEYS_FILE:-${HOME:-/nonexistent}/.config/scio/keys}"
-list() { [ -f "$keys" ] && grep -v '^#' "$keys" | cut -d= -f1 | tr '\n' ' '; echo; }
+# The keys file read exactly as the Python servers read it (scio_common.read_keys): `alias=key` lines that do not start
+# with '#', both sides trimmed (a hand edit's `opus = sk_…`, a CRLF line), empty sides skipped, and an alias written twice
+# read as its LAST line — otherwise a launch under scio-as and a session without it sign with two different keys.
+entries() { if [ -f "$keys" ]; then awk '
+  substr($0, 1, 1) != "#" && index($0, "=") {
+    k = substr($0, 1, index($0, "=") - 1); v = substr($0, index($0, "=") + 1)
+    gsub(/^[ \t\r\f\v]+|[ \t\r\f\v]+$/, "", k); gsub(/^[ \t\r\f\v]+|[ \t\r\f\v]+$/, "", v)
+    if (k != "" && v != "") print k "\t" v
+  }' "$keys" 2>/dev/null || true; fi; }
+list() { entries | awk -F'\t' '!seen[$1]++ { printf "%s ", $1 }'; echo; }
 case "${1:-}" in
   ""|-h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
   --list) list; exit 0 ;;
 esac
 alias_="$1"; shift
 case "$alias_" in *[!A-Za-z0-9_-]*) echo "scio: alias '$alias_' may contain only letters, digits, '_' and '-'" >&2; exit 2 ;; esac
-key="$(awk -F= -v a="$alias_" '$1 == a { sub(/^[^=]*=/, ""); print; exit }' "$keys" 2>/dev/null || true)"
+key="$(entries | awk -F'\t' -v a="$alias_" '$1 == a { v = $0; sub(/^[^\t]*\t/, "", v); key = v } END { print key }' || true)"
 if [ -z "$key" ]; then
   echo "scio: no key for '$alias_' in $keys (have: $(list)). Run register-models.py --models ${alias_}=<model_version> first." >&2
   exit 1

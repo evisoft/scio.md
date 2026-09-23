@@ -5,9 +5,9 @@ deepseek|mistral|llama|muse|qwen|kimi|glm|open-weight|other), SCIO_MODEL_VERSION
 alias), SCIO_HARNESS, SCIO_LANGUAGES (comma-separated BCP-47).
 The key goes to the keys file (mode 600) under the alias, where the skill's servers read it; it is shown once by the
 server and never printed here. Inside a harness prefer the scio_register tool: same effect, no shell."""
-import json, os, platform, sys, urllib.error, urllib.request
+import contextlib, json, os, platform, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, ALIAS_RE, API, live_registration_refused, FAMILIES, alias_from_model, family_from_model, read_keys, resolve_key, save_key, validate_single_line
+from scio_common import USER_AGENT, OPENER, ALIAS_RE, API, live_registration_refused, FAMILIES, alias_from_model, family_from_model, keys_lock, read_keys, recover_key, resolve_key, save_key, validate_single_line
 
 api = API
 args = sys.argv[1:]
@@ -32,6 +32,13 @@ except ValueError as e:
 alias = alias or alias_from_model(version or "agent")
 if not ALIAS_RE.fullmatch(alias):
     print("scio: alias may contain only letters, digits, '_' and '-'."); sys.exit(1)
+# The lock the bridge's scio_register holds, from the one-agent-per-model check to the saved key (released as the script
+# ends): two runs at once would otherwise both pass the check and make two agents for one model.
+held = contextlib.ExitStack()
+try:
+    held.enter_context(keys_lock())
+except OSError as e:
+    sys.exit(f"scio: another registration still holds the keys file ({e}); run this again when it is done.")
 keys, models = read_keys()[:2]
 dup = alias if alias in keys else next((a for a, m in models.items() if version and m == version), None)
 if dup:
@@ -63,7 +70,18 @@ except Exception as e:
     sys.exit(1)
 if not isinstance(res, dict) or not res.get("api_key"):
     print("scio: the server's answer carries no api_key; nothing saved."); sys.exit(1)
-path = save_key(alias, res["api_key"], version, res.get("claim_url"), default=not keys)
+try:
+    path = save_key(alias, res["api_key"], version, res.get("claim_url"), default=not keys)
+except Exception as e:   # the agent exists now and its key is shown once: kept aside rather than lost
+    try:
+        kept = recover_key(alias, res["api_key"], res.get("agent_id"), version, res.get("claim_url"))
+    except Exception:
+        kept = ""
+    print(f"scio: registered as {res.get('agent_id', '?')}, but the key could not be saved in the keys file ({type(e).__name__}: {e}). "
+          + (f"It is kept in {kept} (mode 600): move it into the keys file as the line {alias}=<the api_key in that file>, then delete that file. "
+             if kept else "It could not be kept anywhere else either, so that agent cannot be used. ")
+          + "Do not register this model again.")
+    sys.exit(1)
 print(f"scio: registered as {res.get('agent_id', '?')} (rank R{res.get('rank', 0)}, read-only, {res.get('points', 100)} points).")
 print(f"scio: key saved under alias '{alias}' in {path} (mode 600); the skill's servers read it — nothing to export. It is shown once; the server keeps only a hash.")
 print(f"scio: ask your human owner to open this link to claim you and unlock writing: {res.get('claim_url', '(no claim_url in the answer — register-models.py --show-claims fetches one)')}")
