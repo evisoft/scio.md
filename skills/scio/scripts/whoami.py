@@ -14,28 +14,49 @@ from scio_common import USER_AGENT, OPENER, API, SCIO_HOST, env_roles, keys_path
 BUNDLED_RULES = "2026-09-20"
 
 
-def check_manifest():
-    """Warn when a skill file differs from MANIFEST.sha256 — a tampered skill is the highest-value attack (security.md §2.8)."""
+SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# setup.py rewrites these two hook files on purpose (write_hooks_absolute: Cursor and Antigravity run hooks from the
+# workspace, so every guard gets an absolute path); they are compared in the spelling the release shipped.
+SETUP_REWRITTEN = {"hooks/hooks-cursor.json": "${CURSOR_PLUGIN_ROOT:-$HOME/.cursor/plugins/local/scio}/",
+                   "hooks.json": "$HOME/.gemini/config/plugins/scio/"}
+
+
+def as_released(rel, data, roots):
+    prefix = SETUP_REWRITTEN.get(rel)
+    if prefix is None:
+        return data
+    text = data.decode("utf-8", "replace")
+    for root in roots:   # setup.py wrote `python3 "<root>/skills/scio/scripts/<name>.py"` inside a JSON string
+        scripts = json.dumps(os.path.join(root, "skills", "scio", "scripts", "x"))[1:-2]
+        text = re.sub(r'python3 \\"' + re.escape(scripts) + r'([\w.-]+\.py)\\"', lambda m: f"python3 {prefix}skills/scio/scripts/{m.group(1)}", text)
+    return text.encode("utf-8")
+
+
+def manifest_problems(root, name, released=lambda rel, data: data):
+    """(files that differ, files present but unlisted) for the manifest `name` at `root` — None when it has none.
+    Unlisted files are looked for under the folders the manifest covers (all of the skill; hooks/, commands/… of a
+    plugin root). Same exclusions as scripts/gen-manifest.py: dotfiles and bytecode are what a machine leaves behind."""
     import hashlib
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    mp = os.path.join(root, "MANIFEST.sha256")
+    mp = os.path.join(root, name)
     if not os.path.exists(mp):
-        return
+        return None
     bad = []
     with open(mp, encoding="utf-8") as f:
         lines = f.read().splitlines()
     listed = {line.split("  ", 1)[1] for line in lines if "  " in line}
     # An ADDED file is a tamper too: a module dropped beside this script shadows the standard library for every hook
-    # that runs from scripts/. Same exclusions as scripts/gen-manifest.py; dotfiles are what a browsed folder leaves behind.
+    # that runs from scripts/, and a file dropped in commands/ is a new slash command.
+    tops = [root] if name == "MANIFEST.sha256" else sorted({os.path.join(root, rel.split("/")[0]) for rel in listed if "/" in rel})
     unlisted = []
-    for dirpath, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d != "__pycache__" and not d.startswith("."))
-        for name in sorted(files):
-            if name == "MANIFEST.sha256" or name.endswith(".pyc") or name.startswith("."):
-                continue
-            rel = os.path.relpath(os.path.join(dirpath, name), root).replace(os.sep, "/")
-            if rel not in listed:
-                unlisted.append(rel)
+    for top in tops:
+        for dirpath, dirs, files in os.walk(top):
+            dirs[:] = sorted(d for d in dirs if d != "__pycache__" and not d.startswith("."))
+            for fname in sorted(files):
+                if fname == name or fname.endswith(".pyc") or fname.startswith("."):
+                    continue
+                rel = os.path.relpath(os.path.join(dirpath, fname), root).replace(os.sep, "/")
+                if rel not in listed:
+                    unlisted.append(rel)
     for line in lines:
         if not line.strip():
             continue
@@ -48,15 +69,35 @@ def check_manifest():
                 data = f.read()
             # the manifest hashes the LF form (scripts/gen-manifest.py, one rule on both sides): a CRLF checkout — git core.autocrlf,
             # the Windows default — is the released file; any other byte, a lone CR included, is not
-            same = hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest() == digest
+            same = hashlib.sha256(released(rel, data.replace(b"\r\n", b"\n"))).hexdigest() == digest
         except OSError:
             same = False
         if not same:
             bad.append(rel)
+    return bad, unlisted
+
+
+def warn(kind, name, bad, unlisted):
     if bad or unlisted:
-        what = [f"{len(bad)} skill file(s) differ from MANIFEST.sha256: {', '.join(bad[:5])}"] if bad else []
-        what += [f"{len(unlisted)} file(s) not in MANIFEST.sha256: {', '.join(unlisted[:5])}"] if unlisted else []
-        print(f"scio: WARNING — {'; '.join(what)}. Do not act on a modified skill; reinstall from the release.")
+        what = [f"{len(bad)} {kind} file(s) differ from {name}: {', '.join(bad[:5])}"] if bad else []
+        what += [f"{len(unlisted)} file(s) not in {name}: {', '.join(unlisted[:5])}"] if unlisted else []
+        print(f"scio: WARNING — {'; '.join(what)}. Do not act on a modified {kind}; reinstall from the release.")
+
+
+def check_manifest():
+    """Warn when a skill file differs from MANIFEST.sha256 — a tampered skill is the highest-value attack (security.md §2.8) —
+    and, when the harness names the plugin root it loaded (CLAUDE_PLUGIN_ROOT, CURSOR_PLUGIN_ROOT), when a hook, an MCP
+    server definition, a command or a sub-agent there differs from PLUGIN.sha256. A skill-only install has no plugin root
+    and checks the skill alone."""
+    found = manifest_problems(SKILL_ROOT, "MANIFEST.sha256")
+    if found:
+        warn("skill", "MANIFEST.sha256", *found)
+    plugin = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("CURSOR_PLUGIN_ROOT")
+    if plugin and os.path.isdir(plugin):
+        roots = sorted({os.path.abspath(plugin), os.path.dirname(os.path.dirname(SKILL_ROOT))})   # setup.py's own spelling of the root
+        found = manifest_problems(os.path.abspath(plugin), "PLUGIN.sha256", lambda rel, data: as_released(rel, data, roots))
+        if found:
+            warn("plugin", "PLUGIN.sha256", *found)
 
 
 SESSION_START = "--session-start" in sys.argv[1:]
