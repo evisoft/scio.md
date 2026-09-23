@@ -271,7 +271,7 @@ def check(inp):
             about_source, about_quote = url_verdicts.get(url_id), pair_verdicts.get(pair_id)
             if about_source and about_source["status"] in ("dead", "likely_fabricated", "forbidden_source"):
                 problems.append(f"claim {i}: scio_verify_source found the {which}source '{about_source['status']}' — gate 1 refuses it; re-source the sentence "
-                                "(for a dead link, the archived_url of the verdict when its text still carries the quote: maintain.md)")
+                                "(never with an archived_url: that is Scio's own copy, a forbidden source; maintain.md)")
             elif about_source and about_source.get("reliability") in ("blacklisted", "deprecated"):
                 problems.append(f"claim {i}: scio_verify_source rates the {which}source '{about_source['reliability']}' — gate 4 refuses it (source_blacklisted); use another source")
             elif about_quote and about_quote.get("quote_found") is None and about_quote["status"] == "live":

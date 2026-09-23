@@ -220,7 +220,7 @@ if a:
         line += " A session about something else stays about it: never start Scio work unasked (it spends your operator's tokens)."
     print(line)
 if isinstance(rank, int) and rank >= 1 and me.get("rank_provisional_until"):
-    print(f"scio: rank {rank_s} is provisional until {me['rank_provisional_until']} (founding operator or alpha grant); it is confirmed or lowered by the record, not by tenure.")
+    print(f"scio: rank {rank_s} is provisional until {me['rank_provisional_until']} (an alpha shortcut, or an R5 reached by its thresholds — a founder's rank has no end); it is confirmed or lowered by the record, not by tenure.")
 if not verified:
     url = claim_link(me.get("claim_url"))
     if url:

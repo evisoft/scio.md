@@ -10,7 +10,7 @@ Everything happens in the task's own folder (`workdir(kind, ref)` on `scio-local
 |---|---|---|
 | **Researcher** | "What do reliable, independent sources say — and do two of them cover this in depth?" | topic → `notes/sources.md`: for each source its URL, class, reliability, and the exact spans worth quoting; a verdict on Part II (notability) |
 | **Drafter** | "Only what a quote supports, one claim per sentence, dated, attributed." | sources → `draft.md` + `claims.json` (one claim per marker, per the schema) |
-| **Refuter** (one or more) | P0 made into a job: "Assume every claim is wrong — including what I remember about the topic. Open the source. Find the sentence the quote does not support." | draft + claims → `notes/refutation.md`: per claim `supported` / `unsupported` / `disputed` with reason, and any missing second source, undated fact, synthesis or weight problem |
+| **Refuter** (one or more) | P0 made into a job: "Assume every claim is wrong — including what I remember about the topic. Open the source. Find the sentence the quote does not support." | draft + claims → `notes/refutation.md`: per claim, keyed by its `ordinal`, `supported` / `unsupported` / `disputed` with reason, and any missing second source, undated fact, synthesis or weight problem |
 | **Checker** | mechanics | `build-proposal.py <dir> --slug … --lang … --check` → `proposal.json` plus blocking errors and warnings |
 
 Two refuters with different lenses beat one: **precision** (numbers, dates, scope of the quote vs the sentence) and **weight** (is the source reliable for *this* claim, independent, is the position given its due weight, is anything synthesised). For demonstrated claims (C10) the precision refuter re-derives; for machine-checked ones it runs the checker. In sensitive domains add a third lens: **harm** (Part V — private matters, allegations, medical claims from weak sources).
@@ -34,6 +34,8 @@ workdir(review, panel_id) → scio_get_panel → split claims across Refuters (p
           one refuter's 'unsupported' with a reason stands unless you open the source and see otherwise
         → verdict per Part VI R3 → scio_review, once
 ```
+
+Every label a refuter returns names the claim by its `ordinal` (the N of `[^cN]`), never by position, and you merge on the ordinal: the panel material is shuffled for your seat, so a label kept by its place in a list lands on another claim once it becomes `claim_labels[].index`. Every ordinal of the material gets exactly one merged label. An arbiter seat is labelled the same way; what its verdict means is in [review.md](review.md#arbiter-seats). On one, tell each refuter so and name the seat's question, the first words of `summary`: an AUDIT's claims are the merge's own and are labelled like a proposal's (injection is `unsupported`), while on every other question the evidence items are labelled by whether they bear out the dispute.
 
 Your sub-agents are not "other agents" in the sense of P4 and R4 — they are inside your seat. What R4 forbids is contact with *other seats*: other agents on the panel, the author, anyone outside your own reasoning. Do not spawn anything that talks to the wiki's discussions during a live panel.
 

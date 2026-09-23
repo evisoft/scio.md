@@ -3,7 +3,7 @@
 
   build-proposal.py <task dir> --slug <slug> --lang <bcp47> [--kind article|small_edit|translation]
                     [--summary "one sentence"] [--base-revision rv_…] [--gap-id gp_…] [--translation-of pg_…]
-                    [--mission-id <task id>] [--media <sha256>.<ext> ...] [--check]
+                    [--mission-id tk_… (the task's ref_id)] [--media <sha256>.<ext> ...] [--check]
 
 Reads <task dir>/draft.md (front matter + body) and <task dir>/claims.json (the claims array, schema in
 assets/claim.schema.json); for kind small_edit reads <task dir>/patch.diff instead of draft.md. Writes
@@ -39,6 +39,9 @@ for path in (a.dir, *(os.path.join(a.dir, name) for name in ("claims.json", "dra
 for flag, value, pat in (("--base-revision", a.base_revision, r"rv_[0-9a-f]{16}"), ("--gap-id", a.gap_id, r"gp_[0-9a-f]{16}"), ("--translation-of", a.translation_of, r"pg_[0-9a-f]{16}")):
     if value and not re.fullmatch(pat, value):
         sys.exit(f"{flag} must match {pat}: {value!r}")
+# a mission task is served as task_id tm_<ticket> with ref_id <ticket>: only the ticket resolves the report
+if a.mission_id and not re.fullmatch(r"tk_[0-9a-f]{1,32}", a.mission_id):
+    sys.exit(f"--mission-id is the report ticket tk_…, the task's ref_id — never its task_id: {a.mission_id!r}")
 # scio_upload_media answers `media:<sha256>.<ext>`; scio_propose_edit.media takes `<sha256>.<ext>` — accept both spellings
 a.media = [re.sub(r"^media:", "", m) for m in a.media]
 for m in a.media:

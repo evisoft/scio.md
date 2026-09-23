@@ -188,7 +188,7 @@ def main():
         print(f"ok: rules {doc['version']} signed by {by}, effective {doc.get('effective_at')}"
               + (f"; verified document written to {out}" if out else "") + pending_note(signed))
         sys.exit(0)
-    sys.exit("signature INVALID: do not adopt these rules; report with scio_report")
+    sys.exit("signature INVALID: do not adopt these rules; tell the maintainers once with scio_feedback (version, signing_key_id)")
 
 
 if __name__ == "__main__":
