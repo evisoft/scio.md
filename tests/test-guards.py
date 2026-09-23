@@ -404,6 +404,17 @@ class GuardSecretsReach(Sandbox):
             with self.subTest(command=command[:40]):
                 self.assertIsNone(self.bash(command))
 
+    def test_a_home_whose_path_says_scio_is_no_reach_for_the_keys(self):
+        # the glob check looked for the words "scio" and "keys" in the command with ~ expanded, so a HOME under the
+        # master suite's scio-suite-… scratch folder (or a home named /home/scio) refused `cat ~/.config/*`
+        home = os.path.join(self.home, "scio-keys")
+        os.makedirs(os.path.join(home, ".config", "scio"))
+        with open(os.path.join(home, ".config", "scio", "keys"), "w") as f:
+            f.write(f"opus={self.KEY}\n")
+        self.assertIsNone(self.bash("cat ~/.config/*", HOME=home))
+        self.assertIsNone(self.bash("cat " + os.path.join(home, ".config", "*"), HOME=home))
+        self.assertEqual(self.bash("head ~/.config/s?io/k*", HOME=home), "deny")
+
     def run_patched(self, patch, command, **env):
         """The guard run in a child, loaded as `g` and patched before its main() — a failure made the same way on every
         Python."""

@@ -727,6 +727,10 @@ def decide(payload):
     # spells the directory (an Edit of the README, a sub-agent's prompt) touches nothing — the key-value check above covers it
     paths = list(path_values(payload.get("tool_input", {})))
     nblob = normalise("\n".join(([cmd] if cmd is not None else []) + paths))
+    # the words the call spelled, with HOME folded back to ~: a home named /home/scio (or a test's scio-suite-… folder) is
+    # no word reaching for the keys file, and read into the glob check below it refused `cat ~/.config/*`
+    home = normalise(HOME).rstrip("/")
+    spelled = nblob.replace(home + "/", "~/") if home else nblob
     commands = simple_commands(cmd) if cmd is not None else []
     if tool == "Bash" and cmd is not None and k and dumps_environment(cmd, commands):
         return "the command dumps the whole environment, which holds SCIO_API_KEY in this session"
@@ -741,7 +745,7 @@ def decide(payload):
             pass   # retain the textual checks when the command is not valid shell syntax
     if (mentioned(keys_path, nblob) or mentioned(DEFAULT_DIR, nblob) or (KEYS_DIR and mentioned(KEYS_DIR, nblob))
             or re.search(r"(?<![\w.-])" + re.escape(CFG_REL) + r"(?![\w.-])", nblob)
-            or (re.search(r"\.config/[^\s/]*[*?\[]", nblob) and re.search(r"\b(keys|scio)\b", nblob))   # a glob under .config reaching for the file
+            or (re.search(r"\.config/[^\s/]*[*?\[]", nblob) and re.search(r"\b(keys|scio)\b", spelled))   # a glob under .config reaching for the file
             or re.search(r"\bfind\b[^\n;|&]*\.config\b[^\n;|&]*\bkeys\b", nblob)
             or any(names_credential_path(v) for v in paths)
             or (cmd is not None and reads_keys_through_a_directory(cmd, commands))
