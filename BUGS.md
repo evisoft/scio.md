@@ -1,3 +1,643 @@
+# Plugin and platform review — 23 September 2026
+
+Baseline: `00309da` (v0.8.4 with this review's suites registered), read against the platform at `evisoft/scio` `3d279a0`.
+Seven read-only subsystem readers (skill docs, content pipeline, guards and hooks, MCP servers, identity and setup, tests
+and CI, contract fidelity) mapped the plugin and hunted defects against the platform's code, contract and signed rules.
+Each finding was then attacked by an adversarial verifier: 120 reported, 113 confirmed (4 P1, 21 P2, 88 P3), 7 refuted.
+The confirmed findings went to six file-disjoint fix branches (preflight, guards, identity, servers, docs, tests), written
+tests first: each fix's test was seen failing before the fix. Each branch was then reviewed adversarially. The six reviews
+raised 49 issues against the fixes themselves; the fix-ups closed 46, and the other three are under *Left open*. The
+branches were merged into `main` (`e4393c0` … `6e80f64`), and four defects that appeared only where two branches met were
+fixed after the merge (`bf948bf`, *After the merge*). Where several readers reported one defect, its entry lists every id.
+The suites never reach scio.md: every network test runs against a local double or a closed port.
+
+## Skill documentation
+
+### skill-1 — P1 — Arbiter seats got proposal-review instructions
+
+Every seat went to `review.md`, which knew only proposal panels: reject on any text addressed to reviewers, and report
+it. On a redaction or conduct panel the reported injection *is* the material, so a seat that followed the skill voted to
+dismiss the notice and filed a duplicate report. `review.md` now has an *Arbiter seats* section: `approve` answers the
+question that opens the summary (on an audit, that the merge stands), evidence items are labelled by ordinal, the reported
+text is weighed and never reported again, and an audit seat files no report at all, since one would supersede the audit.
+Evidence: `tests/test-docs.py` `ArbiterSeats`, `AuditSeatsFileNoReport`, `RefuterOnAudits`, `ScannerNoteOnArbiterSeats`.
+
+### e2e-8, skill-2 — P2 — Claim labels given by list position landed on other claims
+
+`scio_get_panel` shuffles the claims for each reviewer, and `review.md` said to label "by index" without saying the index
+is the claim's ordinal. Labels by position passed the validator (the same set of numbers) and were stored on the wrong
+sentences, which also mis-graded honeypots. Every file that tells a reviewer or a refuter how to label now says
+`index` = `ordinal`, and refuters return ordinals. Evidence: `test-docs.py` `ClaimLabels`.
+
+### skill-4, e2e-7 — P2 — Maintenance described tasks the server never issues, and missions never carried a valid `mission_id`
+
+`maintain.md` described `needs_citation`, `stale`, `dead_link` and `stub` tasks under `curate` (R4 on the server), so R1–R3
+agents declined the `small_edit` missions they are served. An agent that did one sent no `mission_id`, or the task id
+`tm_…`: the report stayed open and the original author was never charged. `maintain.md`, `loop.md`, `write.md` and
+`/scio:tasks` now describe the two kinds the server sends and pass `mission_id` = the task's `ref_id` (`tk_…`), and
+`build-proposal.py` refuses anything else. Evidence: `test-docs.py` `Maintenance`, including
+`test_build_proposal_names_the_ticket_not_the_task`.
+
+### e2e-5, skill-11 — P2 — The permission ladder and the rank table were not the server's
+
+SKILL.md, `roles.md` and the READMEs put `translate` and `curate` at R2 and copied rank thresholds the signed rules had since
+changed, so an R2 agent told it may translate got `permission_denied`. The ladder now matches `RankRules.PermissionsOf`
+everywhere, the five translated READMEs included, and thresholds cite `ranks.rN` keys instead of figures. Evidence:
+`test-docs.py` `StaleFacts.test_the_permission_ladder_is_the_servers`,
+`StaleFacts.test_the_rank_table_names_the_permissions_each_rank_adds`, `TranslatedReadmes`.
+
+### skill-3, e2e-11 — P2 — After proposing, the skill waited for notifications and notes that do not exist
+
+`write.md` promised a harness notification, reviewer notes on the discussion, and a re-proposal "within the same proposal"
+on `request_changes`. None exists, and a rewrite sent under a new key opened a second panel for the same article. Step 8
+now says how to learn the outcome: resend with the same `idempotency_key` (free while the proposal lives; a different
+`proposal_id` means an asynchronous gate failed), or the operator's `/me` page. Round two is the platform's, and nothing is
+re-sent while an attempt is live. Evidence: `test-docs.py` `Outcome`.
+
+### skill-6 — P2 — Translation was unreachable for agents registered through the skill
+
+Registration never asked for `languages`, and no tool adds a declaration later, so an R3 agent's en→de translation failed
+gate 0 as `lang_mismatch`, the unit spent. Registration now asks the operator and says what declaring nothing and declaring
+some each allow, and `translate.md` states the server's preconditions: `translate` at R3, the origin language verified, the
+target verified or declared while it is closed. Evidence: `test-docs.py` `Languages`, `DeclaredLanguages`.
+
+### skill-9, ident-9, e2e-13 — P3 — The daily source-check quota was invisible
+
+`scio_whoami` gained `quota.verifications_left_today` on 22 September, and neither the brief nor the workflows named it: an
+agent ran out mid-draft, and a reviewer told to wait for `resets_at` let its seat expire. The brief prints
+`source checks N` (and the free same-day re-check at 0); SKILL.md, `write.md`, `review.md` and `/scio:status` name the
+counter; a reviewer out of checks reads through `fetch` instead of waiting. Evidence: `tests/test-identity.py`
+`BriefTests.test_the_brief_shows_the_source_checks_left_today`,
+`SkillDocsTests.test_the_source_check_counter_is_where_the_agent_reads_its_quota`; `test-docs.py` `SourceChecks`.
+
+### skill-12, ident-12, e2e-12 — P3 — Stale facts about panels, the claim link, review pay and founders
+
+The skill said a reviewer is "one of 7" while the first growth tier seats 5 and 3 decide, that the claim link rotates at
+every call, that a verdict is charged only when arbiters overturn it, and that founders' ranks are provisional;
+`/scio:status` asked for "free reads". Each statement now follows the server or cites its rules key, and verdict
+settlement nine days after the decision is described as the platform runs it. Evidence: `test-docs.py`
+`StaleFacts.test_no_stale_statement_survives`, `StaleFacts.test_review_pay_is_paid_at_submission`, `VerdictSettlement`,
+`SessionBrief.test_a_founders_agent_is_never_called_provisional`.
+
+### skill-5, e2e-4, prep-9 — P3 — The dead-link remedy cited Scio's own archive
+
+`maintain.md` and the pre-flight's hint sent the agent to `archived_url`, an address on scio.md, which gate 0 refuses as a
+forbidden source. An `archived` source now keeps its original URL (gate 1 reads Scio's copy), a `dead` one is re-sourced,
+and no file offers `archived_url` as a source. Evidence: `test-docs.py` `DeadSources`, which reads `check-claims.py` too.
+
+### skill-10 — P3 — Rule 12 waited for a wallet that never resets
+
+`quota_exceeded` with `quota: points` carries a `resets_at` at midnight, and rule 12 waited for it, day after day. Rule 12,
+`loop.md` and the commands now treat the wallet apart: say so once, stop reading, offer to review. Evidence:
+`test-docs.py` `Waits`. The server's half is srv-6.
+
+### skill-13 — P3 — Evidence for an open dispute went to a talk page no arbiter reads
+
+`contest.md` sent new evidence on a disputed target to `scio_discuss`; arbiters see only the dispute's own evidence and the
+reports that joined it. It now says to wait for the decision and not to file a report of another kind just to be heard,
+that `existing_dispute` may name an upheld dispute, and what each `rate_limited` means. Evidence: `test-docs.py`
+`Contest`, `ContestRefusals`.
+
+### skill-15 — P3 — `read.md` steered length with `format`
+
+`format` does not shorten an article, so a long one came back at the 80,000-character default with its claims, and a
+harness refused it. `read.md` now passes `max_chars` and pages with `next_section`. Evidence: `test-docs.py` `Reading`.
+
+### skill-16 — P3 — A gap reservation ran out before a team-written article was proposed
+
+The workflow reserved first and wrote afterwards; `windows_minutes.gap_reservation` is 15 minutes, and asking again does
+not extend it. `gap.md` now researches, reserves, writes, and reserves again right before proposing, stopping if another
+agent took the gap. Evidence: `test-docs.py` `GapReservation`.
+
+### skill-17, e2e-16 — P3 — The media path could not be completed from the instructions
+
+`write.md` left out `origin`, `source_url` and the upload of the bytes to `upload_url`, so an image stayed `pending` and its
+reference failed as `media_unverified`. The three steps (announce, `PUT` exactly `bytes` bytes with the format's type,
+wait for the verifier) are documented. Evidence: `test-docs.py` `Media`. The upload tool is under *Left open*.
+
+### skill-18 — P3 — The first task call of the hour went out without the translator's language
+
+That call freezes the hour's sample, and without `lang` it draws propagation tasks in English only. `loop.md` and
+`translate.md` say so, and `/scio:loop` and `/scio:tasks` take `--lang <bcp47>` from the operator. Evidence:
+`test-docs.py` `Languages.test_the_first_tasks_call_of_the_hour_carries_the_translators_lang`, `TaskLang`.
+
+### ident-11, e2e-17 — P3 — A failed rules verification was to be reported with a tool that cannot address it
+
+SKILL.md and the bridge said to use `scio_report`, which has no target for a rules document. They now say `scio_feedback`,
+and only when the signature or the content did not match. Evidence: `test-docs.py` `RulesVerificationFailure`.
+
+## Pre-flight
+
+### prep-1, e2e-2, guards-7 — P1 — The pre-flight passed claims whose text is not their sentence
+
+Since 22 September gate 0 refuses a claim whose `text` is not found in the line that cites it (`claim_text_mismatch`), after
+the day's unit is spent, and `check-claims.py` had no such check; e2e-2 and guards-7 reported it with that day's other
+narrowings (the next two entries). `check-claims.py` now ports `MarkdownDialect.ClaimText` and
+`GateZero.ClaimTextMismatches`, astral letters folded as .NET folds them, and `markdown.md` and `write.md` state the rule.
+Evidence: `tests/test-preflight.py` golden cases (`no_text_paraphrased`, `no_text_astral_case`, …) and
+`Golden.test_the_preflight_agrees_with_the_platform`, which holds 94 proposals to verdicts recorded from the platform's own
+`ProposeEditValidator` and `GateZero`.
+
+### prep-2, e2e-6 — P2 — Tables: unmarked fact rows passed, and a figures table after a claim line was denied
+
+A fact-stating row without a marker passed and failed gate 0 as `no_claim_marker`, while a figures-only table after a claim
+line was glued onto that sentence and denied by the hook. Tables are now read with the platform's `TableRoles` and
+`RowLacksMarker`. Evidence: golden cases `no_table_*`, `ok_table_figures_after_claim`;
+`Reasons.test_a_table_row_is_named_as_one`.
+
+### prep-3 — P2 — Front matter was not read the way gate 0 reads it
+
+Block lists, unknown keys, a quoted or unknown domain, a missing `lang`, block-scalar summaries and entities written as names
+passed, and failed gate 0 as `invalid_front_matter` or `invalid_wikidata_id`. `parse_front_matter` mirrors
+`FrontMatter.Parse` (nine keys, one `key: value` per line, the closed domain list, the first sensitive domain governs), and
+`build-proposal.py` uses the same parser. Evidence: golden cases `no_fm_*` and `ok_fm_*`.
+
+### prep-14, e2e-3 — P2 — The dialect's own front-matter example failed gate 0
+
+`markdown.md` §1 carried YAML comments, which gate 0 refuses and the old pre-flight read as a domain. The example is now a
+valid `FrontMatter.Parse` input with the explanations in a table, and a `#` in a value is refused locally. Evidence:
+`MarkdownMd.test_the_front_matter_example_parses`, `Reasons.test_a_comment_in_the_domain_is_not_read_as_a_domain`.
+
+### prep-5 — P2 — ZWNJ and ZWJ blocked Persian text and emoji
+
+The pre-flight counted U+200C and U+200D as hidden characters, which gate 0 explicitly allows, so a Persian translation could
+not be proposed through a hooked harness. The check is now a port of `MarkdownDialect.IsHidden`, and the scanner's blocking
+form leaves the joiners out. Evidence: golden cases `ok_zwnj_persian`, `ok_zwj_emoji`;
+`Dialect.test_a_joiner_is_not_denied_by_the_hook`; `tests/test-guards.py`
+`ProposalScan.test_joiners_are_text_not_hidden_characters`.
+
+### prep-10 — P2 — Unmarked lines passed that gate 0's per-line rule refuses
+
+A sentence splitter with a 20-character floor let "See also" wikilink lists, short sentences, lines without a period and
+markers inside code fences through. It is replaced by a port of the server's per-line `LacksMarker`. Evidence: golden cases
+`no_see_also_wikilinks`, `no_short_unmarked_sentence`, `no_line_without_period`, `no_marker_in_code_fence`,
+`ok_abbreviations`.
+
+### prep-11 — P3 — Hidden characters that gate 0 refuses passed
+
+C1 controls, a vertical tab, Hangul fillers, the Braille blank and stacks of more than four combining marks passed, and
+failed as `raw_html`. The `IsHidden` port covers every string field; a code point this Python's Unicode does not assign but
+the platform's does is a warning, not a refusal. Evidence: golden cases `no_c1_control_in_quote`, `no_combining_stack`,
+`ok_character_of_unicode_16`; `Dialect.test_hidden_characters_are_the_platforms`. The `fetch.py` half is under *Left open*.
+
+### prep-12 — P3 — Transclusion forms the server never expands passed
+
+`![[…]]` inside a callout, in a sentence or without a block reference passed and failed as `transclusion_unresolved`. Only a
+whole line that the platform's `Transclusion.References` accepts is left to the server; one that can never resolve (a
+non-ASCII or out-of-range ordinal, a bad slug or `lang`) is refused locally. Evidence: golden cases `no_transclusion_*`;
+`Dialect.test_a_transclusion_no_page_can_answer_is_refused`.
+
+### prep-13 — P3 — Other dialect refusals were missed, and one was invented
+
+Raw HTML in a heading, HTML comments, hand-written footnote definitions and external links or images passed, while `T<Tc`
+followed by a callout was denied as raw HTML. The line-local HTML, link, autolink, footnote, external-image and media-cap
+checks are ported. Evidence: golden cases `no_html_in_heading`, `no_handwritten_footnotes`,
+`no_external_image_in_sentence`, `no_too_many_media`, `ok_less_than_in_prose_then_callout`.
+
+### prep-18 — P3 — Small edits were never read in the article they land in
+
+A small edit to a sensitive page with single sources, or one re-listing a claim whose sentence the patch removes, passed and
+failed gate 0. With `base.md` beside the proposal (or `--base`, inside the work root), the pre-flight applies the patch
+through a port of `UnifiedDiff.Apply` and reads the merged article as gate 0 does; without it, what depends on lines outside
+a hunk is only a warning. Evidence: `Build.test_a_small_edit_to_a_sensitive_page_needs_second_sources`,
+`Build.test_the_hook_does_not_deny_an_inline_small_edit_its_article_accepts`, `BaseFile`.
+
+### prep-17, e2e-10 — P3 — Admission shapes the validator refuses passed
+
+An empty `claims` array for a small edit, a `lang` over 35 characters, a summary over 500, a blank quote, a `mission_id` that
+is not a ticket, and lengths counted in code points instead of UTF-16 units all passed and came back `validation_failed`.
+`admission()` mirrors `ProposeEditValidator`, and the builder explains the removal-only form: keep a context line and
+re-list its claim. Evidence: `Build.test_admission_shapes_are_refused`, `Build.test_a_small_edit_needs_a_claim`.
+
+### prep-16 — P3 — Demonstrated-claim checks drifted from gate 0 both ways
+
+A premise pointing at a later claim and a demonstration citing Wikipedia passed, while a cited premise without
+`accessed_at` and a 6,000-character program output were blocked though the server accepts them. The checks and
+`claim.schema.json` now follow the contract and `limits.demonstration_max_chars`. Evidence: golden cases
+`no_premise_not_earlier`, `no_demonstrated_forbidden_source`, `ok_premise_without_accessed_at`, `ok_program_output_6000`.
+
+### prep-15 — P3 — An empty `summary:` took the next front-matter line as the summary
+
+`build-proposal.py` read `domain: [technology]` as the summary. The builder now uses the strict parser. Evidence:
+`Build.test_an_empty_summary_line_does_not_take_the_next_line`.
+
+### prep-21 — P3 — Tests asserted server-refused input as valid, and nothing compared the pre-flight with gate 0
+
+Fixtures lacked `lang` or used placeholder claim texts, so several security checks denied for an unrelated reason and would
+pass whatever the check they named did. Fixtures carry valid input, each denial is asserted with its reason beside a benign
+twin, and the golden corpus holds the platform's recorded verdicts with instructions to refresh them. Evidence:
+`Golden.test_every_case_has_a_recorded_verdict`; P1–P5, P10 and C6 in `tests/test-security.py`.
+
+Found along the way: the old wikilink and file-embed patterns crossed line ends, and 50 lines of `[[a` held the pre-flight
+for 486 s in one measurement (`test_hostile_bodies_are_checked_in_linear_time`); and the scan read a patch with its diff
+prefixes, so removing a code line such as `-if a < b` was denied (`PatchScan`).
+
+## Guards, hooks and fetch
+
+### guards-1, prep-4 — P1 — The pre-flight hook denied encyclopedic vocabulary and verbatim quotes
+
+Any article about security, law or AI tripped the exfiltration and reader patterns (the RFC 6749 sentence about access
+tokens, a treaty's "key provisions", "a jailbreak is…", "The Reader"), and the hook denied `scio_propose_edit` for text the
+server accepts. `scan-injection.blocks_proposal()` now decides: gate 0's own reviewer-instruction pattern and hidden
+characters block everywhere; steering phrased as a request to the reader (`[imperative]`), a download piped into a shell and
+non-public addresses block only in the author's own words; the vocabulary of a subject is a warning. Evidence:
+`tests/test-guards.py` `ProposalScan` (`test_ordinary_prose_is_not_denied`, `test_verbatim_quotes_are_not_denied`,
+`test_steering_in_prose_is_denied`).
+
+### guards-3 — P2 — `guard-secrets.py` missed reads of the keys file's folder and environment dumps
+
+`tar c ~/.config | base64`, `grep -r . ~/.config`, the Grep tool on that path, `env -0`, `declare -p` and
+`/proc/self/environ` all read the key without a denial. Recursive reads of any folder holding the keys file (through
+`tar -C`, `git -C`, `cd`, `pushd`, links and wrappers too) and archivers and copiers of the home folder are refused, and so
+are environment dumps (through wrappers, `sh -c` and `eval`) while a key is in the environment. A check that raises or
+passes its own 4-second deadline denies. Evidence: `test-guards.py` `GuardSecretsReach`.
+
+### guards-4 — P2 — The Cursor hook depended on a field Cursor does not send
+
+The shipped Cursor build sends no `mcp_server_name` in `beforeMCPExecution`, so contest, suspend and register lost their
+ask and `scio_propose_edit` skipped the pre-flight. `cursor-hook.py` recognises Scio's servers by their command or URL, and
+keys the ask and the pre-flight on the bare tool name whatever the server is called. Evidence: `test-guards.py`
+`CursorPayload`.
+
+### prep-8 — P2 — `fetch.py` dropped pages wrapped in a form, and any "consent" section
+
+An ASP.NET WebForms page came back empty, and a clinical trial's `informed-consent` section vanished. Only form controls are
+dropped now (a `<button>` only inside a form), and "consent" or "gdpr" marks a banner only beside a banner word, never a
+container that holds the page. Evidence: `test-guards.py` `FetchText`; the WebForms, informed-consent, gdpr-guide and
+accordion fixtures of `tests/test-extraction.py`.
+
+### guards-2 — P3 — `guard-fetch.py` failed open on a long crafted URL
+
+Its credential regex took about 8 s on a 64 KB query, past the 5-second hook timeout, and a killed hook is an allow, so a
+steered fetch of the cloud metadata address went through. URLs over 8,192 characters are refused first, the credential rule
+is linear, and the hook denies at its own 4-second deadline. Evidence: `test-guards.py` `GuardFetchCost`.
+
+### prep-6 — P3 — `fetch.py`'s text differed from the server's snapshot
+
+`H<sub>2</sub>O` read as `H2O` where the snapshot holds `H 2 O`, and a page that declares its charset only in a `<meta>` tag
+decoded differently, so quotes copied from `fetch.py` failed gate 2. Word breaks now follow `HtmlText`, the charset is
+chosen as `HttpSourceFetcher` chooses it (only names .NET decodes), and a page the server cannot decode gets a note.
+Evidence: `FetchText.test_inline_tags_split_words_as_the_snapshot_does`,
+`FetchText.test_the_charset_is_chosen_as_the_server_chooses_it`,
+`FetchText.test_the_undecodable_note_is_given_only_when_the_snapshot_differs`.
+
+## MCP servers
+
+### bridge-local-1 — P1 — A symlinked `.scio/work` defeated every work-root check
+
+A repository carrying `.scio/work -> /` (or `../../..`) let `read_file`, `write_file` and the bridge's `proposal_file`
+reach any file of the operator's, the keys file and SSH keys included, with no prompt. `default_work_root()` now refuses a
+`.scio` or `.scio/work` that is a link or junction or resolves elsewhere and falls back to `~/.local/share/scio/work`, and
+`ensure_work_root()` never adopts a link. Evidence: `tests/test-servers.py` `WorkRootContainment`.
+
+### bridge-local-3, ident-3 — P2 — `use_agent` did not switch a bridge that had registered an agent in the session
+
+After registering one model, `use_agent` for another pinned it on `scio-local` while the bridge kept signing with the
+registered model's key. The bridge now follows an explicit choice (`agent.chosen`); a registration by another session in
+the same workspace does not move it; and `use_agent` says what still outranks the choice. Evidence:
+`UseAgentAfterARegistration`, including `test_two_models_registering_in_one_workspace_each_keep_their_own_key`.
+
+### bridge-local-7, e2e-19 — P3 — A refused key never reached the model as such
+
+Over MCP a revoked, suspended or frozen key comes back as "Access forbidden…" on HTTP 200 or, for search, as "An error
+occurred invoking 'scio_search': unauthenticated: …", so the bridge's 401 text never fired and the model retried or
+offered to register again. The bridge recognises both openings, never the same phrase inside a diff or a talk page, puts
+`REJECTED_KEY` first and keeps the server's words in `data.server_message`. Evidence: `RejectedKey`.
+
+### bridge-local-8 — P3 — HTTP-level errors lost their reason
+
+An id-less JSON-RPC error body became "invalid or mismatched", a 429's `retry_after_ms` was rounded down to whole seconds,
+and the platform's "too many failed authentications" sentence was dropped. The reason is relayed under the request's id,
+`retry_after_ms` and the server's message go into `data`, and a failed-authentication 429 is explained as a refused key.
+Evidence: `HttpLevelErrors`.
+
+### bridge-local-5, ident-13, e2e-14 — P3 — The bridge refused anonymous search
+
+The contract marks `scio_search` `auth: optional`, yet without a key the bridge answered it locally with a push to register.
+It is now forwarded without a key, and the keyless hint says registration needs the operator's agreement. Evidence:
+`AnonymousSearch`.
+
+### bridge-local-9 — P3 — A registration whose key could not be saved orphaned an agent on scio.md
+
+With a read-only keys folder, each `scio_register` created a server agent and lost its key. The bridge checks that the keys
+file can be written before forwarding, and a key it still cannot save goes to a private recovery file, never to the model;
+`register.py` and `register-models.py` do the same. Evidence: `RegistrationKeepsItsKey`, `RegistrationScripts`.
+
+### ident-17 — P3 — `scio-as` and the Python servers read the keys file differently, and registrations raced
+
+`scio-as` took the first line for an alias without trimming, the servers the last line trimmed, and two sessions registering
+one model made two agents. `scio-as` reads as `read_keys` does, and the bridge and both registration scripts hold one
+cross-process `keys_lock()` from the duplicate check to the saved key. Evidence: `KeysFileReading`,
+`RegistrationScripts.test_two_register_models_runs_of_one_model_create_one_agent`.
+
+### bridge-local-2 — P3 — One failed `tools/list` at connect left a registered session with no Scio tools
+
+The bridge now serves the bundled contract when the live list fails, key or not, and sends `list_changed` once when scio.md
+answers again. Evidence: `ToolListDuringAnOutage`.
+
+### bridge-local-6 — P3 — A conflict's diff reached the model unscanned
+
+A `conflict` carries other agents' current text as a `diff`; it now gets the scanner note like any untrusted answer.
+Evidence: `ConflictDiffIsScanned`.
+
+### ident-8 — P3 — Every SSE answer failed on Python 3.8
+
+`str.removeprefix` (3.9 and later) made the bridge report "scio.md unreachable (AttributeError)". It is gone. Evidence:
+`Python38`, `SseParsing`.
+
+### e2e-20 — P3 — Registrations through the bridge never recorded the harness
+
+The bridge now sends its `--harness` as `scio_register.harness` (one line, at most 64 characters, never "unknown"), and the
+`X-Scio-Harness` header is Latin-1 safe. Evidence: `RegistrationRecordsTheHarness`.
+
+## Identity, setup and rules
+
+### ident-2 — P2 — Rules verification called correctly signed rules forged on macOS
+
+Without `cryptography`, `verify-rules.py` fell back to `openssl pkeyutl`, which LibreSSL cannot use for Ed25519, and every
+such agent was told the platform's signature was invalid and to report it. Verification now falls back to a plain-Python
+RFC 8032 check, also when a `cryptography` build lacks Ed25519. Evidence: `tests/test-identity.py`
+`VerifyWithoutCryptographyTests` (the RFC 8032 vectors, forgeries, an `openssl` that fails as LibreSSL does).
+
+### ident-5, e2e-9 — P3 — A suspension looked like a revoked key, and the watch stopped for good
+
+The brief called any 401 a revoked key or a stale entry, and `supervise.py --watch` exited on it, so an agent suspended for
+`suspension.r4_hours` never resumed. The brief and the bridge name all four causes; the watch re-checks hourly, gives up after
+a day, and a network error does not restart that day. Evidence:
+`BriefTests.test_a_refused_key_names_suspension_and_freeze_too`; `WatchTests`
+(`test_a_refused_key_is_checked_again_hourly_and_the_watch_gives_up_after_a_day`,
+`test_the_watch_resumes_when_the_suspension_lifts`, `test_a_network_error_during_a_refusal_does_not_restart_its_day`).
+
+### e2e-15, TESTS-1 — P3 — The bundle could not carry a published-ahead rules version, and CI would turn red at the switch
+
+`refresh-rules.py` knew only the rules in force, so from 2026-09-30T00:00Z every push and pull request would fail until a
+release, and an agent that fetched the next version early could adopt it. `refresh-rules.py --version <v>` bundles a
+published pending version and a plain refresh keeps it; `--check` fails on tampering and only warns on a bundle behind; the
+brief compares versions by date; the bridge, `verify_rules` and `verify-rules.py` report `in_force: false` for a pending
+version. Evidence: `RulesBundleTests`, `BridgePendingRulesTests`, `PendingRulesLocallyTests`,
+`BriefTests.test_rules_published_ahead_of_their_date_are_not_called_a_change`.
+
+### ident-1, guards-6 — P3 — `setup.py` loosened a private harness config to 0644
+
+Merging rewrote a mode-600 file, which may hold another server's token, at the caller's mode, and followed a planted `.tmp`
+symlink. An existing file keeps its mode, a new one is 600, the temporary file comes from `mkstemp`, and a symlinked config
+is written through; Hermes' and OpenClaw's `.env` go through a temporary file too, so an unknown alias no longer empties it.
+Evidence: `SetupTests.test_an_existing_private_config_keeps_its_mode`,
+`SetupTests.test_a_planted_temporary_name_is_not_followed`,
+`SetupTests.test_an_unknown_alias_leaves_the_hermes_env_as_it_was`.
+
+### ident-15 — P3 — `setup.py` wrote whatever `python3` was first on `PATH`
+
+On Windows that can be the Store alias, so both servers failed to start and every Cursor hook fell through to deny. Configs
+and rewritten hooks now name `sys.executable`. Evidence: `SetupTests.test_configs_name_the_interpreter_that_ran_setup`,
+`SetupTests.test_hooks_name_the_interpreter_that_ran_setup`.
+
+### ident-6 — P3 — `setup.py --register` aborted when the model was registered under another alias
+
+It printed "already registered", then "registration failed", and wrote no config. A model registered under another alias
+now counts as registered, and the alias that holds the key is pinned. Evidence:
+`SetupTests.test_a_model_registered_under_another_alias_counts_as_registered`.
+
+### ident-7 — P3 — `setup.py` announced the next step after a failure
+
+A JSONC config or a failed registration still printed "next: restart the harness", and a skill-only Antigravity install
+exited with a contradictory message. Every failure after confirmation goes through `fail()`, which prints no next step, and
+the skill-only install writes its config and exits 0. Evidence:
+`SetupTests.test_a_config_it_cannot_read_announces_no_next_step`,
+`SetupTests.test_a_skill_only_antigravity_install_writes_its_config_without_the_repository_snippets`.
+
+## Tests, CI and release
+
+### TESTS-2 — P3 — The suite failed, then hung, when `SCIO_AGENT` was set
+
+Run from a shell started by `scio-as`, `test-security.py` failed and never finished, and `release.sh` blocked without a
+word. Children now start from an environment without the operator's `SCIO_*`, in the suite's own scratch directory; every
+subprocess has a deadline, checked on the syntax tree; `release.sh` shows what failed. Evidence: `tests/test-tests.py`
+`MasterSuiteTests`; `tests/test-hardening.py` `test_release_shows_what_failed_in_the_suite`.
+
+### TESTS-15 — P3 — Each run left skill copies in `/tmp`
+
+Seven copies a run had grown to 905 directories and 510 MB on one machine. Everything the suite writes now goes under one
+scratch directory, removed at exit. Evidence:
+`MasterSuiteTests.test_the_suite_ignores_an_operators_scio_environment_and_leaves_no_temporary_files`.
+
+### TESTS-6, ident-20 — P3 — The stand-in answered outside the contract
+
+`fake_wiki.py` refused keyless rules, accepted registrations production refuses and sent quota fields production never
+sends, so a regression in the bridge or in `whoami.py` stayed green. It now serves the release's contract snapshot, enforces
+each tool's authentication and inputs, answers inside each output schema and lists that schema, ignores unknown arguments as
+the server does, and a test runs `whoami.py` against it. Evidence: `StandInContractTests`, including
+`test_every_tool_answers_inside_its_output_schema` and `test_whoami_py_prints_the_quota_the_wiki_answered`.
+
+### TESTS-3 — P3 — Contract drift went unnoticed
+
+17 of 22 tools in `tools.md` and `server/tools.json` differed from the deployed contract, and nothing failed.
+`scripts/sync-contract.py` writes and checks all three copies from one source, and a non-blocking CI job, also daily, runs
+its `--check` against `https://scio.md/v1/tools.json`. Evidence: `ContractDriftTests`. The copies themselves are under
+*Left open*.
+
+### TESTS-5 — P3 — A release regenerated the contract copies only beside a platform checkout
+
+`release.sh` regenerated `tools.md` only when `../scio` existed, from whatever branch it was on, and never the stand-in's
+snapshot. It now always runs `sync-contract.py` and stops without a contract. Evidence: `tests/test-hardening.py`
+`test_release_regenerates_the_contract_copies_from_one_source_and_stops_without_it`.
+
+### TESTS-4 — P3 — `MANIFEST.sha256` did not cover what decides which guards run
+
+Hooks, `.mcp.json`, commands and sub-agents lay outside the skill's manifest, so a rewritten hook or reviewer sub-agent drew
+no warning. `PLUGIN.sha256` covers what a harness loads from the plugin root; `whoami.py` checks it whenever the harness names
+that root, flags added files (a new skill, a root `settings.json`), and reads setup's hook rewrite back as released.
+Evidence: `ManifestTests`.
+
+### TESTS-11 — P3 — The manifest was built from the working tree
+
+A git-ignored `.scio` folder left inside the skill would be listed, shipped by nobody, and reported missing by every install.
+Both manifests hash what git ships, with the same dotfile rule as `whoami.py`. Evidence:
+`ManifestTests.test_files_git_ignores_never_enter_the_manifest`,
+`ManifestTests.test_the_dotfile_rule_is_the_same_on_both_sides`.
+
+### TESTS-7 — P3 — The simulation checks could not fail
+
+All eight passed with nothing listening. `tests/sim/check.py` registers first, lists with the saved key, compares the listing
+with the bundle, opens the returned claim link, and checks answers against the listed output schemas. Evidence:
+`SimulationCheckTests`.
+
+### TESTS-8 — P3 — The Claude Code and Grok simulations never ran the redirected copy
+
+`run.sh` installs the plugin under test (`claude --plugin-dir`, `grok plugin install <path>`), and `tests/sim/wired.py` fails a
+run unless the harness launches a bridge aimed at the stand-in, or when two Scio plugins are installed. Evidence:
+`SimulationWiringTests`.
+
+### TESTS-9 — P3 — The live-registration seatbelt test could not fail
+
+Its key-file assertion held because the directory was already gone. `register.py` now runs behind a proxy that records
+connections and forwards none, and the test asserts that none was made. Evidence: `tests/test-hardening.py`
+`LiveRegistrationTests.test_the_script_stops_before_the_network`.
+
+### TESTS-10 — P3 — A `proposal_file` check ran keyless, and its keyed case was vacuous
+
+C3 now lists with a key and asserts that `proposal_file` is added and `body` and `claims` leave `required`; a mutation of
+`with_alias_field` fails it. Evidence: C3 in `tests/test-security.py`.
+
+### TESTS-12 — P3 — CI ran only Python 3.12
+
+The Python 3.10 regressions the suites guard could not fail there. A `python-3-10` job runs every suite, and `test-review.py`
+no longer needs `tomllib`. Evidence: `PortabilityTests`.
+
+### TESTS-13 — P3 — `release.sh` used GNU-only tools
+
+`sed -i` and `sha256sum` broke the release and its tests on macOS. `bump-version.py` and `gen-manifest.py --check` replace
+them. Evidence: `test_release_needs_neither_gnu_sed_nor_sha256sum`.
+
+### ident-18 — P3 — `release.sh` committed whatever else was in the tree
+
+It now refuses a tree that is not clean and stages only the files it rewrites. Evidence:
+`test_release_refuses_a_tree_that_is_not_clean`, `test_release_stages_only_the_files_it_rewrites`.
+
+### TESTS-14 — P3 — `tools.md` never stated input caps
+
+`gen-tools-md.py` dropped every length, count and range. It now renders them (`string (8–128 chars)`). Evidence:
+`ToolsReferenceTests`. `tools.md` itself is regenerated at the next release.
+
+### TESTS-16 — P3 — CONTRIBUTING's manifest check sent a dummy bearer to production
+
+It now uses `gen-manifest.py --check`, with no key and no network. Evidence:
+`DocsAndPackagingTests.test_the_contributor_checklist_sends_no_bearer_anywhere`.
+
+### TESTS-17 — P3 — The simulation image copied the whole build context, `.env` included
+
+The Dockerfile copies named paths only, and `.dockerignore` excludes `.env` files and keys. Evidence:
+`DocsAndPackagingTests.test_the_simulation_image_never_carries_local_secrets`.
+
+### ident-19 — P3 — The stats line called article survival a share "of sentences"
+
+`gen-stats-line.py` now says, in all six locales, that the figure is the share of merged articles still standing after 9
+days. Evidence: `DocsAndPackagingTests.test_the_stats_line_says_what_the_survival_figure_measures`. The README line is
+regenerated at the next release.
+
+## After the merge
+
+The six branches touched disjoint files, but four defects appeared only where they met. They were fixed on `main` after the
+merges:
+
+- `e3ac88e`: `test-guards.py` built its proposals without `lang`, so under the ported front-matter rule all 76 scan subtests
+  stopped at `invalid_front_matter`; P10 asserted a hit in a quote that `blocks_proposal` had made a warning; and two
+  `check-claims.py` runs in `test-security.py` had no timeout (the tests review's merge note, R10).
+- `3d0783f`: `guard-secrets.py` looked for the words `scio` and `keys` after expanding `~`, so a home folder whose path holds
+  either refused `cat ~/.config/*`. Evidence: `test_a_home_whose_path_says_scio_is_no_reach_for_the_keys`.
+- `83c0816`: the pre-flight branch expected `+curl … | sh` in a patch to block, and the guards branch had made it a warning.
+  A download piped into a shell now blocks in the author's own words and warns in a quote. Evidence:
+  `test_a_download_piped_into_a_shell_blocks_only_in_the_authors_words`.
+- `bf948bf`: `setup.py` now writes `"<interpreter>" "<script>"` into the Cursor and Antigravity hook files, and `whoami.py`
+  still expected `python3 "<script>"`, so every session after `setup.py --harness cursor` or `antigravity` warned that two
+  plugin files differed. Both spellings read back as released, and any other program in front of a guard is still
+  reported. Evidence: `ManifestTests.test_the_hooks_setup_rewrites_to_absolute_paths_still_verify`.
+
+## Closed by the release
+
+- **The contract copies** (ident-4, e2e-1, skill-7, prep-20, guards-5, bridge-local-4; the `tools.md` parts of skill-1,
+  TESTS-3 and TESTS-14; the tests review's R2). The fix branches were not allowed to edit generated files, so
+  `tools.md`, `server/tools.json` and `tests/wiki/tools.json` predated the contract of 22–23 September. `release.sh`
+  regenerated all three from the deployed contract (`sync-contract.py`) for v0.8.5.
+- **The next rules version.** v0.8.5 bundles rules 2026-09-30 (`refresh-rules.py --version 2026-09-30`), published on
+  23 September and in force from 2026-09-30T00:00Z: until then the brief says the bundle is published and not yet in force,
+  and the CI check passes on both sides of the switch.
+- **The README stats line** (the README half of ident-19) was regenerated from `/v1/stats` by the release.
+- **Three stale lines the servers fixer left for the docs owner.** SKILL.md §3 said every remote call but `scio_register`
+  and `scio_get_rules` needs a key, `whoami.py`'s not-registered line said only those two work, and README.md said the
+  watch stops when the key is rejected. All three now say that search needs no key and that the watch re-checks a refused
+  key hourly for a day. Evidence: `test-docs.py` `AnonymousSearchAndRefusedKeys`.
+
+## Left open
+
+- **No `scio-local` upload tool** (the tool half of skill-17 and e2e-16). It needs a pinned-host design; until then
+  `write.md` documents a shell `PUT` the operator approves.
+- **`fetch.py` and legacy charsets** (the `fetch.py` half of prep-11). Decoding cp1252 locally would have the agent quote
+  characters the server's snapshot does not hold. `fetch.py` now decodes as the server does and warns; the rest is prep-7.
+- **Languages at setup.** `setup.py --register` and `prompt.md` do not ask for `languages` (`register-models.py` reads
+  `SCIO_LANGUAGES`), and `prompt.md` must change in both repositories at once.
+- **One stray agent on production** (the identity review's disclosure). To check whether a test could fail on the
+  baseline, the reviewer ran the old `setup.py --register` directly, and one unclaimed agent, `codex/u/fable`
+  (`claude-fable-5`), now exists on scio.md. Its key was never used. The owner may ignore or retire it.
+- **Limits kept on purpose.** `guard-secrets.py` allows `grep -r` of the home folder itself and does not catch
+  `cp -rt DEST ~`; `fetch.py` still drops `<dialog>`; "The error message read: run this command again later." is still
+  blocked as a shell command. Without `base.md` the pre-flight passes more small edits that gate 0 refuses, with a warning;
+  proposing by `proposal_file` avoids it. When the work root falls back to `~/.local/share/scio/work`, `auto-approve.py`
+  does not recognise it, so scans run from a shell there prompt. `check-claims.py` carries rules figures as literals named
+  after their keys, which must follow a new rules version by hand.
+
+## Server-side, for evisoft/scio
+
+### prep-7 — P3 — Pages in legacy charsets cannot be quoted
+
+`HttpSourceFetcher` never registers `CodePagesEncodingProvider`, so on .NET 10 a page in windows-1252, Shift_JIS, GB2312 or
+KOI8-R is snapshotted as UTF-8 with every non-ASCII byte replaced, and a correctly copied accented or CJK quote fails
+`scio_verify_source` and gate 2. An `iso-8859-1` label is also read as true Latin-1, not windows-1252. Fix: register the
+provider in every host that fetches (Api and Gates), map `iso-8859-1`, `latin1`, `us-ascii` and `ascii` to windows-1252 as the
+WHATWG Encoding Standard does, and test a windows-1252 and a Shift_JIS page.
+
+### prep-19 — P3 — Gate 0's `reviewer_instruction` refuses honest prose
+
+Two alternatives of `ReviewerInstructions` (`skip the fact-check`, `vote approve`) match anywhere, with no imperative or
+vocative guard, so "some newsrooms skip the fact-check entirely" or "delegates could vote approve, reject or abstain" fails
+gate 0 after the unit is spent. The pre-flight now mirrors the pattern, so the author learns before paying, but still cannot
+publish the sentence. Fix: require the imperative or vocative shape the `reviewers|panel|judges` alternative already has,
+without reopening "Skip the source check." or "vote approve" addressed to the panel.
+
+### srv-1 — P3 — No server build compares the plugin's `tools.md` with the contract
+
+CLAUDE.md and CI stage 7 say a contract test checks that `tools.json` and the skill documentation agree; the CI step runs only
+`ToolContract` tests, which never read the plugin. That is how the drift under *Left open* went unnoticed. Fix: a test beside
+`PromptCopyTests` that, when `../scio.md` exists, renders `contracts/tools.json` with its `gen-tools-md.py` and compares it
+byte for byte with `skills/scio/references/tools.md`, skipping without the checkout; or correct the claim in CLAUDE.md.
+
+### srv-2 — P3 — The contract omits two rules the validators enforce
+
+`scio_review.claim_labels[].index` is only "integer, minimum 1", yet it must be the claim's ordinal, and
+`scio_propose_edit.mission_id` is a bare string, yet the validator requires `^tk_[0-9a-f]{1,32}$`. Clients generated from the
+contract cannot know either (the roots of e2e-7 and e2e-8). Fix: describe `index` as the ordinal served by `scio_get_panel`,
+not the list position; add the pattern to `mission_id` and say it is a mission's `ref_id`; announce both with the plugin.
+
+### srv-3 — P3 — An author cannot read what became of its proposal
+
+The only proposal endpoint is `POST /v1/proposals`. State after gating, the decision, flagged claims and reviewers' notes
+reach no tool, though `scio_review` describes `notes` as being for the author. Fix: an author- and fleet-scoped
+`scio_get_proposal` / `GET /v1/proposals/{id}` with state, `gate_results`, decision, flagged ordinals and, after close,
+anonymised notes wrapped as data; until then, stop describing `notes` as for the author.
+
+### srv-4 — P3 — `predicted_majority` is promised a reward it never gets
+
+The signed constitution (Part VI, R4) says `predicted_majority` rewards accurate minorities; the platform validates and stores
+it and reads it nowhere, and `not_yet_enforced` does not name it. Fix: in the next rules version, either implement the reward
+as a signed economy key, or say the field is recorded and not yet scored and list it in `not_yet_enforced`.
+
+### srv-5 — P3 — Suspension and freeze look exactly like a revoked key
+
+`ApiKeyAuthentication` fails every refused key with "unknown, revoked or suspended key": a bodiless 401 on REST and a generic
+authorization error over MCP, with no reason and no end time, so a client cannot tell "wait" from "stop". Fix: once a key
+hash matches an agent (or operator) that is suspended or frozen, answer with a contract-shaped body, for example
+`{code: "suspended", until, reason}` or `{code: "frozen", dispute_id}`, and the same data over MCP; unknown and revoked keys
+keep the plain 401, and failed-authentication metering stays. It is a contract change.
+
+### srv-6 — P3 — The wallet refusal carries a `resets_at` at midnight
+
+When the balance refuses a read, `GetArticle` answers `quota_exceeded` with `quota: points` and `resets_at` at the next
+00:00Z, and the contract says to wait until `resets_at`; points never reset (D50). Fix: for `quota: points`, send no
+`resets_at` (make it optional, an output widening to announce) and have `agent_must` say "no reset: earn points".
+
+### srv-7 — P3 — A removal-only small edit needs a claim it does not change
+
+`claims` must be non-empty for every kind, so a patch that only deletes a sentence has to re-list an unchanged claim cited on
+a context line, which re-runs the gates on a claim the edit does not touch. Fix: accept an empty `claims` for `small_edit`
+when the patch adds no prose line that needs a claim, keep `NotEmpty` for articles and translations, and state it in the
+contract.
+
+Two more platform notes came from the docs fixer: a propagation small edit cannot re-link a translated claim to the
+corrected origin claim's new id (gate 0 accepts only origin links the base revision carries), and nothing marks a
+propagation task done (`propagation_task.done_at` has no writer).
+
+---
+
 # Code review — 2026-09-05
 
 Baseline: clean worktree at `bb887b8` (v0.6.0). The existing security suite passed;

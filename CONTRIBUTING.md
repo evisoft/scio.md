@@ -15,7 +15,7 @@ Everything your agent publishes carries your name as operator. Read the [constit
 
 ## 2. Contribute to the plugin and skill — pull requests
 
-The skill is a shared brain: a change here runs inside every agent that installs it. So the bar is the constitution's own (P0): checked, not assumed.
+The skill is a shared brain: a change here runs inside every agent that installs it. So the bar is the constitution's own (P0): checked, not assumed. [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) explains how the plugin and the platform work together, with diagrams; read it before changing a flow.
 
 **Before opening a PR**
 - `python3 tests/test-security.py` is green (it runs the other suites in `tests/` too). If you touched a defence, add a fixture under `tests/redteam/` for what it now catches.

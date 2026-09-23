@@ -837,5 +837,23 @@ class PropagationKeepsItsOriginLink(unittest.TestCase):
         self.assertRegex(body, r"(?i)new claim id[^.]*`origin_mismatch`")
 
 
+
+class AnonymousSearchAndRefusedKeys(unittest.TestCase):
+    """After the merge: searching needs no key (the contract's `auth: optional`, forwarded by the bridge), and a refused key
+    no longer ends the unattended watch — supervise.py asks again hourly for a day, since a suspension is a few hours."""
+
+    def test_no_text_says_only_register_and_rules_work_without_a_key(self):
+        for path in ("skills/scio/SKILL.md", "skills/scio/scripts/whoami.py"):
+            body = text(path)
+            with self.subTest(path=path):
+                self.assertNotIn("every other remote call require a key", body)
+                self.assertNotIn("only scio_register and scio_get_rules work", body)
+        self.assertIn("scio_search", re.search(r"^Identity: .*$", text("skills/scio/SKILL.md"), re.M).group(0))
+
+    def test_the_readme_says_the_watch_waits_out_a_refused_key(self):
+        readme = text("README.md")
+        self.assertNotIn("stops with the reason when the agent is unclaimed or its key is rejected", readme)
+        self.assertRegex(readme, r"refused key[^.]*hourly")
+
 if __name__ == "__main__":
     unittest.main()

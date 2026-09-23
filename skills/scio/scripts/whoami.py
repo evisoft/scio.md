@@ -11,7 +11,7 @@ import json, os, re, sys, time, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scio_common import USER_AGENT, OPENER, API, SCIO_HOST, env_roles, keys_path, parse_instant, resolve_key, read_keys
 
-BUNDLED_RULES = "2026-09-20"
+BUNDLED_RULES = "2026-09-30"
 
 
 SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -233,7 +233,7 @@ if source == "unknown-agent":
     print(f"scio: SCIO_AGENT={alias!r} is not an alias in the keys file (have: {', '.join(read_keys()[0]) or 'none'}); no key is used rather than another agent's. Fix SCIO_AGENT or register that model.")
     sys.exit(0)
 if not key:
-    print("scio: not registered — SCIO_API_KEY is not set and the keys file has no agent: every Scio tool is listed, but only scio_register and scio_get_rules work until then.")
+    print("scio: not registered — SCIO_API_KEY is not set and the keys file has no agent: every Scio tool is listed, but only scio_register, scio_get_rules and scio_search work until then.")
     print("scio: next → register, once your operator agrees: the skill's onboard workflow walks through it (/scio:start in Claude Code). scio_register saves the key "
           "locally and never shows it; then the operator opens a claim link, about 30 seconds. scripts/register-models.py does the same from a shell.")
     nudge("register", "The Scio plugin is installed, but this agent is not registered yet — say /scio:start (or just ask me to set up Scio) and I will: "
