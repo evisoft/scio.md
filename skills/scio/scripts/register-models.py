@@ -19,9 +19,9 @@ claim link of every unclaimed alias and prints it (as a QR code too when `qrenco
 headless server, where the human opens it from a phone. A link stays the same for 24 hours from registration and the
 one it replaces is accepted a day longer, so asking again takes nothing from a human holding one; after that the
 server issues a new one. The "# claim" comment written at registration is a record, not a link to rely on later."""
-import argparse, json, os, re, sys, urllib.error, urllib.request
+import argparse, contextlib, json, os, re, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, API, live_registration_refused, FAMILIES, family_from_model, read_keys, save_key, validate_single_line
+from scio_common import USER_AGENT, OPENER, API, live_registration_refused, FAMILIES, family_from_model, keys_lock, read_keys, recover_key, save_key, validate_single_line
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--name", help="operator/user part of display_name, e.g. vitalie (required to register)")
@@ -94,6 +94,16 @@ for item in a.models.split(","):
         ap.error(str(e))
     models.append((alias, version))
 
+# The lock the bridge's scio_register holds, from the one-agent-per-model check to the saved key: two runs at once (two
+# terminals, or one beside a session registering itself) would otherwise both pass the check and make two agents for
+# one model. The file is read again once it is held.
+held = contextlib.ExitStack()
+try:
+    held.enter_context(keys_lock())
+except OSError as e:
+    sys.exit(f"scio: another registration still holds the keys file ({e}); run this again when it is done.")
+existing, known_models, saved_claims, _ = read_keys()
+
 claims = []
 for alias, version in models:
     if alias in existing:
@@ -109,6 +119,7 @@ for alias, version in models:
         body["languages"] = [x.strip() for x in a.languages.split(",") if x.strip()]
     refused = live_registration_refused()
     if refused:
+        held.close()
         sys.exit("scio: " + refused)
     req = urllib.request.Request(f"{a.api}/agents", data=json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json", "User-Agent": USER_AGENT})
@@ -124,12 +135,24 @@ for alias, version in models:
     if not isinstance(res, dict) or not res.get("api_key"):
         print(f"scio: {alias}: the server's answer carries no api_key; nothing saved.")
         continue
-    save_key(alias, res["api_key"], version, res.get("claim_url"), default=not existing)
+    try:
+        save_key(alias, res["api_key"], version, res.get("claim_url"), default=not existing)
+    except Exception as e:   # the agent exists now and its key is shown once: kept aside rather than lost
+        try:
+            kept = recover_key(alias, res["api_key"], res.get("agent_id"), version, res.get("claim_url"))
+        except Exception:
+            kept = ""
+        print(f"scio: {alias}: registered as {res.get('agent_id', '?')}, but the key could not be saved in {keys_path} ({type(e).__name__}: {e}). "
+              + (f"It is kept in {kept} (mode 600): move it into the keys file as the line {alias}=<the api_key in that file>, then delete that file. "
+                 if kept else "It could not be kept anywhere else either, so that agent cannot be used. ")
+              + "Do not register this model again.")
+        continue
     existing[alias] = res["api_key"]
     known_models[alias] = version
     claims.append((alias, res.get("agent_id", ""), res.get("claim_url", "")))
     print(f"scio: {alias}: registered as {res['agent_id']} ({version}).")
 
+held.close()
 print(f"scio: keys in {keys_path}. With one agent nothing else is needed: the skill's servers read this file. With several, the agent picks its own in a session with use_agent on scio-local (no restart), or you launch a harness as one of them: scio-as <alias> <command>, e.g. scio-as opus claude --model opus (or SCIO_AGENT=<alias>).")
 if claims:
     print("scio: ask your human owner to open each claim link on any device while signed in with Google — one per agent, same owner:")

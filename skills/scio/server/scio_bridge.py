@@ -54,8 +54,8 @@ for _stream in (sys.stdin, sys.stdout):   # JSON-RPC over stdio is UTF-8 whateve
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 from scio_common import (  # noqa: E402
-    USER_AGENT, OPENER, ALIAS_RE, MCP, agent_env, alias_from_model, child_env, ensure_work_root, env_roles,
-    inside_work_root, keys_file_unwritable, keys_lock, live_registration_refused, pin_agent, pinned_agent, read_keys,
+    USER_AGENT, OPENER, ALIAS_RE, MCP, agent_choice, agent_env, alias_from_model, child_env, ensure_work_root, env_roles,
+    inside_work_root, keys_file_unwritable, keys_lock, live_registration_refused, pin_agent, read_keys,
     record_verdict, recover_key, resolve_key, save_key, validate_single_line, work_root,
 )
 
@@ -67,8 +67,9 @@ argv = sys.argv[1:]
 if "--harness" in argv and argv.index("--harness") + 1 < len(argv):
     harness = argv[argv.index("--harness") + 1]
 HARNESS_HEADER = re.sub(r"[^\x20-\x7e]", "?", harness)[:64]   # a header is Latin-1: one odd character failed every request
-session_alias = None   # the agent registered through this bridge, preferred while the workspace's choice is unchanged
-session_pin = None   # the workspace's choice (pinned_agent) as it stood right after that registration
+session_alias = None   # the agent registered through this bridge, preferred until use_agent chooses another
+session_choice = ""   # the workspace's explicit choice (agent_choice) as it stood when that agent was last confirmed
+SESSION_LOCK = threading.Lock()   # the two above change together (worker threads resolve the key in parallel)
 # `auth: none` (register, rules) or `optional` (search: summaries without a key, the gap object with one) in the
 # contract: they are forwarded without a key when there is none; every other tool is answered locally until there is.
 ANONYMOUS_TOOLS = ("scio_register", "scio_get_rules", "scio_search")
@@ -85,9 +86,12 @@ NO_KEY_HINT = ("No API key yet (searching needs none). Registering creates an ag
                "other tool works right after. Show the operator the claim_url the answer contains.")
 # What a rejected key looks like: scio.md's /mcp is anonymous at the endpoint and each tool carries its own
 # authorization, so an unknown, revoked, suspended or frozen key authenticates as nobody and the SDK answers the tool
-# with this sentence over HTTP 200 (ModelContextProtocol.AspNetCore: "Access forbidden: This tool requires
-# authorization."); REST answers 401. Neither says which of the four it was.
-AUTH_REFUSAL = "requires authorization"
+# with "Access forbidden: This tool requires authorization." over HTTP 200 (ModelContextProtocol.AspNetCore 2.2.0);
+# a tool without [Authorize] (search) throws "unauthenticated: …", which ModelContextProtocol.Core 2.2.0 hands back
+# as an isError result opening with "An error occurred invoking '<tool>': ". REST answers 401. None says which of the
+# four it was. Only the opening words count: the same phrase inside a conflict's diff or a talk page is anyone's prose.
+AUTH_REFUSAL = re.compile(r"\s*(?:An error occurred invoking '[^'\n]*': )?"
+                          r"(?:Access forbidden: This tool requires authorization\.|unauthenticated:)")
 REJECTED_KEY = ("scio.md rejected this agent's key: it was revoked, the agent is suspended or frozen, or the keys file holds "
                 "a stale entry — the server does not say which. Do not retry in a loop, and do not register again for this "
                 "model: tell your operator, who checks the keys file (a suspension ends by itself; `whoami` on scio-local "
@@ -95,13 +99,21 @@ REJECTED_KEY = ("scio.md rejected this agent's key: it was revoked, the agent is
 
 
 def preferred_alias():
-    """The agent registered through this bridge — while the workspace's choice is the one it left. A later use_agent (or
-    any change to the pin) is a newer word than the registration and wins from the next call: the running bridge must
-    never keep signing with the registered agent's key after the workspace was switched to another model's."""
-    global session_alias
-    if session_alias and pinned_agent() != session_pin:
-        session_alias = None
-    return session_alias
+    """The agent registered through this bridge, until use_agent chooses another. A choice is a newer word than the
+    registration and wins from the next call: the running bridge must never keep signing with the registered agent's
+    key after the model switched to its own. Only a choice counts — another session registering its model pins that
+    agent for the workspace, and following that pin would sign this model's work with the other's key. A choice of
+    this very agent confirms it (and outranks SCIO_AGENT here, as the registration did)."""
+    global session_alias, session_choice
+    with SESSION_LOCK:
+        if session_alias:
+            choice = agent_choice()
+            if choice != session_choice:
+                if choice.split(" ")[-1] == session_alias:
+                    session_choice = choice
+                else:
+                    session_alias = None
+        return session_alias
 
 
 def current_key():
@@ -210,15 +222,26 @@ def forward(req, anonymous=False, key=None):
         ms = parsed.get("retry_after_ms") if isinstance(parsed, dict) else None
         if type(ms) is int and ms >= 0:   # the exact wait: Retry-After is the same in whole seconds, rounded down
             data["retry_after_ms"] = ms
+        # the platform's own reason ({"code", "message", …}) is kept: a 429 is the one place it says the key is what fails
+        said = parsed["message"].strip()[:500] if isinstance(parsed, dict) and isinstance(parsed.get("message"), str) else ""
+        if said:
+            data["server_message"] = said
+        wait = (f"retry_after_ms = {ms} (wait on scio-local with seconds = {-(-ms // 1000)})" if "retry_after_ms" in data
+                else "retry_after seconds (wait on scio-local)")
         msg = f"scio.md answered HTTP {e.code}"
-        if e.code == 401:
-            msg += (": " + REJECTED_KEY) if key else (": no key. " + no_key_hint())
-        elif e.code == 429 and "retry_after_ms" in data:
-            msg += f": rate limited — wait retry_after_ms = {ms} (wait on scio-local with seconds = {-(-ms // 1000)}), then retry"
-        elif e.code == 429:
-            msg += ": rate limited — wait retry_after seconds (wait on scio-local), then retry"
-        elif raw.strip():
-            msg += ": " + raw.strip()[:300]
+        if e.code in (401, 429) and key and "failed authentication" in said.lower():
+            # AuthFailureMiddleware: this address sent too many keys that did not authenticate. Retrying with the same
+            # key after the wait only fills that budget again, so this says what a rejected key means, not only "wait".
+            msg += f": {said[:300]} {REJECTED_KEY} Nothing sent with a key gets through from this address until {wait} has passed."
+        else:
+            if e.code == 401:
+                msg += (": " + REJECTED_KEY) if key else (": no key. " + no_key_hint())
+            elif e.code == 429:
+                msg += f": rate limited — wait {wait}, then retry"
+            elif raw.strip() and not said:
+                msg += ": " + raw.strip()[:300]
+            if said:
+                msg += f" (scio.md said: {said[:300]})"
         return {"error": {"code": -32000, "message": msg, "data": data}}
     except Exception as e:
         # Header-validation exceptions can contain the bearer value itself.
@@ -455,10 +478,11 @@ def signed_part_only(req):
 
 
 def auth_refusal(text):
-    """Whether the server's text says the call did not authenticate: the SDK's "Access forbidden: This tool requires
-    authorization." (a tool behind [Authorize]) or the platform's own "unauthenticated: …" (search, whoami). The
-    contract's refusals (permission_denied with required_rank, quota_exceeded …) never match."""
-    return isinstance(text, str) and (AUTH_REFUSAL in text.lower() or text.lstrip().startswith("unauthenticated"))
+    """Whether the server's text says the call did not authenticate: it opens with the SDK's "Access forbidden: This
+    tool requires authorization." (a tool behind [Authorize]) or the platform's own "unauthenticated: …" (search,
+    whoami), under the SDK's "An error occurred invoking '…': " or not. The contract's refusals (permission_denied with
+    required_rank, conflict with its diff, quota_exceeded …) open with their own code and never match."""
+    return isinstance(text, str) and AUTH_REFUSAL.match(text) is not None
 
 
 def explained_error(error, key):
@@ -472,12 +496,17 @@ def explained_error(error, key):
     return {**error, "message": REJECTED_KEY if key else f"{error['message']} No key was sent. {no_key_hint()}", "data": data}
 
 
+def refused_auth(result):
+    """Whether a tool result, as scio.md sent it, is an authentication refusal: an isError result whose first text is
+    the server's refusal. Asked before the scan note is added, so only the server's own first words are read."""
+    if not isinstance(result, dict) or not result.get("isError"):
+        return False
+    first = next((c.get("text") for c in result.get("content") or [] if isinstance(c, dict) and c.get("type") == "text"), None)
+    return auth_refusal(first)
+
+
 def explained_result(result, key):
     """The same refusal as an isError tool result: the explanation goes first, the server's text stays as it was."""
-    if not isinstance(result, dict) or not result.get("isError"):
-        return result
-    if not any(auth_refusal(c.get("text")) for c in result.get("content") or [] if isinstance(c, dict)):
-        return result
     note = {"type": "text", "text": REJECTED_KEY if key else f"No key was sent. {no_key_hint()}"}
     return {**result, "content": [note] + list(result.get("content") or [])}
 
@@ -500,8 +529,10 @@ def relay(req):
             name = (req.get("params") or {}).get("name")
             if name == "scio_verify_source":
                 remember_verdict(req, result)
+            refused = refused_auth(result)   # read on the server's answer as sent, before any note is put in front
             result = with_verified_rules(result) if name == "scio_get_rules" else with_scan_envelope(name, result)
-            result = explained_result(result, key)   # after the scan note: what the refusal means is read first
+            if refused:
+                result = explained_result(result, key)   # after the scan note: what the refusal means is read first
         reply(req.get("id"), result)
         note_live_again()   # scio.md answered: a list served from the bundled contract can be replaced by the live one
     return res
@@ -589,17 +620,12 @@ def _register(req):
         reply(req.get("id"), {"content": [{"type": "text", "text": "alias: a string of letters, digits, '_' and '-'"}], "isError": True}); return
     if "harness" not in args and reported_harness(harness):   # what the model gave wins
         args["harness"] = reported_harness(harness)
-    unwritable = keys_file_unwritable()   # the server hands the key out once: it must have somewhere to go first
-    if unwritable:
-        reply(req.get("id"), {"content": [{"type": "text", "text": f"{unwritable}: nothing was registered — scio.md hands a key out once, and it would have "
-                                           "had nowhere to go. Tell your operator: they fix that location (its folder's permissions, or SCIO_KEYS_FILE), "
-                                           "then call scio_register again."}], "isError": True}); return
     with keys_lock():   # other sessions' registrations wait here: the one-agent-per-model check below then sees theirs
         _register_locked(req, params, args, alias)
 
 
 def _register_locked(req, params, args, alias):
-    global session_alias, session_pin, listed_with_key, listed_offline
+    global session_alias, session_choice, listed_with_key, listed_offline
     keys, models, _, default = read_keys()
     model = args.get("model_version")
     dup = alias if alias in keys else next((a for a, m in models.items() if model and m == model), None)
@@ -613,6 +639,13 @@ def _register_locked(req, params, args, alias):
         reply(req.get("id"), {"content": [{"type": "text", "text": f"the keys file already holds {len(unknown)} agent(s) of unrecorded model ({', '.join(unknown)}; registered before v0.4). "
                                            "If one of them is this model, use it (scio_whoami). To register a genuinely different model, call again with an explicit alias."}],
                               "isError": True}); return
+    # After the checks above: a model already registered is answered as such even where the file is read-only (the
+    # Codex profile keeps the keys folder so) — "fix that location" would send the operator after permissions for nothing.
+    unwritable = keys_file_unwritable()   # the server hands the key out once: it must have somewhere to go first
+    if unwritable:
+        reply(req.get("id"), {"content": [{"type": "text", "text": f"{unwritable}: nothing was registered — scio.md hands a key out once, and it would have "
+                                           "had nowhere to go. Tell your operator: they fix that location (its folder's permissions, or SCIO_KEYS_FILE), "
+                                           "then call scio_register again."}], "isError": True}); return
     refused = live_registration_refused()   # an automated run that forgot to aim at a local double
     if refused:
         reply(req.get("id"), {"content": [{"type": "text", "text": refused}], "isError": True}); return
@@ -663,8 +696,9 @@ def _register_locked(req, params, args, alias):
             pin_agent(alias); pinned = True
         except Exception:
             pass
-    session_pin = pinned_agent()   # the choice as registration left it: a later use_agent wins over this session's agent
-    session_alias = alias
+    with SESSION_LOCK:
+        session_choice = agent_choice()   # the choice as registration found it: a later use_agent of another agent wins
+        session_alias = alias
     data["alias"] = alias
     data["key"] = f"saved under alias '{alias}' in {path} (mode 600) — not shown; the skill sends it."
     data["next"] = ("Show the operator claim_url now: they open it once, on any device, signed in with Google (about 30 seconds; the link lives "

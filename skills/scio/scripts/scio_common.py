@@ -218,19 +218,42 @@ def pinned_agent():
     return v if ALIAS_RE.fullmatch(v) else ""
 
 
-def pin_agent(alias):
+def agent_choice_path():
+    return os.path.join(work_root(), "agent.chosen")
+
+
+def agent_choice():
+    """The workspace's last explicit choice of agent (use_agent) as "<nonce> <alias>", or "" when none was made. A
+    registration pins its agent too, but only a choice changes this: a running bridge tells the model switching agents
+    apart from another session registering its own model in the same workspace (which must not move this session)."""
+    try:
+        with open(agent_choice_path(), encoding="utf-8", errors="replace") as f:
+            return f.read(200).strip()
+    except OSError:
+        return ""
+
+
+def _write_in_root(path, text):
+    if os.path.islink(path):   # a planted symlink must not move the write
+        os.remove(path)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text + "\n")
+
+
+def pin_agent(alias, chosen=False):
     """Choose one of the keys file's agents for this workspace. The bridge, scio-local, whoami.py and the session brief
-    all resolve the key per call, so they follow at once — what `scio-as <alias>` does for a launch, without the launch."""
+    all resolve the key per call, so they follow at once — what `scio-as <alias>` does for a launch, without the launch.
+    chosen=True (use_agent, the model's own word) also records a new agent_choice, after the pin; a registration's pin
+    does not."""
     if not ALIAS_RE.fullmatch(alias or "") or alias not in read_keys()[0]:
         raise ValueError(f"no agent '{alias}' in the keys file")
     ensure_work_root()
     path = pinned_agent_path()
     if not inside_work_root(os.path.dirname(path)):
         raise OSError("the task work root resolves elsewhere")
-    if os.path.islink(path):   # a planted symlink must not move the write
-        os.remove(path)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(alias + "\n")
+    _write_in_root(path, alias)
+    if chosen:   # a fresh nonce: choosing the same agent twice is still a new word
+        _write_in_root(agent_choice_path(), f"{os.urandom(8).hex()} {alias}")
     return path
 
 
@@ -327,7 +350,8 @@ def keys_lock(timeout=180):
     longer than any registration's own network timeout."""
     with _KEYS_LOCK:
         if _keys_lock_held["depth"] == 0:
-            try:
+            try:   # the folder as save_key makes it: on a fresh machine the first registration is the one that races
+                os.makedirs(os.path.dirname(os.path.abspath(keys_path())), mode=0o700, exist_ok=True)
                 fd = os.open(keys_path() + ".lock", os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
             except OSError:
                 fd = None

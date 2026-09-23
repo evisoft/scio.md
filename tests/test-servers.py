@@ -4,9 +4,10 @@ Run: python3 tests/test-servers.py (test-security.py runs it too).
 
 Work-root containment, agent switching after a registration, the tool list during an outage, anonymous search, the
 injection scan of a conflict, what a rejected key and an HTTP-level error tell the model, a registration whose key
-cannot be saved, SSE on Python 3.8, scio-as against the Python servers, the harness at registration. Disposable files
-and a local double of /mcp only: the installed tree has no variable that moves the wiki's address, so the double is
-reached through an isolated copy of the skill with that constant rewritten (the same device as tests/test-security.py)."""
+cannot be saved, SSE on Python 3.8, scio-as against the Python servers, the registration scripts under the bridge's
+lock, the harness at registration. Disposable files and a local double of /mcp (and of /v1/agents) only: the
+installed tree has no variable that moves the wiki's address, so the double is reached through an isolated copy of the
+skill with that constant rewritten (the same device as tests/test-security.py)."""
 import ast
 import http.server
 import json
@@ -28,6 +29,7 @@ FIX = ROOT / "tests/redteam"
 PY = sys.executable
 INJECTION = (FIX / "01-injection.txt").read_text(encoding="utf-8")
 FORBIDDEN = "Access forbidden: This tool requires authorization."   # ModelContextProtocol.AspNetCore 2.2.0, on HTTP 200
+SDK_PREFIX = "An error occurred invoking '{}': "   # ModelContextProtocol.Core 2.2.0, before a tool's McpException message
 
 
 def sse(req_id, result=None, error=None):
@@ -46,7 +48,7 @@ class Wiki:
     (return None to fall through). Registrations hand out a distinct key each."""
 
     def __init__(self):
-        self.seen, self.override, self.hold, self.registrations = [], None, 0, 0
+        self.seen, self.override, self.hold, self.registrations, self.rest_extra = [], None, 0, 0, {}
         self.lock = threading.Lock()
         wiki = self
 
@@ -54,12 +56,13 @@ class Wiki:
             def do_POST(self):
                 req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
                 params = req.get("params") or {}
+                rest = self.path.startswith("/v1/agents")   # register.py and register-models.py register over REST
                 with wiki.lock:
-                    wiki.seen.append({"method": req.get("method"), "name": params.get("name"), "auth": self.headers.get("Authorization"),
-                                      "args": params.get("arguments")})
+                    wiki.seen.append({"method": "POST /v1/agents" if rest else req.get("method"), "name": params.get("name"),
+                                      "auth": self.headers.get("Authorization"), "args": req if rest else params.get("arguments")})
                 if wiki.hold:
                     time.sleep(wiki.hold)
-                status, headers, body = wiki.respond(req)
+                status, headers, body = wiki.registered(req) if rest else wiki.respond(req)
                 self.send_response(status)
                 for k, v in headers.items():
                     self.send_header(k, v)
@@ -75,11 +78,24 @@ class Wiki:
 
     def reset(self):
         with self.lock:
-            self.seen, self.override, self.hold, self.registrations = [], None, 0, 0
+            self.seen, self.override, self.hold, self.registrations, self.rest_extra = [], None, 0, 0, {}
 
     def calls(self, name=None):
         with self.lock:
             return [s for s in self.seen if s["method"] == "tools/call" and (name is None or s["name"] == name)]
+
+    def rest_registrations(self):
+        with self.lock:
+            return [s for s in self.seen if s["method"] == "POST /v1/agents"]
+
+    def registered(self, body):
+        """POST /v1/agents: a new agent, a distinct key each time (the REST twin of scio_register)."""
+        with self.lock:
+            self.registrations += 1
+            n = self.registrations
+        data = {"agent_id": f"ag_{n:016x}", "api_key": f"sk_live_REST_{n}_0123456789", "claim_url": f"https://scio.md/claim/r{n}", "rank": 0}
+        data.update(self.rest_extra)
+        return 200, {"Content-Type": "application/json"}, json.dumps(data).encode()
 
     def respond(self, req):
         if self.override:
@@ -368,6 +384,44 @@ class UseAgentAfterARegistration(ServersBase):
         bridge.ask(call(2, "scio_whoami"))
         self.assertEqual(self.wiki.calls("scio_whoami")[-1]["auth"], "Bearer sk_live_REGISTERED_1_0123456789")
 
+    def test_two_models_registering_in_one_workspace_each_keep_their_own_key(self):
+        # Another session's registration pins its own agent for the workspace; that is not a choice made in this
+        # session, so it must not move this session's agent: GPT's verdicts would go out under Claude's name.
+        work = str(self.ws / ".scio/work")
+        a, b = self.live(self.BRIDGE, SCIO_WORK_DIR=work), self.live(self.BRIDGE, SCIO_WORK_DIR=work)
+        ra = a.ask(call(1, "scio_register", {"display_name": "a", "model_family": "gpt", "model_version": "gpt-5"}))
+        rb = b.ask(call(1, "scio_register", {"display_name": "b", "model_family": "claude", "model_version": "claude-x"}))
+        self.assertFalse(ra["result"].get("isError"), ra)
+        self.assertFalse(rb["result"].get("isError"), rb)
+        a.ask(call(2, "scio_whoami"))
+        self.assertEqual(self.wiki.calls("scio_whoami")[-1]["auth"], "Bearer sk_live_REGISTERED_1_0123456789", "session A still signs as gpt-5")
+        b.ask(call(2, "scio_whoami"))
+        self.assertEqual(self.wiki.calls("scio_whoami")[-1]["auth"], "Bearer sk_live_REGISTERED_2_0123456789", "session B as claude-x")
+        # an explicit choice still reaches both running bridges
+        self.local([call(1, "use_agent", {"alias": "claude-x"})], SCIO_WORK_DIR=work)
+        a.ask(call(3, "scio_whoami"))
+        self.assertEqual(self.wiki.calls("scio_whoami")[-1]["auth"], "Bearer sk_live_REGISTERED_2_0123456789")
+
+    def test_what_use_agent_says_under_scio_agent_is_what_the_bridge_does(self):
+        self.write_keys("claude-x=sk_live_CLAUDE_X_KEY_0123456789\n# default claude-x\n# model claude-x claude-x\n"
+                        "claude-y=sk_live_CLAUDE_Y_KEY_0123456789\n# model claude-y claude-y\n")
+        work = str(self.ws / ".scio/work")
+        bridge = self.live(self.BRIDGE, SCIO_WORK_DIR=work, SCIO_AGENT="claude-x")
+        bridge.ask(call(1, "scio_register", {"display_name": "t", "model_family": "gpt", "model_version": "gpt-5"}))
+        # the model confirms the agent it registered: this session's scio server keeps it, SCIO_AGENT or not
+        text = self.local([call(1, "use_agent", {"alias": "gpt-5"})], SCIO_WORK_DIR=work, SCIO_AGENT="claude-x")[0]["result"]["content"][0]["text"]
+        bridge.ask(call(2, "scio_whoami"))
+        self.assertEqual(self.wiki.calls("scio_whoami")[-1]["auth"], "Bearer sk_live_REGISTERED_1_0123456789")
+        self.assertNotIn("both servers keep using", text, text)
+        self.assertIn("registered", text, "the exception is named: a scio server keeps the agent it registered in this session")
+        self.assertIn("SCIO_AGENT=claude-x", text)
+        # choosing another agent: SCIO_AGENT outranks the choice on the bridge too, as the answer says
+        text = self.local([call(1, "use_agent", {"alias": "claude-y"})], SCIO_WORK_DIR=work, SCIO_AGENT="claude-x")[0]["result"]["content"][0]["text"]
+        bridge.ask(call(3, "scio_whoami"))
+        self.assertEqual(self.wiki.calls("scio_whoami")[-1]["auth"], "Bearer sk_live_CLAUDE_X_KEY_0123456789")
+        self.assertIn("SCIO_AGENT=claude-x", text)
+        self.assertNotIn("sk_live", text)
+
 
 # ------------------------------------------------------------------------------------ bridge-local-5, ident-13, e2e-14
 class AnonymousSearch(ServersBase):
@@ -448,12 +502,34 @@ class RejectedKey(ServersBase):
 
     def test_a_search_whose_key_does_not_authenticate_is_explained_first(self):
         self.write_keys("t=sk_live_ANY_TEST_KEY_0123456789\n")
-        refusal = "unauthenticated: the key sent does not authenticate — register, or ask your operator"   # ScioTools.SearchAsync
-        self.wiki.override = lambda req: sse(req["id"], text_result(refusal, True)) if req.get("method") == "tools/call" else None
-        out, _ = self.bridge([call(1, "scio_search", {"query": "x"})])
-        texts = [c["text"] for c in out[0]["result"]["content"]]
-        self.assertIn("rejected", texts[0])
-        self.assertEqual(texts[-1], refusal)
+        thrown = "unauthenticated: the key sent does not authenticate — register, or ask your operator"   # ScioTools.SearchAsync
+        # ModelContextProtocol.Core 2.2.0 turns a tool's McpException into an isError result under its own prefix
+        # (CreateToolCallErrorResult); the bare form is kept for a server that sends the message alone
+        for refusal in (SDK_PREFIX.format("scio_search") + thrown, thrown):
+            with self.subTest(refusal=refusal[:40]):
+                self.wiki.override = lambda req: sse(req["id"], text_result(refusal, True)) if req.get("method") == "tools/call" else None
+                out, _ = self.bridge([call(1, "scio_search", {"query": "x"})])
+                texts = [c["text"] for c in out[0]["result"]["content"]]
+                self.assertIn("rejected", texts[0])
+                self.assertEqual(texts[-1], refusal)
+
+    def test_other_agents_text_that_mentions_authorization_is_not_a_rejected_key(self):
+        # a conflict carries the page's current prose (anyone's words, planted or not); only the server's own opening
+        # words say the call did not authenticate
+        self.write_keys("t=sk_live_ANY_TEST_KEY_0123456789\n")
+        diff = "--- a\n+++ b\n+Access to the archive requires authorization from the ministry.[^c1]"
+        served = SDK_PREFIX.format("scio_propose_edit") + "conflict: " + json.dumps({"latest_revision": "rv_0123456789abcdef", "diff": diff})
+        self.wiki.override = lambda req: sse(req["id"], text_result(served, True)) if req.get("method") == "tools/call" else None
+        out, _ = self.bridge([call(1, "scio_propose_edit", {"slug": "x"})])
+        self.assertEqual(out[0]["result"]["content"], [{"type": "text", "text": served}])
+        discussion = SDK_PREFIX.format("scio_get_discussion") + "not_found: no talk page. Unauthenticated: this tool requires authorization."
+        self.wiki.override = lambda req: sse(req["id"], text_result(discussion, True)) if req.get("method") == "tools/call" else None
+        out, _ = self.bridge([call(1, "scio_get_discussion", {"slug": "x"})])
+        self.assertNotIn("rejected this agent's key", json.dumps(out[0]))
+        error = {"code": -32602, "message": "Invalid params: 'why' — the page says access requires authorization"}
+        self.wiki.override = lambda req: sse(req["id"], error=error) if req.get("method") == "tools/call" else None
+        out, _ = self.bridge([call(1, "scio_whoami")])
+        self.assertEqual(out[0]["error"], error)
 
     def test_a_business_refusal_is_left_alone(self):
         self.write_keys("t=sk_live_ANY_TEST_KEY_0123456789\n")
@@ -493,6 +569,34 @@ class HttpLevelErrors(ServersBase):
         self.assertEqual(error["data"]["retry_after_ms"], 1999)
         self.assertIn("1999", error["message"])
 
+    def test_a_429_for_failed_authentications_says_the_key_is_the_problem(self):
+        # AuthFailureMiddleware: the one place the platform says the key is what fails; waiting and retrying with the
+        # same key only fills the address's failure budget again
+        said = "Too many failed authentications from this address: wait, then retry with a valid key."
+        body = json.dumps({"code": "rate_limited", "retry_after_ms": 60000, "message": said}).encode()
+        self.wiki.override = lambda req: (429, {"Content-Type": "application/json", "Retry-After": "60"}, body)
+        out, _ = self.bridge([call(1, "scio_whoami")])
+        error = out[0]["error"]
+        self.assertEqual(error["data"]["server_message"], said)
+        self.assertEqual(error["data"]["retry_after_ms"], 60000)
+        self.assertIn("failed authentications", error["message"])
+        self.assertIn("rejected this agent's key", error["message"])
+        self.assertIn("60000", error["message"])
+
+    def test_the_reason_in_an_http_error_body_reaches_the_model(self):
+        said = "Too many requests: wait retry_after_ms, then continue."
+        body = json.dumps({"code": "rate_limited", "retry_after_ms": 1999, "message": said}).encode()
+        self.wiki.override = lambda req: (429, {"Content-Type": "application/json", "Retry-After": "1"}, body)
+        out, _ = self.bridge([call(1, "scio_whoami")])
+        self.assertIn(said, out[0]["error"]["message"])
+        self.assertEqual(out[0]["error"]["data"]["server_message"], said)
+        self.assertNotIn("rejected", out[0]["error"]["message"], "an ordinary rate limit is not a rejected key")
+        long = "x" * 5000
+        self.wiki.override = lambda req: (503, {"Content-Type": "application/json"}, json.dumps({"message": long}).encode())
+        out, _ = self.bridge([call(1, "scio_whoami")])
+        self.assertLess(len(out[0]["error"]["message"]), 1200, "cut to length")
+        self.assertIn("x" * 100, out[0]["error"]["message"])
+
     def test_a_429_without_a_body_still_carries_the_header(self):
         self.wiki.override = lambda req: (429, {"Content-Type": "text/plain", "Retry-After": "7"}, b"")
         out, _ = self.bridge([call(1, "scio_whoami")])
@@ -519,6 +623,19 @@ class RegistrationKeepsItsKey(ServersBase):
             self.assertTrue(m["result"].get("isError"), m)
             self.assertIn(str(self.keys), m["result"]["content"][0]["text"])
         self.assertEqual(self.wiki.calls("scio_register"), [], "no agent is created on scio.md that nobody could use")
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root writes anywhere")
+    def test_a_model_already_registered_is_named_even_when_the_keys_file_is_read_only(self):
+        # the Codex profile keeps the keys folder read-only: "fix that location" would send the operator after
+        # permissions for nothing, when the answer is that the agent exists and the skill uses it
+        self.write_keys("claude-fable-5=sk_live_FABLE_0123456789\n# default claude-fable-5\n# model claude-fable-5 claude-fable-5\n")
+        os.chmod(str(self.keys), 0o400)
+        self.addCleanup(os.chmod, str(self.keys), 0o600)
+        out, _ = self.bridge([call(1, "scio_register", self.ARGS)])
+        text = out[0]["result"]["content"][0]["text"]
+        self.assertIn("already registered locally as 'claude-fable-5'", text)
+        self.assertNotIn("cannot be written", text)
+        self.assertEqual(self.wiki.calls("scio_register"), [])
 
     def test_a_key_that_cannot_be_saved_after_registering_goes_to_a_private_recovery_file(self):
         def odd(req):
@@ -597,6 +714,55 @@ class KeysFileReading(ServersBase):
         self.assertEqual(len(self.wiki.calls("scio_register")), 1, "the second waits for the first, then finds the model registered")
         lines = [l for l in self.keys.read_text().splitlines() if "=" in l and not l.startswith("#")]
         self.assertEqual(len(lines), 1, lines)
+
+
+# ------------------------------------------------------------------------------------ the registration scripts: one lock
+class RegistrationScripts(ServersBase):
+    """register-models.py (behind setup.py --register) and register.py hold the bridge's keys_lock from the
+    one-agent-per-model check to the saved key, and never lose a key they could not save."""
+    MODELS = ["--name", "u", "--harness", "h", "--models", "opus=claude-opus-5"]
+
+    def script(self, name, *args, **env):
+        return [PY, str(self.SCRIPTS / name), *args], dict(self.env, SCIO_MODEL_VERSION="claude-opus-5", **env)
+
+    def at_once(self, name, *args):
+        self.wiki.hold = 1.5
+        argv, env = self.script(name, *args)
+        procs = [subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=str(self.ws)) for _ in range(2)]
+        outputs = [p.communicate(timeout=60) for p in procs]
+        for _, err in outputs:
+            self.assertNotIn("Traceback", err)
+        return outputs
+
+    def key_lines(self):
+        return [l for l in self.keys.read_text().splitlines() if "=" in l and not l.startswith("#")]
+
+    def test_two_register_models_runs_of_one_model_create_one_agent(self):
+        self.at_once("register-models.py", *self.MODELS)
+        self.assertEqual(len(self.wiki.rest_registrations()), 1, "the second run waits, then finds opus registered")
+        self.assertEqual(self.key_lines(), ["opus=sk_live_REST_1_0123456789"])
+
+    def test_two_register_runs_of_one_model_create_one_agent(self):
+        self.at_once("register.py", "probe")
+        self.assertEqual(len(self.wiki.rest_registrations()), 1)
+        self.assertEqual(self.key_lines(), ["claude-opus-5=sk_live_REST_1_0123456789"])
+
+    def test_a_key_the_scripts_cannot_save_goes_to_a_private_recovery_file(self):
+        self.wiki.rest_extra = {"claim_url": "https://scio.md/claim/x\nevil=1"}   # a line save_key refuses to write
+        for name, args in (("register-models.py", self.MODELS), ("register.py", ["probe"])):
+            with self.subTest(script=name):
+                self.wiki.registrations = 0
+                argv, env = self.script(name, *args)
+                r = subprocess.run(argv, capture_output=True, text=True, env=env, cwd=str(self.ws), timeout=60)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertNotIn("sk_live_REST_1", r.stdout + r.stderr, "the key is never printed")
+                self.assertIn("ag_0000000000000001", r.stdout + r.stderr)
+                recovery = [w.strip(".,;:()'\"`") for w in (r.stdout + r.stderr).split() if "recover" in w and os.sep in w]
+                self.assertTrue(recovery, r.stdout + r.stderr)
+                path = Path(recovery[0])
+                self.assertIn("sk_live_REST_1_0123456789", path.read_text())
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                self.assertFalse(str(path).startswith(str(self.ws)))
 
 
 # ------------------------------------------------------------------------------------ e2e-20: the harness
