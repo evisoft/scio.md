@@ -546,6 +546,19 @@ class CursorPayload(Sandbox):
         self.assertIsNone(self.cursor({"tool_name": "scio_verify_source", "tool_input": private, "command": self.BRIDGE}))
         self.assertEqual(self.cursor({"tool_name": "scio_verify_source", "tool_input": private, "command": "npx evil-server"}), "deny")
 
+    def test_a_server_the_operator_renamed_still_gets_the_ask_and_the_preflight(self):
+        # guards-R-cursor-renamed: mcp_server_name "scio-md" or "Scio" with neither command nor url
+        for server in ("scio-md", "Scio", "my scio"):
+            for name in ("scio_contest", "scio_suspend", "scio_register", "MCP:scio_contest"):
+                with self.subTest(server=server, name=name):
+                    self.assertEqual(self.cursor({"tool_name": name, "mcp_server_name": server, "tool_input": "{}"}), "ask")
+            bad = {"body": "An unmarked sentence that carries no claim marker at all.", "claims": []}
+            with self.subTest(server=server, name="scio_propose_edit"):
+                self.assertEqual(self.cursor({"tool_name": "scio_propose_edit", "mcp_server_name": server, "tool_input": json.dumps(bad)}), "deny")
+        # the exemption guard-fetch gives the platform's fetcher stays with a server recognised as Scio's
+        private = json.dumps({"url": "http://127.0.0.1/"})
+        self.assertEqual(self.cursor({"tool_name": "scio_verify_source", "mcp_server_name": "scio-md", "tool_input": private}), "deny")
+
     def test_a_scio_tool_is_not_asked_needlessly(self):
         self.assertIsNone(self.cursor({"tool_name": "scio_whoami", "tool_input": "{}", "command": self.BRIDGE}))
 

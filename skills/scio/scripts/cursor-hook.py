@@ -51,6 +51,7 @@ def server_of(payload):
 
 if event == "beforeShellExecution" or ("command" in payload and "tool_name" not in payload):
     tool, args = "Bash", {"command": payload.get("command") or ""}
+    short = tool
 elif payload.get("tool_name"):
     ti = payload.get("tool_input")
     if isinstance(ti, str):
@@ -62,11 +63,12 @@ elif payload.get("tool_name"):
     name = re.sub(r"^MCP:\s*", "", str(payload["tool_name"]))   # Cursor's preToolUse spells an MCP tool "MCP:<name>"
     tool = f"mcp__{server}__{name}" if server else name
     args = ti if isinstance(ti, dict) else {"raw": ti} if ti else {}
+    # the Scio tool this call is, whatever the operator named the server ("scio-md", "Scio"): the ask and the pre-flight
+    # key on the bare name. A same-named tool of another server gets a question or a pre-flight it did not need —
+    # harmless, and never an allow; the mcp__scio__ name (guard-fetch's exemption) stays with a recognised server
+    short = name.rsplit("__", 1)[-1] if name.startswith("mcp__") else name
 else:
     sys.exit(0)
-# the Scio tool this call is, whatever the server was called: mcp__scio__scio_contest, mcp__plugin_scio_scio__…, or bare.
-# A same-named tool of another server gets the pre-flight or a question it did not need — harmless, and never an allow
-short = tool.rsplit("__", 1)[-1] if tool.startswith("mcp__") and re.match(r"mcp__(?:plugin_scio_)?scio__", tool) else tool
 claude_payload = json.dumps({"tool_name": tool, "tool_input": args})
 env = child_env(CLAUDE_PLUGIN_ROOT=os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
 
