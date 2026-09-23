@@ -120,6 +120,13 @@ expect("Participants must sign a consent" in extract(clinical), "section#informe
 guide = """<html><body><article class="gdpr-guide"><h1>Data protection</h1><p>The regulation applies from 25 May 2018.</p>
 </article></body></html>"""
 expect("The regulation applies from 25 May 2018." in extract(guide), "article.gdpr-guide is content, not a GDPR banner")
+# guards-R-fetch-button: a <button> outside a form is a heading as often as a control (Bootstrap's .accordion-button, FAQ
+# toggles) and the snapshot keeps its text; only a form's own buttons are its controls
+accordion = """<main><div><button class="accordion">When was the treaty signed?</button><div><p>It was signed in 1994.</p></div></div></main>"""
+out = extract(accordion)
+expect("When was the treaty signed?" in out and "It was signed in 1994." in out, "an accordion <button> outside a form keeps its text, as the snapshot does")
+in_form = """<html><body><form><label>Query</label><input name="q"><button>Search now</button></form><p>The body text.</p></body></html>"""
+expect("Search now" not in extract(in_form) and "The body text." in extract(in_form), "a form's <button> is still dropped")
 
 # --- header/footer/aside nested in <article>/<main> carry exactly what a researcher needs: retained -------------
 article_meta = """

@@ -632,6 +632,29 @@ class FetchText(unittest.TestCase):
         self.assertEqual(self.text(legacy, "text/html"), "Café")
         self.assertIn("�", self.text(body, "text/html; charset=utf-8"))   # the header wins, as on the server
 
+    def test_the_charset_is_chosen_as_the_server_chooses_it(self):
+        # guards-R-fetch-charset: HttpSourceFetcher.Named() knows only what .NET decodes without code pages; a header it
+        # cannot decode (windows-1252, or the misspelt utf8) counts as absent, and the page's own meta charset decides
+        page = '<html><head><meta charset="utf-8"></head><body><p>La Universit\xe9 de Montr\xe9al.</p></body></html>'.encode("utf-8")
+        self.assertEqual(self.fetch.page_encoding(page, "text/html; charset=windows-1252"), "utf-8")
+        self.assertEqual(self.text(page, "text/html; charset=windows-1252"), "La Universit\xe9 de Montr\xe9al.")
+        latin = '<html><head><meta charset="iso-8859-1"></head><body><p>Caf\xe9 cr\xe8me</p></body></html>'.encode("latin-1")
+        for header in ("text/html; charset=windows-1252", "text/html; charset=utf8", "text/html; charset=shift_jis"):
+            with self.subTest(header=header):
+                self.assertEqual(self.text(latin, header), "Caf\xe9 cr\xe8me")
+        # the .NET names Python spells otherwise, and a quoted one
+        self.assertEqual(self.fetch.page_encoding(latin, 'text/html; charset="Latin1"'), self.fetch.page_encoding(latin, "text/html; charset=iso-8859-1"))
+        self.assertEqual(self.text("Caf\xe9".encode("utf-16-be"), "text/plain; charset=unicodeFFFE"), "Caf\xe9")
+
+    def test_the_undecodable_note_is_given_only_when_the_snapshot_differs(self):
+        undecodable = self.fetch.undecodable_charset
+        latin = '<html><head><meta charset="iso-8859-1"></head><body><p>Caf\xe9</p></body></html>'.encode("latin-1")
+        self.assertIsNone(undecodable(latin, "text/html; charset=windows-1252"))   # the server reads the meta: Latin-1
+        cp1252 = '<html><body><p>\u201cQuoted\u201d caf\xe9</p></body></html>'.encode("cp1252")
+        self.assertEqual(undecodable(cp1252, "text/html; charset=windows-1252"), "windows-1252")
+        self.assertIsNone(undecodable(b"<html><body><p>plain ASCII</p></body></html>", "text/html; charset=windows-1252"))
+        self.assertIsNone(undecodable(cp1252, "text/html"))   # nothing declared: UTF-8 on both sides
+
 
 if __name__ == "__main__":
     unittest.main()
