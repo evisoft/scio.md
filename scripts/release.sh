@@ -20,6 +20,9 @@ python3 scripts/bump-version.py "$v"
 python3 scripts/sync-contract.py "$contract"   # tools.md, server/tools.json and the stand-in's snapshot; fails when there is no contract
 python3 scripts/gen-stats-line.py || true
 python3 skills/scio/scripts/refresh-rules.py   # the bundled rules mirror comes only from the verified signed document
+# The manifests LAST among the edits, and before the suite: the suite checks that they match the tree, and every step
+# above rewrote files they hash (versions, the contract copies, the rules, the README badges). The suite edits nothing.
+python3 scripts/gen-manifest.py             # the skill's manifest and the plugin root's
 # The suite's output is kept, not thrown away: a failure says which check failed, and a hang shows where it stopped.
 if ! suite="$(python3 tests/test-security.py 2>&1)"; then
     printf '%s\n' "$suite" | grep -E '^ +FAIL|Traceback|Error' >&2 || true
@@ -28,8 +31,7 @@ if ! suite="$(python3 tests/test-security.py 2>&1)"; then
     exit 1
 fi
 printf '%s\n' "$suite" | tail -n 1
-python3 scripts/gen-manifest.py             # the skill's manifest and the plugin root's, LAST
-python3 scripts/gen-manifest.py --check     # every listed hash verified against the tree
+python3 scripts/gen-manifest.py --check     # every listed hash verified against the tree, after the suite too
 notes="$(python3 scripts/gen-manifest.py --notes)"   # goes into the release notes: the end of the end-to-end check (security.md §2.8)
 claude plugin validate . >/dev/null
 # Stage exactly what the steps above rewrite; anything else they changed stops the release instead of riding along.

@@ -821,6 +821,22 @@ class PortabilityTests(unittest.TestCase):
             self.assertEqual(verify._instant("2026-09-18T18:00:08.92258+00:00"), verify._instant("2026-09-18T18:00:08.922580Z"))
 
 
+
+class ReleaseOrderTests(unittest.TestCase):
+    """The first v0.8.5 release stopped half-way: release.sh ran the suite after bumping the versions and regenerating the
+    contract, but before regenerating the manifests, so ManifestTests (which asserts the manifests match the tree) failed
+    on the release's own edits. The manifests are written once every edit is made, and before the suite checks them."""
+
+    def test_the_manifests_are_written_after_the_last_edit_and_before_the_suite(self):
+        lines = (ROOT / "scripts" / "release.sh").read_text(encoding="utf-8").splitlines()
+        def first(pattern):
+            return next(i for i, line in enumerate(lines) if re.search(pattern, line) and not line.lstrip().startswith("#"))
+        manifest = first(r"python3 scripts/gen-manifest\.py\s*(#|$)")
+        suite = first(r"tests/test-security\.py")
+        last_edit = max(first(r"bump-version\.py"), first(r"sync-contract\.py"), first(r"gen-stats-line\.py"), first(r"refresh-rules\.py"))
+        self.assertLess(last_edit, manifest, "the manifests must follow every file release.sh rewrites")
+        self.assertLess(manifest, suite, "the suite checks the manifests: they must be current before it runs")
+
 class DocsAndPackagingTests(unittest.TestCase):
     """TESTS-16, TESTS-17, ident-19."""
 
