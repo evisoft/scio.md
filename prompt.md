@@ -57,10 +57,10 @@ The MCP servers are registered in step 2 (`setup.py --harness openclaw --alias <
 
 ### Grok Build (xAI)
 
-Grok reads Claude-compatible plugins, so this repository installs as one — skills, both MCP servers and the hooks together:
+Grok reads Claude-compatible plugins, so this repository installs as one — skills, both MCP servers and the hooks together. Install without trust first so Grok can show the source and stop for review; ask for a separate, explicit trust decision before adding `--trust`.
 
 ```
-grok plugin install evisoft/scio.md --trust
+grok plugin install evisoft/scio.md
 ```
 
 ### Everything else (Codex, Cursor, Copilot, OpenCode, Windsurf, goose, Kiro, Roo Code, Hermes, nanobot, Junie, custom agents)
@@ -104,7 +104,7 @@ Every launch command below is the harness's plain command: the servers read the 
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` | `windsurf .` |
 | Antigravity | `~/.gemini/config/mcp_config.json` with both servers (no key in the file: they read the keys file; `--alias` pins one of several agents); paste the lists from `antigravity/permissions.md` | open Antigravity; or clone the repo into `~/.gemini/config/plugins/scio` for the hooks too |
 | Claude.ai, ChatGPT, Gemini (connectors) | no local server: add `https://scio.md/mcp` with the bearer key (`scio-as <alias> --print-env` shows it, in the person's own terminal) | — |
-| Grok Build | installs the repository as a plugin (`grok plugin install evisoft/scio.md --trust` — the plugin's `.mcp.json` resolves `${CLAUDE_PLUGIN_ROOT}`; both servers read the key themselves — verified on v0.3 that `grok mcp doctor` handshakes both) and writes `[[permission.rules]]` into `~/.grok/config.toml` (`scio__*`, `scio-local__*` allowed; contest/suspend ask) | `grok` |
+| Grok Build | installs the repository as a plugin (`grok plugin install evisoft/scio.md`); the plugin's `.mcp.json` resolves `${CLAUDE_PLUGIN_ROOT}` and both servers read the key themselves — `grok mcp doctor` was verified on v0.3 — then writes `[[permission.rules]]` into `~/.grok/config.toml` (`scio__*`, `scio-local__*` allowed; contest/suspend ask). Grok stops for source review; trust requires a separate explicit choice. | `grok` |
 | Hermes Agent | `~/.hermes/config.yaml` gets both servers under `mcp_servers` (both read the keys file; `--alias` additionally writes the key to `~/.hermes/.env`; `trust: full` under `--trust` — Hermes' own default is `full` too) and the skill is installed with `hermes skills install skills-sh/evisoft/scio.md/scio` | `hermes` |
 | OpenClaw | runs `openclaw mcp set` for both servers (both read the keys file of the user running the gateway; `--alias` also writes the key to `~/.openclaw/.env` with a SecretRef in the definition, for a gateway running as another user) and prints `openclaw skills install git:evisoft/scio.md` | OpenClaw agents run without per-call approvals |
 | Anything else with an MCP client | register `scio` (stdio: `python3 <skill path>/server/scio_bridge.py --harness <name>`) and `scio-local` (stdio: `python3 <skill path>/server/scio_local.py`); or `scio` as http `https://scio.md/mcp` with a bearer header when the client cannot start processes | the harness command |
