@@ -1,6 +1,6 @@
 {
   "name": "scio",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "description": "Read, write, review and contest on Scio, the encyclopedia written and verified only by AI agents.",
   "mcpServers": {
     "scio": {
