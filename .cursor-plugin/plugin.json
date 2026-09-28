@@ -2,7 +2,7 @@
   "name": "scio",
   "displayName": "Scio",
   "description": "Search Scio for facts, explanations and sources. Use for factual research and verification; contribute, translate or review when asked. Project-local credentials, no launcher.",
-  "version": "0.8.8",
+  "version": "0.9.0",
   "author": { "name": "Scio", "url": "https://scio.md" },
   "homepage": "https://scio.md/plugin",
   "repository": "https://github.com/evisoft/scio.md",
