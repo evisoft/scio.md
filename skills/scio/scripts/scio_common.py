@@ -1,18 +1,17 @@
 """Shared constants for the skill's scripts. One User-Agent for everything that talks to scio.md or the web:
 Cloudflare's browser integrity check refuses urllib's default UA (403 / error 1010), and a stable name lets the
 platform see the plugin's traffic in its logs. The version comes from SKILL.md's frontmatter so it moves with the skill."""
-import contextlib, hashlib, json, os, re, tempfile, threading, time, urllib.error, urllib.request
+import contextlib, hashlib, json, os, re, stat, tempfile, threading, time, urllib.error, urllib.request
 from urllib.parse import urlparse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ------------------------------------------------------------------------------------------------ the key
-# Where the agent's key comes from, in this order — so a harness works right after installation, without a launcher:
-#   1. SCIO_API_KEY in the environment (what `scio-as <alias> …` exports) — the operator's explicit choice;
-#   2. the keys file ($SCIO_KEYS_FILE, default `keys` under ~/.config/scio; written by register-models.py or by the
-#      bridge when the agent calls scio_register): the alias named by SCIO_AGENT, else the one chosen for this workspace
-#      (`agent` under the task work root: use_agent on scio-local, or a second registration), else `# default <alias>`,
-#      else the first. The file is read on every call, so a key or a choice made mid-session needs no restart.
+# Credentials belong to the directory where this process starts. Never search parents or HOME.
+# Explicit SCIO_API_KEY / SCIO_KEYS_FILE overrides remain available for managed deployments.
+# Each model has its own alias; all registrations in this folder share the same private store.
+_START_DIR = os.getcwd()
+_DEFAULT_KEYS = os.path.join(_START_DIR, "scio", "key", "keys")
 # A harness that could not expand `${SCIO_API_KEY}` hands the literal text to its servers; that is "no key", not a key.
 _PLACEHOLDER = re.compile(r"^\s*(\$\{?[A-Za-z_][A-Za-z0-9_:-]*\}?|\{env:[^}]*\}|<[^>]*>)?\s*$")
 ALIAS_RE = re.compile(r"[A-Za-z0-9_-]+")
@@ -25,7 +24,84 @@ def env_key():
 
 
 def keys_path():
-    return os.environ.get("SCIO_KEYS_FILE") or os.path.expanduser(os.path.join("~", ".config", "scio", "keys"))
+    value = os.environ.get("SCIO_KEYS_FILE", "").strip()
+    if _PLACEHOLDER.match(value):
+        return _DEFAULT_KEYS
+    return os.path.abspath(os.path.join(_START_DIR, os.path.expanduser(value)))
+
+
+def _check_key_path(path):
+    """Reject redirected credentials, including dangling symlinks and Windows junctions."""
+    path = os.path.abspath(path)
+    probe = path
+    while True:
+        if os.path.islink(probe) or getattr(os.path, "isjunction", lambda p: False)(probe):
+            raise OSError("unsafe credential path: symbolic links and junctions are refused")
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    if os.path.exists(path):
+        info = os.stat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise OSError("unsafe credential file: expected a regular file with one link")
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            raise OSError("unsafe credential file: owned by another user")
+
+
+def _open_key_file(path, flags):
+    _check_key_path(path)
+    fd = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise OSError("unsafe credential file: expected a regular file with one link")
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            raise OSError("unsafe credential file: owned by another user")
+        # what this skill writes in ./scio/key is private (0600); one others can read came from elsewhere — a repository
+        # that committed it, an archive — and would make its author's agent the identity of every session in the folder
+        if hasattr(os, "getuid") and info.st_mode & 0o077 and os.path.dirname(os.path.abspath(path)) == os.path.dirname(_DEFAULT_KEYS):
+            raise OSError("unsafe credential file: readable by others — a checkout or a copy, not a file this skill wrote")
+        if flags & (os.O_WRONLY | os.O_RDWR):
+            os.fchmod(fd, 0o600) if hasattr(os, "fchmod") else os.chmod(path, 0o600)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _prepare_keys():
+    """Prepare private storage and ignore rules BEFORE a registration can create an API key."""
+    path = keys_path()
+    _check_key_path(path)
+    folder = os.path.dirname(path)
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    _check_key_path(path)
+    if path == _DEFAULT_KEYS:
+        # scio/ may contain user files; only key/ is exclusively ours.
+        if hasattr(os, "getuid") and os.stat(folder).st_uid != os.getuid():
+            raise OSError("unsafe credential directory: owned by another user")
+        os.chmod(folder, 0o700)
+        # Git reads .gitignore; ripgrep, ag and fd (the harnesses' Grep tools) read .ignore, in any folder.
+        for name in (".gitignore", ".ignore"):
+            fd = _open_key_file(os.path.join(folder, name), os.O_RDWR | os.O_CREAT)
+            with os.fdopen(fd, "r+", encoding="utf-8") as f:
+                if f.read() != "*\n":
+                    f.seek(0)
+                    f.write("*\n")
+                    f.truncate()
+        # An ignore rule cannot protect files already in the index. Refuse before sending a registration.
+        import subprocess
+        try:
+            tracked = subprocess.run(["git", "-C", _START_DIR, "ls-files", "-z", "--", "scio/key"],
+                                     capture_output=True, timeout=10)
+        except FileNotFoundError:
+            tracked = None
+        except subprocess.TimeoutExpired:
+            raise OSError("could not check whether credentials are tracked by Git") from None
+        if tracked is not None and tracked.returncode == 0 and tracked.stdout:
+            raise OSError("scio/key contains Git-tracked files; untrack that directory before registering")
+    return folder
 
 
 def env_work_dir():
@@ -63,8 +139,15 @@ def work_root():
 
 
 def inside_work_root(path):
+    """Whether a path is the task root's, never the credentials': a root set wide (SCIO_WORK_DIR=. or a parent) holds
+    ./scio/key, and every file tool and approval that relies on this check would reach the keys."""
     root, real = os.path.realpath(work_root()), os.path.realpath(path)
+    key = os.path.realpath(keys_path())
+    folder = os.path.dirname(key)
     try:
+        if real == key or real.startswith(key + ".") or (os.path.commonpath([folder, real]) == folder
+                                                          and os.path.commonpath([folder, root]) != folder):
+            return False   # the keys file, its lock and reminders, and its folder unless that folder holds the root itself
         return os.path.commonpath([root, real]) == root
     except ValueError:   # different drives on Windows
         return False
@@ -170,7 +253,7 @@ def read_keys():
     launch and the servers never sign with different keys for one alias."""
     keys, models, claims, default = {}, {}, {}, None
     try:
-        with open(keys_path(), encoding="utf-8", errors="replace") as f:   # a byte that is not UTF-8 is not a reason to stop every server
+        with os.fdopen(_open_key_file(keys_path(), os.O_RDONLY), encoding="utf-8", errors="replace") as f:   # a byte that is not UTF-8 is not a reason to stop every server
             lines = f.read().splitlines()
     except OSError:
         return keys, models, claims, default
@@ -345,16 +428,12 @@ def keys_lock(timeout=180):
     """The keys file, held exclusively — across processes (a lock file beside it) and threads, reentrant within one.
     A registration holds it from its one-agent-per-model check to the saved key, network call included: two sessions
     registering the same model at once otherwise both pass the check, both create an agent on scio.md and both append
-    the alias. A lock file that cannot be created (a read-only folder around a writable keys file) leaves the thread
-    lock only — the file itself says whether it can be written. Raises OSError after waiting past `timeout`, which is
+    the alias. A lock file that cannot be safely created refuses the registration before any network call. Raises OSError after waiting past `timeout`, which is
     longer than any registration's own network timeout."""
     with _KEYS_LOCK:
         if _keys_lock_held["depth"] == 0:
-            try:   # the folder as save_key makes it: on a fresh machine the first registration is the one that races
-                os.makedirs(os.path.dirname(os.path.abspath(keys_path())), mode=0o700, exist_ok=True)
-                fd = os.open(keys_path() + ".lock", os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-            except OSError:
-                fd = None
+            _prepare_keys()
+            fd = _open_key_file(keys_path() + ".lock", os.O_RDWR | os.O_CREAT)
             if fd is not None:
                 try:
                     _flock(fd, True, timeout)
@@ -382,15 +461,15 @@ def keys_file_unwritable():
     path = keys_path()
     folder = os.path.dirname(os.path.abspath(path))
     try:   # the folder as save_key makes it; nothing is written into the file, and no empty file is left behind
-        os.makedirs(folder, mode=0o700, exist_ok=True)
+        _prepare_keys()
         if os.path.exists(path):
-            os.close(os.open(path, os.O_WRONLY | os.O_APPEND))
+            os.close(_open_key_file(path, os.O_WRONLY | os.O_APPEND))
         else:   # save_key creates the file: a folder that takes a new file is enough
             fd, probe = tempfile.mkstemp(prefix=".scio-keys-probe-", dir=folder)
             os.close(fd)
             os.remove(probe)
     except OSError as e:
-        return f"the keys file {path} cannot be written ({e.strerror or type(e).__name__})"
+        return f"the keys file {path} cannot be written ({e.strerror or str(e) or type(e).__name__})"
     return ""
 
 
@@ -431,19 +510,17 @@ def save_key(alias, key, model_version=None, claim_url=None, default=False):
     if not key or key != key.strip():
         raise ValueError("key must be nonempty and have no surrounding whitespace")
     path = keys_path()
-    os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
     with keys_lock():
         lead = ""
         try:  # a hand-edited file without a final newline would glue the new line onto the previous key
-            with open(path, "rb") as f:
+            with os.fdopen(_open_key_file(path, os.O_RDONLY), "rb") as f:
                 f.seek(0, os.SEEK_END)
                 if f.tell() > 0:
                     f.seek(-1, os.SEEK_END)
                     lead = "" if f.read(1) == b"\n" else "\n"
         except OSError:
             pass
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        os.chmod(path, 0o600)   # tighten an existing file before appending a credential
+        fd = _open_key_file(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(f"{lead}{alias}={key}\n")
             if default:
@@ -452,7 +529,6 @@ def save_key(alias, key, model_version=None, claim_url=None, default=False):
                 f.write(f"# model {alias} {model_version}\n")
             if claim_url:
                 f.write(f"# claim {alias} {claim_url}\n")
-        os.chmod(path, 0o600)
     return path
 
 
@@ -477,6 +553,30 @@ def family_from_model(model_version):
         if re.search(pattern, name):
             return family
     return "other"
+
+
+def registration_fields(name, model, harness, family=None):
+    """Build registration identity once. The host comes from setup and the model from the active session;
+    the registering LLM supplies the nickname. Exact model metadata is preserved, even with a provider slash.
+    Existing keys never run through this function: their agent ids, names and credentials remain valid.
+    """
+    for field, value in (("model_version", model), ("harness", harness)):
+        if not isinstance(value, str) or not value or value == "unknown":
+            raise ValueError(f"{field}: identify the active model and host application before registering; do not guess")
+        if len(value) > 64 or not re.fullmatch(r"[a-z0-9][a-z0-9._/-]*", value.lower()):
+            raise ValueError(f"{field}: expected an id of at most 64 characters: letters, digits, '.', '_', '-' and '/'")
+    detected = family_from_model(model)
+    family = detected if detected != "other" else (family or "other")
+    if family not in FAMILIES:
+        raise ValueError("model_family: unknown family")
+    parts = name.split("/") if isinstance(name, str) else []
+    if len(parts) not in (1, 4) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", parts[-1]):
+        raise ValueError("display_name: choose a pretty lowercase nickname, e.g. amber-fox, or a full harness/family/model/nickname")
+    # A full name supplied by the LLM contributes only its nickname: configured identity always wins.
+    display = f"{harness.lower().replace('/', '-')}/{family}/{model.lower().replace('/', '-')}/{parts[-1]}"
+    if len(display) > 64:
+        raise ValueError("display_name: the complete name exceeds 64 characters; choose a shorter nickname")
+    return {"display_name": display, "model_family": family, "model_version": model, "harness": harness}
 
 
 def alias_from_model(model_version):

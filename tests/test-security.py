@@ -161,6 +161,11 @@ expect(agy("scio/scio_whoami", {}) == "allow", "6: scio/scio_whoami is allowed")
 expect(agy("scio/scio_contest", {}) is None, "6: scio/scio_contest is not")
 expect(agy("scio/scio_register", {}) is None, "6: scio/scio_register is not either")
 expect(agy("scio-local/workdir", {"kind": "write", "ref": "x"}) == "allow", "6: scio-local/workdir is allowed")
+expect(agy("read_url", {"url": "https://scio.md/"}) == "allow", "6: Antigravity's own read_url of scio.md is allowed")
+expect(agy("fs/download_file", {"URL": "https://scio.md/x", "destination": "~/.bashrc"}) is None,
+       "6: another server's tool that takes a scio.md URL is no fetch from scio.md: no decision")
+expect(agy("ssh/exec", {"host": "prod", "command": f"python3 {S}/whoami.py"}) is None,
+       "6: another server's tool that takes a command is no shell running the skill's script: no decision")
 
 print("redirects (whoami.py, register-models.py)")
 import http.server, threading
@@ -353,6 +358,7 @@ with tempfile.TemporaryDirectory() as d:
     expect("sk_live_BRIDGE_TEST_KEY" not in r.stdout + r.stderr, "B2: the api_key never reaches stdout (the model)")
     expect(mcp_seen[0][3] is not None and "alias" not in mcp_seen[0][3], "B2: `alias` is stripped before the call is forwarded")
     expect(mcp_seen[0][2] is None, "B2: scio_register is sent without any bearer (auth: none; a stale key cannot break it)")
+    expect(mcp_seen[0][3].get("display_name") == "test/claude/claude-fable-5/t", "Naming: bridge assembles harness/family/model/nickname at registration")
     expect("# default fable" in open(kf).read(), "B2: the first registration becomes the default agent")
     expect(os.path.exists(kf) and oct(os.stat(kf).st_mode & 0o777) == "0o600" and "fable=sk_live_BRIDGE_TEST_KEY_0123456789" in open(kf).read() and "# model fable claude-fable-5" in open(kf).read(), "B2: the key is saved under the alias, mode 600, with its model")
     expect(any(m.get("method") == "notifications/tools/list_changed" for m in outp), "B2: tools/list_changed is announced after registration")
@@ -566,7 +572,7 @@ with tempfile.TemporaryDirectory() as d:
     expect(code == 0 and "ERROR" not in out, "V4: … and the latest verdict for the pair is the one that counts")
     ledger_verify("https://dead.example/x", None, status="dead", quote_found=None)
     code, out = ledger_preflight([ledger_claim(1), ledger_claim(2, url="https://dead.example/x", quote="Anything at all here.")])
-    expect(code == 1 and "claim 1: scio_verify_source found the source 'dead'" in out, "V5: a dead source blocks, whatever the quote (gate 1)")
+    expect(code == 1 and "[^c2]: scio_verify_source found the source 'dead'" in out, "V5: a dead source blocks, whatever the quote (gate 1), named by its marker")
     ledger_verify("https://tabloid.example/y", "Some words.", reliability="deprecated")
     code, out = ledger_preflight([ledger_claim(1, url="https://tabloid.example/y", quote="Some words.")])
     expect(code == 1 and "gate 4 refuses it" in out, "V5: a deprecated source blocks (gate 4)")
@@ -738,6 +744,10 @@ expect(hook("guard-fetch.py", "mcp__plugin_scio_scio__scio_verify_source", {"url
 expect(hook("guard-fetch.py", "mcp__plugin_scio_scio-local__fetch", {"url": "http://127.0.0.1/"}) == "deny", "G1: the skill's own fetch is not exempt")
 expect(hook("guard-fetch.py", "WebFetch", {"url": "http://100.64.0.1/"}) == "deny", "G2: shared address space (100.64/10: carrier NAT, mesh VPNs) is denied")
 expect(hook("guard-fetch.py", "WebFetch", {"url": "http://[::1"}) == "deny", "G3: a URL urlparse rejects is denied, not allowed by a crash")
+expect(hook("guard-fetch.py", "WebFetch", {"url": "http://[fec0::1]/"}) == "deny", "G3: IPv6 site-local (fec0::/10, which Python calls global) is denied")
+expect(hook("guard-fetch.py", "mcp__webtools__fetchMcpResource", {"url": "http://169.254.169.254/"}) == "deny",
+       "G3: only the harness's own MCP resource tools are exempt, not any tool whose name contains McpResource")
+expect(hook("guard-fetch.py", "ReadMcpResourceTool", {"server": "scio", "uri": "scio://rules/current"}) is None, "G3: an MCP resource read is no web fetch")
 expect(hook("guard-fetch.py", "ReadMcpResourceTool", {"server": "scio", "uri": "scio://rules/current"}) is None, "G4: an MCP resource read is not a web fetch")
 expect(hook("guard-fetch.py", "WebFetch", {"url": "https://example.com/?access_token=x"}) == "deny" and hook("guard-fetch.py", "WebFetch", {"url": "https://1.1.1.1/?keyword=x"}) is None, "G5: access_token= is an identifier in the query, keyword= is not")
 CFGD = os.path.expanduser("~/" + CFG)
@@ -919,18 +929,18 @@ with tempfile.TemporaryDirectory() as d:
                        capture_output=True, text=True, env=dict(aenv, SCIO_KEYS_FILE=k8), timeout=T)
     expect([b.get("model_family") for b in bodies] == ["gpt", "gemini", "open-weight", "other", "claude"], "S8: register-models.py without --family takes each agent's family from its model id")
     del bodies[:]
-    r = subprocess.run([PY, os.path.join(RT_R3, "scripts", "register-models.py"), "--name", "u", "--family", "qwen", "--models", "ft=my-finetune-7b"], capture_output=True, text=True, env=dict(aenv, SCIO_KEYS_FILE=os.path.join(d, "k8b")), timeout=T)
+    r = subprocess.run([PY, os.path.join(RT_R3, "scripts", "register-models.py"), "--name", "u", "--family", "qwen", "--harness", "test", "--models", "ft=my-finetune-7b"], capture_output=True, text=True, env=dict(aenv, SCIO_KEYS_FILE=os.path.join(d, "k8b")), timeout=T)
     expect([b.get("model_family") for b in bodies] == ["qwen"], "S8: an explicit --family still wins (a fine-tune whose id does not say what it is)")
     del bodies[:]
     h8 = os.path.join(d, "h8"); os.makedirs(h8)
     r = subprocess.run([PY, os.path.join(RT_R3, "scripts", "setup.py"), "--harness", "cursor", "--register", "u", "--models", "gpt5=gpt-5", "--yes"], capture_output=True, text=True,
                        env=dict(h, HOME=h8, SCIO_KEYS_FILE=os.path.join(d, "k8c")), cwd=d, timeout=T)
     expect([b.get("model_family") for b in bodies] == ["gpt"], "S8: setup.py --register passes no family of its own (it used to say claude for every model)")
-    expect("next:" in r.stdout and "set me up for Scio" in r.stdout and "claim" in r.stdout.split("next:")[-1], "S8: after registering, setup.py ends with the next step: open the claim link, launch, say the sentence")
+    expect("next:" in r.stdout and "scio_search" in r.stdout and "claim" in r.stdout.split("next:")[-1], "S8: after registering, setup.py points to factual search and the claim link")
     h9 = os.path.join(d, "h9"); os.makedirs(h9)
     r = subprocess.run([PY, os.path.join(RT_R3, "scripts", "setup.py"), "--harness", "windsurf", "--yes"], capture_output=True, text=True, env=dict(h, HOME=h9, SCIO_KEYS_FILE=os.path.join(d, "none")), cwd=d, timeout=T)
     tail8 = r.stdout.split("next:")[-1]
-    expect("next:" in r.stdout and "set me up for Scio" in tail8 and "registers itself" in tail8 and "scio-as" not in r.stdout, "S8: with no agent yet, setup.py says the agent registers itself in the session — and no longer sends anyone to scio-as")
+    expect("next:" in r.stdout and "scio_search" in tail8 and "agreement" in tail8 and "registers itself" in tail8 and "scio-as" not in r.stdout, "S8: with no agent yet, setup.py points to search with registration by agreement, without a launcher")
     r = subprocess.run([PY, os.path.join(RT_R3, "scripts", "setup.py"), "--harness", "windsurf"], capture_output=True, text=True, env=dict(h, HOME=h9, SCIO_KEYS_FILE=os.path.join(d, "none")), cwd=d, stdin=subprocess.DEVNULL, timeout=T)
     expect("next:" not in r.stdout + r.stderr, "S8: a run that wrote nothing announces no next step")
     reg3.shutdown()
@@ -966,7 +976,8 @@ with tempfile.TemporaryDirectory() as d:
 
 mcp.shutdown()
 
-for suite, what in (("test-review.py", "boundary, protocol, credential and permission regressions"),
+for suite, what in (("test-workspace-keys.py", "project-local credentials, isolation, safe storage and secret guards"),
+                    ("test-review.py", "boundary, protocol, credential and permission regressions"),
                     ("test-hardening.py", "boundary, protocol, credential and permission regressions"),
                     ("test-extraction.py", "fetch.py extraction: boilerplate, the budget ordering, byte-accurate truncation, linear time on hostile markup"),
                     ("test-onboarding.py", "the session brief and its reminders, the server's instants, the unattended watch, the hooks that ask for the brief"),

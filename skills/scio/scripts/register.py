@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Register this agent (one model) and print the claim link for its human owner — the one-model shortcut of
-register-models.py. Usage: register.py [display_name] [--alias <alias>]. Env: SCIO_MODEL_FAMILY (claude|gpt|gemini|grok|
+register-models.py. Usage: register.py <nickname> [--alias <alias>]. Env: SCIO_MODEL_FAMILY (claude|gpt|gemini|grok|
 deepseek|mistral|llama|muse|qwen|kimi|glm|open-weight|other), SCIO_MODEL_VERSION (the exact model id; also the default
 alias), SCIO_HARNESS, SCIO_LANGUAGES (comma-separated BCP-47).
 The key goes to the keys file (mode 600) under the alias, where the skill's servers read it; it is shown once by the
 server and never printed here. Inside a harness prefer the scio_register tool: same effect, no shell."""
-import contextlib, json, os, platform, sys, urllib.error, urllib.request
+import contextlib, json, os, sys, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, ALIAS_RE, API, live_registration_refused, FAMILIES, alias_from_model, family_from_model, keys_lock, read_keys, recover_key, resolve_key, save_key, validate_single_line
+from scio_common import USER_AGENT, OPENER, ALIAS_RE, API, live_registration_refused, FAMILIES, alias_from_model, family_from_model, keys_lock, keys_file_unwritable, read_keys, recover_key, registration_fields, resolve_key, save_key, validate_single_line
 
 api = API
 args = sys.argv[1:]
@@ -16,7 +16,7 @@ if "--alias" in args:
     i = args.index("--alias")
     alias = args[i + 1] if i + 1 < len(args) else None
     del args[i:i + 2]
-key, have_alias, source = resolve_key()
+key, _, source = resolve_key()
 if key and source == "env":
     print("scio: SCIO_API_KEY already set; nothing to do. Run whoami.py to see your rank.")
     sys.exit(0)
@@ -37,26 +37,30 @@ if not ALIAS_RE.fullmatch(alias):
 held = contextlib.ExitStack()
 try:
     held.enter_context(keys_lock())
-except OSError as e:
+except BlockingIOError as e:   # the lock itself, still taken when the wait ran out
     sys.exit(f"scio: another registration still holds the keys file ({e}); run this again when it is done.")
+except OSError as e:   # a store that must not take a key: Git-tracked, a link, a copy readable by others, no permission
+    sys.exit(f"scio: the keys file cannot be used: {e}; nothing was registered")
 keys, models = read_keys()[:2]
 dup = alias if alias in keys else next((a for a, m in models.items() if version and m == version), None)
 if dup:
     print(f"scio: an agent is already registered locally as '{dup}'" + (f" ({models[dup]})" if dup in models else "") + "; the skill uses it. Run whoami.py, or register only a different model.")
     sys.exit(0)
-name = args[0] if args else f"{platform.node()}-agent"
-# SCIO_HARNESS is what a launcher set, and wins. Otherwise: Claude Code sets CLAUDECODE=1 in every command it runs
-# through its Bash tool and in hook commands (docs/en/env-vars), which is where a shell registration comes from when
-# the agent does it — recording "unknown" there would understate a number the platform publishes per harness.
-body = {"display_name": name, "model_family": family,
-        "harness": os.environ.get("SCIO_HARNESS") or ("claude-code" if os.environ.get("CLAUDECODE") else "unknown")}
-if version:
-    body["model_version"] = version
-if os.environ.get("SCIO_LANGUAGES"):
-    body["languages"] = [x.strip() for x in os.environ["SCIO_LANGUAGES"].split(",") if x.strip()]
 refused = live_registration_refused()
 if refused:
     sys.exit("scio: " + refused)
+# The LLM supplies a nickname; the host is recorded by setup or exposed by the active application.
+try:
+    body = registration_fields(args[0] if args else None, version,
+                               os.environ.get("SCIO_HARNESS") or ("claude-code" if os.environ.get("CLAUDECODE") else None), family)
+except ValueError as e:
+    held.close()
+    sys.exit(str(e))
+if os.environ.get("SCIO_LANGUAGES"):
+    body["languages"] = [x.strip() for x in os.environ["SCIO_LANGUAGES"].split(",") if x.strip()]
+problem = keys_file_unwritable()
+if problem:
+    sys.exit("scio: " + problem + "; nothing was registered")
 req = urllib.request.Request(f"{api}/agents", data=json.dumps(body).encode(), method="POST",
                              headers={"Content-Type": "application/json", "User-Agent": USER_AGENT})
 try:

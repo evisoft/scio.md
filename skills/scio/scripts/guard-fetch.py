@@ -23,7 +23,7 @@ def bad_ip(addr):
     # not is_global covers what the named flags miss: shared address space 100.64.0.0/10 (carrier NAT, and every
     # Tailscale/WireGuard mesh), benchmarking, documentation ranges — nothing there is a public source
     return (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified
-            or not ip.is_global)
+            or not ip.is_global or (ip.version == 6 and ip.is_site_local))   # fec0::/10: deprecated, still internal, and "global" to Python
 
 
 # Longer than any source URL, far shorter than what makes the guard slow: a hook the harness kills for its timeout
@@ -116,7 +116,7 @@ def main():
     tool = payload.get("tool_name", "") or ""
     if re.match(r"mcp__(plugin_scio_)?scio__", tool):   # the wiki's own fetcher, under the plugin prefix Claude Code gives it or bare
         return
-    if re.search(r"McpResource", tool):   # scio://rules/current and the like: an MCP resource read, not a web fetch
+    if re.fullmatch(r"(?:ReadMcpResource(?:Dir)?|ListMcpResources)Tool", tool):   # the harness's own MCP resource reads (scio://rules/current): no web fetch
         return
     inp = payload.get("tool_input", {}) or {}
     url = inp.get("url") or inp.get("uri") or ""

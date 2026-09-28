@@ -180,6 +180,11 @@ started = time.perf_counter()
 extract(hostile)
 elapsed = time.perf_counter() - started
 expect(elapsed < 5, f"stray end tags against a deep stack finish in linear time ({elapsed:.1f}s; a membership scan of the stack per end tag is quadratic)")
+nested = "<main>" + "<aside>" * 71_000 + "x"   # 497 KB, under the raw cap; a copy of the stack per <aside> took 20 s here
+started = time.perf_counter()
+extract(nested)
+elapsed = time.perf_counter() - started
+expect(elapsed < 5, f"nested header/footer/aside inside <main> finish in linear time ({elapsed:.1f}s; a set of the stack per tag is quadratic)")
 
 # --- XHTML-style <br/> is a line break like <br> -----------------------------------------------------------------
 expect(fetch.to_text(b"<html><body><p>line one<br/>line two<br>line three</p></body></html>", "text/html") == "line one\nline two\nline three",
@@ -211,6 +216,47 @@ out_raw_trunc = run_main(["https://example.com/big-page"], "<html><body><article
 expect("raw download capped" in out_raw_trunc and "may be incomplete" in out_raw_trunc, "a raw download cap is reported distinctly and more strongly than an ordinary budget truncation")
 out_no_raw_trunc = run_main(["https://example.com/small-page"], "<html><body><article><p>Some content.</p></article></body></html>")
 expect("raw download capped" not in out_no_raw_trunc, "no raw-truncation note appears when the raw download was not capped")
+
+# --- redirects: an http source that moved to https is followed, as the platform's resolver follows it; a downgrade never
+def hops(*answers):
+    it = iter(answers)
+    return lambda req, ip, cap: next(it)
+real_get, real_resolve = fetch.get_once, fetch.guard.resolve
+fetch.guard.resolve = lambda url: (None, "example.org", ["93.184.216.34"])   # every hop is checked; here, every hop passes
+fetch.get_once = hops(("redirect", "https://example.org/b"), ("ok", (b"<p>moved</p>", "text/html", False)))
+_, reason, final = fetch.fetch("http://example.org/a")
+expect(reason is None and final == "https://example.org/b", "a redirect from http up to https is followed")
+fetch.get_once = hops(("redirect", "http://example.org/b"))
+_, reason, _ = fetch.fetch("https://example.org/a")
+expect(bool(reason) and "changes the scheme" in reason, "a redirect from https down to http is refused")
+fetch.get_once, fetch.guard.resolve = real_get, real_resolve
+
+# --- a proxy is used exactly when urllib uses it: a name the guard checked is never looked up again (DNS rebinding) ------
+import http.server, socket, threading
+class _Page(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.send_header("Content-Type", "text/plain"); self.end_headers(); self.wfile.write(b"page")
+    def log_message(self, *a):
+        pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), _Page)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+saved = {k: os.environ.pop(k, None) for k in ("http_proxy", "no_proxy", "HTTP_PROXY", "NO_PROXY", "REQUEST_METHOD")}
+os.environ.update(http_proxy="http://127.0.0.9:9", no_proxy=f"target.test:{srv.server_port}")   # a NO_PROXY entry with a port
+real_resolve, real_gai, lookups = fetch.guard.resolve, socket.getaddrinfo, []
+fetch.guard.resolve = lambda url: (None, "target.test", ["127.0.0.1"])   # the guard's one lookup, the address to pin
+def second_lookup(host, *a, **k):
+    if host == "target.test":
+        lookups.append(host)
+    return real_gai("127.0.0.1" if host == "target.test" else host, *a, **k)
+socket.getaddrinfo = second_lookup
+try:
+    fetch.fetch(f"http://target.test:{srv.server_port}/")
+finally:
+    socket.getaddrinfo, fetch.guard.resolve = real_gai, real_resolve
+    os.environ.pop("http_proxy", None); os.environ.pop("no_proxy", None)
+    os.environ.update({k: v for k, v in saved.items() if v is not None})
+    srv.shutdown()
+expect(lookups == [], "NO_PROXY with a port: the fetch goes direct to the checked address, never through a second lookup of the name")
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall extraction checks passed")
 sys.exit(1 if failures else 0)

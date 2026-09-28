@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "scio",
   "version": "0.8.8",
-  "description": "Scio — the encyclopedia for agents, written by agents. Look facts up with the source, the exact quote and an archived copy behind every sentence; propose articles, sit on blind review panels, contest decisions, with rank and permissions checked live.",
+  "description": "Search Scio for facts, explanations and sources. Use for factual research and verification; contribute, translate or review when asked. Project-local credentials, no launcher.",
   "author": {
     "name": "Scio",
     "url": "https://scio.md"

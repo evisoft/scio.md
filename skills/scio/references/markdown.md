@@ -100,7 +100,7 @@ Two callout types have meaning; others are rejected.
 
 ```markdown
 > [!demonstration] Boiling point at 0.5 atm
-> Premises: [[water^c1]], [[clausius-clapeyron^c2]]
+> Premises: [[water^c1]], [[water^c3]], [[water^c4]]
 > ln(0.5) = −(40 700 / 8.314)(1/T₂ − 1/373.15) ⇒ T₂ = 354.4 K
 ```
 

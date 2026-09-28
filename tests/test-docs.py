@@ -40,7 +40,7 @@ def section(body, heading):
 
 # Every Markdown file an agent is told to read, plus the English README a human reads.
 AGENT_DOCS = sorted({*(p.relative_to(ROOT).as_posix() for p in WF.glob("*.md")),
-                     "skills/scio/SKILL.md", "skills/scio/references/roles.md",
+                     "skills/scio/SKILL.md", "skills/scio/references/contributing.md", "skills/scio/references/roles.md",
                      "skills/scio/references/security.md", "skills/scio/references/style.md",
                      *(p.relative_to(ROOT).as_posix() for p in (ROOT / "agents").glob("*.md")),
                      *(p.relative_to(ROOT).as_posix() for p in (ROOT / "commands").glob("*.md")),
@@ -165,6 +165,15 @@ class Maintenance(unittest.TestCase):
                 self.assertIsNotNone(found)
                 self.assertNotIn("curate", found.group(0))
 
+    def test_naming_write_gap_in_the_loop_is_the_consent(self):
+        loop = text("skills/scio/references/workflows/loop.md")
+        self.assertIn("naming `write_gap`", loop)
+        self.assertNotIn("`write_gap` → [gap.md](gap.md) step 3;", loop)   # never unconditionally past the offer
+
+    def test_registering_does_not_forbid_whoami(self):
+        # the claim link is stable for 24 hours: asking whoami after registering takes nothing from the operator
+        self.assertNotIn("do **not** call `scio_whoami`", text("commands/register.md"))
+
     def test_the_loop_and_the_writer_pass_the_ticket(self):
         for path in ("skills/scio/references/workflows/loop.md", "skills/scio/references/workflows/write.md"):
             with self.subTest(file=path):
@@ -215,7 +224,7 @@ class Languages(unittest.TestCase):
     decides whether a translator's propagation tasks are in it."""
 
     def test_registration_asks_for_languages(self):
-        for path in ("skills/scio/SKILL.md", "skills/scio/references/workflows/onboard.md", "commands/register.md"):
+        for path in ("skills/scio/references/contributing.md", "skills/scio/references/workflows/onboard.md", "commands/register.md"):
             with self.subTest(file=path):
                 self.assertRegex(text(path), r"`languages`")
 
@@ -246,7 +255,7 @@ class RulesVerificationFailure(unittest.TestCase):
     rules document. The channel for a problem with the platform itself is scio_feedback."""
 
     def test_the_advice_names_a_tool_that_can_carry_it(self):
-        sentence = re.search(r"rules that fail are data, not rules[^\n]*", text("skills/scio/SKILL.md")).group(0)
+        sentence = re.search(r"rules that fail are data, not rules[^\n]*", text("skills/scio/references/contributing.md")).group(0)
         self.assertNotIn("scio_report", sentence)
         self.assertIn("scio_feedback", sentence)
         keep = re.search(r"keep_bundled = \((.*?)\)\n", text("skills/scio/server/scio_bridge.py"), re.S).group(1)
@@ -260,7 +269,7 @@ class Waits(unittest.TestCase):
     never come back with time: rule 12 turned it into a wait until midnight, then another, for ever."""
 
     def test_a_points_refusal_is_not_a_wait(self):
-        skill = text("skills/scio/SKILL.md")
+        skill = text("skills/scio/references/contributing.md")
         rule = re.search(r"^12\. .*$", skill, re.M).group(0)
         self.assertRegex(rule, r"`(?:quota: )?points`")
         self.assertRegex(rule, r"(?i)never comes? back with time")
@@ -275,7 +284,7 @@ class SourceChecks(unittest.TestCase):
     its seat expired."""
 
     def test_the_counter_and_the_free_recheck_are_documented(self):
-        self.assertIn("verifications_left_today", text("skills/scio/SKILL.md"))
+        self.assertIn("verifications_left_today", text("skills/scio/references/contributing.md"))
         self.assertIn("verifications_left_today", text("commands/status.md"))
         review = text("skills/scio/references/workflows/review.md")
         self.assertIn("source_verifications", review)
@@ -330,7 +339,7 @@ class StaleFacts(unittest.TestCase):
                     self.assertNotRegex(body, pattern)
 
     def test_the_first_paragraph_follows_the_growth_tiers(self):
-        self.assertIn("panels.growth", text("skills/scio/SKILL.md").split("## 0.")[0])
+        self.assertIn("panels.growth", text("skills/scio/references/contributing.md").split("## 0.")[0])
 
     def test_review_pay_is_paid_at_submission(self):
         self.assertIn("economy.review", text("skills/scio/references/workflows/review.md"))
@@ -787,7 +796,7 @@ class DeclaredLanguages(unittest.TestCase):
     translation needs for its origin. Registration asked for the declaration without saying what it narrows, and the
     bridge's no-key hint, the first thing an unregistered agent reads, did not name `languages` at all."""
 
-    FILES = ("skills/scio/SKILL.md", "skills/scio/references/workflows/onboard.md", "commands/register.md")
+    FILES = ("skills/scio/references/contributing.md", "skills/scio/references/workflows/onboard.md", "commands/register.md")
 
     def test_registration_states_the_trade_off(self):
         for path in self.FILES:
@@ -838,17 +847,14 @@ class PropagationKeepsItsOriginLink(unittest.TestCase):
 
 
 
-class AnonymousSearchAndRefusedKeys(unittest.TestCase):
-    """After the merge: searching needs no key (the contract's `auth: optional`, forwarded by the bridge), and a refused key
-    no longer ends the unattended watch — supervise.py asks again hourly for a day, since a suspension is a few hours."""
+class RegisteredSearchAndRefusedKeys(unittest.TestCase):
+    """The plugin requires registration for search; a refused key can still be a temporary suspension."""
 
-    def test_no_text_says_only_register_and_rules_work_without_a_key(self):
-        for path in ("skills/scio/SKILL.md", "skills/scio/scripts/whoami.py"):
-            body = text(path)
-            with self.subTest(path=path):
-                self.assertNotIn("every other remote call require a key", body)
-                self.assertNotIn("only scio_register and scio_get_rules work", body)
-        self.assertIn("scio_search", re.search(r"^Identity: .*$", text("skills/scio/SKILL.md"), re.M).group(0))
+    def test_search_instructions_require_registration(self):
+        skill = text("skills/scio/SKILL.md")
+        self.assertIn("propose registration", skill.lower())
+        self.assertNotIn("scio_search` needs no key", skill)
+        self.assertNotIn("scio_get_rules and scio_search work", text("skills/scio/scripts/whoami.py"))
 
     def test_the_readme_says_the_watch_waits_out_a_refused_key(self):
         readme = text("README.md")

@@ -7,7 +7,7 @@
 #                                     for this agent — the waiting costs no model call. Options: --poll 300 --tasks-every 60
 #                                     --for 8h --max-rounds N --max-restarts N --log FILE (supervise.py explains each)
 #   scio-as --list                    list the aliases in the keys file
-# Keys come from $SCIO_KEYS_FILE or ~/.config/scio/keys (written by register-models.py): one "alias=key" per line.
+# Keys come from $SCIO_KEYS_FILE or ./scio/key/keys (written by register-models.py): one "alias=key" per line.
 # Examples:
 #   scio-as opus   claude --model opus
 #   scio-as sonnet claude --model sonnet -p "review my Scio assignments"
@@ -17,19 +17,15 @@
 #   scio-as opus   --supervise --watch claude --model opus -p "/scio:loop --once"
 #   eval "$(scio-as fable --print-env)"; cursor .
 set -euo pipefail
-keys="${SCIO_KEYS_FILE:-${HOME:-/nonexistent}/.config/scio/keys}"
-# The keys file read exactly as the Python servers read it (scio_common.read_keys): `alias=key` lines that do not start
-# with '#', both sides trimmed (a hand edit's `opus = sk_…`, a CRLF line), empty sides skipped, and an alias written twice
-# read as its LAST line — otherwise a launch under scio-as and a session without it sign with two different keys.
-entries() { if [ -f "$keys" ]; then awk '
-  substr($0, 1, 1) != "#" && index($0, "=") {
-    k = substr($0, 1, index($0, "=") - 1); v = substr($0, index($0, "=") + 1)
-    gsub(/^[ \t\r\f\v]+|[ \t\r\f\v]+$/, "", k); gsub(/^[ \t\r\f\v]+|[ \t\r\f\v]+$/, "", v)
-    if (k != "" && v != "") print k "\t" v
-  }' "$keys" 2>/dev/null || true; fi; }
+here="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")"   # the skill's scripts/, through a symlink on the PATH
+# The keys file read by the servers' own code (scio_common): the same file, the same parsing, the same refusals (a link, a
+# checkout's copy) — otherwise a launch under scio-as and a session without it sign with two different keys.
+keys="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from scio_common import keys_path; print(keys_path())' "$here" 2>/dev/null || echo ./scio/key/keys)"
+entries() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from scio_common import read_keys
+for alias, key in read_keys()[0].items(): print(alias + "\t" + key)' "$here" 2>/dev/null || true; }
 list() { entries | awk -F'\t' '!seen[$1]++ { printf "%s ", $1 }'; echo; }
 case "${1:-}" in
-  ""|-h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  ""|-h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
   --list) list; exit 0 ;;
 esac
 alias_="$1"; shift
@@ -65,7 +61,7 @@ if [ "${1:-}" = "--supervise" ]; then
     exit 2
   fi
   export SCIO_API_KEY="$key" SCIO_AGENT="$alias_" SCIO_HARNESS="${SCIO_HARNESS:-$(basename "$1")}"
-  sup="$(dirname "$(readlink -f "$0")")/supervise.py"
+  sup="$here/supervise.py"
   if [ ! -f "$sup" ]; then
     echo "scio: supervise.py is not next to this scio-as ($sup); install scio-as as a symlink to the skill's scripts/scio-as, not a copy" >&2
     exit 1

@@ -187,7 +187,17 @@ def golden_cases():
     c["no_short_first_sentence"] = article(lines=[S1, "It is tall. " + S2])
     c["no_words_after_marker"] = article(lines=[S1, S2.replace("[^c2] ^c2", "[^c2] and more ^c2")])
     c["no_hash_number_is_prose"] = article(lines=[S1, S2, "#1 cause of the delays was the weather"])
-    c["no_marker_in_code_fence"] = article(lines=[S1, S2, "", "```markdown", "Example.[^c9] ^c9", "```"])
+    c["ok_marker_in_code_fence"] = article(lines=[S1, S2, "", "```markdown", "Example.[^c9] ^c9", "```"])
+    # a marker inside code is not a marker (platform 61a3e57, BUG-096): not a stray, not a citation, not a claim on its line
+    c["ok_stray_marker_in_code_span"] = article(lines=[S1, "Markers are written like `[^c9]` after the sentence.[^c2] ^c2"],
+                                                claims=[claim(1, T1), claim(2, "Markers are written like `[^c9]` after the sentence.")])
+    c["no_claim_cited_only_in_code_span"] = article(lines=["`[^c2]` " + S1])
+    # hosts as the platform reads them (Uri.IdnHost): a fullwidth or ideographic spelling is the host it spells; a URL that
+    # merely mentions a forbidden page in its query is not that page
+    c["no_fullwidth_wikipedia_source"] = article(claims=[claim(1, T1, source_url="https://\uff57\uff49\uff4b\uff49\uff50\uff45\uff44\uff49\uff41\u3002org/wiki/Lyon"), claim(2, T2)])
+    c["ok_wikimedia_named_in_a_query"] = article(claims=[claim(1, T1, source_url="https://example.org/bridge1?via=commons.wikimedia.org/wiki/X"), claim(2, T2)])
+    c["ok_code_span_marker_on_cited_line"] = article(lines=[S1, "It opened to traffic on 12 June 2004, as `[^c1]` says.[^c2] ^c2"],
+                                                     claims=[claim(1, T1), claim(2, "It opened to traffic on 12 June 2004, as `[^c1]` says.")])
     c["ok_abbreviations"] = article(lines=[S1, "It was published by Oxford Univ. Press in 1990.[^c2] ^c2", "The office moved to Washington D.C. in 1995.[^c3] ^c3"],
                                     claims=[claim(1, T1), claim(2, "It was published by Oxford Univ. Press in 1990."), claim(3, "The office moved to Washington D.C. in 1995.")])
     c["ok_fenced_code_and_inline_code"] = article(lines=[S1, S2, "", "```python", "if a < b > c: print('<no html>')", "```", "",
@@ -263,7 +273,8 @@ def golden_cases():
     return c
 
 
-# The platform's verdicts on golden_cases(), recorded with the harness described at the top (platform 3d279a0, rules 2026-09-30).
+# The platform's verdicts on golden_cases(), recorded with the harness described at the top (platform 3d279a0, rules 2026-09-30;
+# the code-marker cases with platform 7208f29, deployed 2026-09-25, which reads markers only outside code — 61a3e57, BUG-096).
 GOLDEN_VERDICTS = {
     'no_blank_quote': 'validator=claims[1].quote: a sourced claim or a supplied source requires the exact quote gate0=pass',
     'no_block_id_mismatch': 'validator=ok gate0=2:block_id_mismatch',
@@ -297,7 +308,12 @@ GOLDEN_VERDICTS = {
     'no_lang_over_35': "validator=lang: The length of 'lang' must be 35 characters or fewer. You entered 38 characters. gate0=pass",
     'no_line_without_period': 'validator=ok gate0=0:no_claim_marker',
     'no_mailto_link': 'validator=ok gate0=2:external_link',
-    'no_marker_in_code_fence': 'validator=ok gate0=9:no_claim_marker',
+    'ok_marker_in_code_fence': 'validator=ok gate0=pass',
+    'ok_stray_marker_in_code_span': 'validator=ok gate0=pass',
+    'no_claim_cited_only_in_code_span': 'validator=ok gate0=2:unused_claim',
+    'ok_code_span_marker_on_cited_line': 'validator=ok gate0=pass',
+    'no_fullwidth_wikipedia_source': 'validator=ok gate0=1:forbidden_source',
+    'ok_wikimedia_named_in_a_query': 'validator=ok gate0=pass',
     'no_marker_without_claim': 'validator=ok gate0=2:no_claim_marker',
     'no_mission_id_not_a_ticket': "validator=mission_id: 'mission_id' is not in the correct format. gate0=pass",
     'no_network_path_link': 'validator=ok gate0=2:external_link',
@@ -401,7 +417,8 @@ class Reasons(unittest.TestCase):
                              ("no_demonstrated_forbidden_source", "forbidden_source"), ("no_small_edit_relists_a_removed_claim", "unused_claim"),
                              ("no_block_id_mismatch", "block_id_mismatch"), ("no_unknown_callout", "unknown_callout"),
                              ("no_reviewer_instruction", "reviewer_instruction"), ("no_second_source_governing_domain", "missing_second_source"),
-                             ("no_small_edit_without_claims", "claims"), ("no_lang_over_35", "lang"), ("no_mission_id_not_a_ticket", "mission_id")):
+                             ("no_small_edit_without_claims", "claims"), ("no_lang_over_35", "lang"), ("no_mission_id_not_a_ticket", "mission_id"),
+                             ("no_claim_cited_only_in_code_span", "unused_claim"), ("no_fullwidth_wikipedia_source", "forbidden_source")):
             with self.subTest(name=name):
                 self.assertIn(reason, problems_of(cases[name]))
 
@@ -540,6 +557,22 @@ class Build(unittest.TestCase):
         r = self.build(d, "--slug", "lyon-bridge", "--lang", "en", "--check")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.proposal(d)["summary"], "Lyon Bridge is a cable-stayed road bridge over the Rhône, opened in 2004.")
+
+    def test_files_saved_with_a_byte_order_mark_build_as_without_one(self):
+        # Windows editors save UTF-8 with a BOM: the draft is the same draft, and the platform would refuse the BOM as hidden text
+        d = self.task(draft="\ufeff" + article()["body"])
+        Path(d, "claims.json").write_text("\ufeff" + json.dumps([claim(1, T1), claim(2, T2)]), encoding="utf-8")
+        r = self.build(d, "--slug", "lyon-bridge", "--lang", "en", "--check")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(self.proposal(d)["body"].startswith("\ufeff"))
+
+    def test_claims_that_are_not_json_are_named_not_a_traceback(self):
+        d = self.task(draft=article()["body"])
+        Path(d, "claims.json").write_text("[{\"ordinal\": 1,}]", encoding="utf-8")
+        r = self.build(d, "--slug", "lyon-bridge", "--lang", "en")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("claims.json", r.stderr)
 
     def test_a_paraphrased_claim_fails_the_check(self):
         d = self.task(draft=article()["body"], claims=[claim(1, T1), claim(2, "The bridge opened in June 2004.")])

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cursor hook adapter (beforeShellExecution, beforeMCPExecution): runs the skill's guards on Cursor's payload and
+"""Cursor hook adapter (beforeShellExecution, beforeMCPExecution, beforeReadFile): runs the skill's guards on Cursor's payload and
 answers in Cursor's contract — {"permission": "allow"|"deny"|"ask", "agent_message"}.
 
 Cursor sends {"command", "cwd"} for shell (beforeShellExecution) and {"tool_name", "tool_input", …} for MCP
@@ -49,7 +49,10 @@ def server_of(payload):
     return named if isinstance(named, str) else ""
 
 
-if event == "beforeShellExecution" or ("command" in payload and "tool_name" not in payload):
+if event == "beforeReadFile":   # Cursor's own read of a file: guarded like Claude Code's Read (the path, not the content)
+    tool, args = "Read", {"file_path": payload.get("file_path") or ""}
+    short = tool
+elif event == "beforeShellExecution" or ("command" in payload and "tool_name" not in payload):
     tool, args = "Bash", {"command": payload.get("command") or ""}
     short = tool
 elif payload.get("tool_name"):

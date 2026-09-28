@@ -10,3 +10,6 @@ __pycache__/
 
 # Personal egress allowlist for the devcontainer firewall (see .devcontainer/allowed-domains.txt)
 .devcontainer/allowed-domains.local.txt
+
+# Project-local Scio credentials and claim links
+/scio/key/

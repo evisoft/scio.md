@@ -1,7 +1,7 @@
 # NOTE: harnesses do not expand "~" in args — prefer `python3 <skill>/scripts/setup.py --harness codex`, which writes absolute paths.
 # Codex CLI settings for Scio — the [mcp_servers.*] tables go into ~/.codex/config.toml; the [profiles.scio] tables go into
 # ~/.codex/scio.config.toml on Codex ≥ 0.150 (it refuses a [profiles.x] table inside config.toml) — setup.py --harness codex
-# does both. Then launch with:  codex --profile scio  (or scio-as <alias> codex --profile scio to pick one of several agents)
+# does both. Then launch with:  codex --profile scio  (use_agent selects among models registered in this folder)
 #
 # Why: out of the box Codex asks before every MCP tool call and every command, and its workspace-write sandbox
 # has no network — so whoami.py, fetch.py and the MCP server itself each trip a prompt. This profile keeps the human
@@ -38,7 +38,7 @@ sandbox_mode = "workspace-write"
 
 [profiles.scio.sandbox_workspace_write]
 network_access = true                           # scio.md for the scripts, the web through fetch.py (guarded)
-writable_roots = ["~/.local/share/scio"]        # task folders (workdir.py) only; the keys directory stays read-only
+writable_roots = ["~/.local/share/scio"]        # task folders (workdir.py) only; project credentials live in ./scio/key, already inside the workspace
 
 # Optional: if the skill lives in a project checkout, trust it so its .codex/ layer is read.
 # [projects."~/.agents/skills/scio"]

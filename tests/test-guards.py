@@ -37,7 +37,8 @@ class Sandbox(unittest.TestCase):
         self.work = os.path.join(self.home, "workspace")
         os.makedirs(os.path.join(self.work, ".scio", "work"))
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("SCIO_", "CLAUDE_", "CURSOR_"))}
-        self.env.update(HOME=self.home, SCIO_TRUST_FILE=os.path.join(self.home, "no-trust"),
+        # These fixtures exercise legacy/custom storage explicitly; the default is now project-local.
+        self.env.update(HOME=self.home, SCIO_KEYS_FILE=os.path.join(self.cfg, "scio", "keys"), SCIO_TRUST_FILE=os.path.join(self.home, "no-trust"),
                         SCIO_WORK_DIR=os.path.join(self.work, ".scio", "work"))
 
     def tearDown(self):
@@ -327,7 +328,8 @@ class ScanCost(unittest.TestCase):
 
     PADDED = [", " + " " * 8000 + "x", ".\t" + "\t" * 8000 + "x", "; " + " \t" * 4000 + "x", "\n" + " " * 8000 + "x",
               ", " + " " * 8000 + "please " + " " * 8000 + "x", "Reviewers, " + " " * 8000 + "x",
-              "# " + "#" * 8000 + " " * 8000 + "x", ("x, " + " " * 400) * 200, ("Dear AI " + " " * 400 + ",") * 200]
+              "# " + "#" * 8000 + " " * 8000 + "x", ("x, " + " " * 400) * 200, ("Dear AI " + " " * 400 + ",") * 200,
+              ": " + " " * 16000 + "x", "$\t" + "\t" * 16000 + "x"]   # a label or a shell prompt before a command line
 
     def test_whitespace_after_punctuation_is_scanned_in_linear_time(self):
         for text in self.PADDED:
@@ -425,9 +427,9 @@ class GuardSecretsReach(Sandbox):
         os.makedirs(os.path.join(home, ".config", "scio"))
         with open(os.path.join(home, ".config", "scio", "keys"), "w") as f:
             f.write(f"opus={self.KEY}\n")
-        self.assertIsNone(self.bash("cat ~/.config/*", HOME=home))
-        self.assertIsNone(self.bash("cat " + os.path.join(home, ".config", "*"), HOME=home))
-        self.assertEqual(self.bash("head ~/.config/s?io/k*", HOME=home), "deny")
+        self.assertIsNone(self.bash("cat ~/.config/*", HOME=home, SCIO_KEYS_FILE=os.path.join(home, ".config", "scio", "keys")))
+        self.assertIsNone(self.bash("cat " + os.path.join(home, ".config", "*"), HOME=home, SCIO_KEYS_FILE=os.path.join(home, ".config", "scio", "keys")))
+        self.assertEqual(self.bash("head ~/.config/s?io/k*", HOME=home, SCIO_KEYS_FILE=os.path.join(home, ".config", "scio", "keys")), "deny")
 
     def run_patched(self, patch, command, **env):
         """The guard run in a child, loaded as `g` and patched before its main() — a failure made the same way on every
@@ -643,6 +645,16 @@ class CursorPayload(Sandbox):
 
     def test_a_scio_tool_is_not_asked_needlessly(self):
         self.assertIsNone(self.cursor({"tool_name": "scio_whoami", "tool_input": "{}", "command": self.BRIDGE}))
+
+    def test_cursors_own_file_read_is_guarded_like_a_read(self):
+        # beforeReadFile: keys that live in the workspace (./scio/key) are one read away from Cursor's agent
+        keys = os.path.join(self.cfg, "scio", "keys")
+        out = self.hook("cursor-hook.py", {"hook_event_name": "beforeReadFile", "file_path": keys, "content": ""})
+        self.assertEqual(out.get("permission"), "deny")
+        out = self.hook("cursor-hook.py", {"hook_event_name": "beforeReadFile", "file_path": os.path.join(self.work, "README.md"), "content": "x"})
+        self.assertIsNone(out.get("permission"))
+        with open(os.path.join(ROOT, "hooks", "hooks-cursor.json"), encoding="utf-8") as f:
+            self.assertIn("cursor-hook.py", json.load(f)["hooks"]["beforeReadFile"][0]["command"])
 
     def test_a_shell_command_is_still_a_shell_command(self):
         out = self.hook("cursor-hook.py", {"hook_event_name": "beforeShellExecution", "command": "ls", "cwd": self.work})

@@ -69,8 +69,11 @@ if a.kind == "small_edit" and not a.base_revision:
 claims_path = os.path.join(a.dir, "claims.json")
 if not os.path.exists(claims_path):
     sys.exit(f"missing {claims_path}")
-with open(claims_path, encoding="utf-8") as f:
-    claims = json.load(f)
+with open(claims_path, encoding="utf-8-sig") as f:   # -sig: a byte order mark (Windows editors) is no part of the text
+    try:
+        claims = json.load(f)
+    except ValueError as e:
+        sys.exit(f"claims.json is not valid JSON: {e}")
 if not isinstance(claims, list) or not claims:   # the platform refuses an empty claims array for every kind
     sys.exit("claims.json must be a non-empty array — the platform refuses an empty one for every kind. A small edit that only "
              "removes text keeps a context line around the removal and re-lists, unchanged, the claim that line cites (maintain.md)")
@@ -80,15 +83,15 @@ if a.kind == "small_edit":
     p = os.path.join(a.dir, "patch.diff")
     if not os.path.exists(p):
         sys.exit(f"missing {p}")
-    with open(p, encoding="utf-8") as f:
+    with open(p, encoding="utf-8-sig") as f:
         proposal["patch"] = f.read()
     summary = a.summary
 else:
     p = os.path.join(a.dir, "draft.md")
     if not os.path.exists(p):
         sys.exit(f"missing {p}")
-    with open(p, encoding="utf-8", newline="") as f:
-        body = f.read().replace("\r\n", "\n")   # a CRLF draft is the same draft
+    with open(p, encoding="utf-8-sig", newline="") as f:
+        body = f.read().replace("\r\n", "\n")   # a CRLF draft, or one saved with a byte order mark, is the same draft
     if not body.startswith("---\n") or "\n---\n" not in body:
         sys.exit("draft.md must start with front matter closed by a --- line (markdown.md §1)")
     proposal["body"] = body

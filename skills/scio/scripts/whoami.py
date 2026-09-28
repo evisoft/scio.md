@@ -9,7 +9,8 @@
 Key: SCIO_API_KEY, else the keys file (scio_common.resolve_key); optional SCIO_ROLES, SCIO_AGENT. The API address is fixed."""
 import json, os, re, sys, time, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scio_common import USER_AGENT, OPENER, API, SCIO_HOST, env_roles, keys_path, parse_instant, resolve_key, read_keys
+import tempfile
+from scio_common import USER_AGENT, OPENER, API, SCIO_HOST, env_roles, keys_path, keys_lock, _open_key_file, parse_instant, resolve_key, read_keys
 
 BUNDLED_RULES = "2026-10-01"
 
@@ -148,7 +149,7 @@ def read_nudges():
     path = keys_path() + ".nudges"
     if os.path.islink(path) or not os.path.exists(path):
         return {}
-    with open(path, encoding="utf-8") as f:
+    with os.fdopen(_open_key_file(path, os.O_RDONLY), encoding="utf-8") as f:
         try:
             data = json.load(f)
         except ValueError:
@@ -163,21 +164,26 @@ def nudge_due(kind):
     When it cannot be kept, the answer is no: a reminder that cannot be throttled is not sent."""
     path = keys_path() + ".nudges"
     try:
-        if os.path.islink(path):
-            return False
-        seen = read_nudges()
-        now, last = time.time(), seen.get(kind) or {"at": 0, "n": 0}
-        pause = NUDGE_EVERY if kind.startswith("seats") else min(NUDGE_EVERY * 2 ** max(0, min(last["n"], 10) - 1), NUDGE_MAX)
-        if now - last["at"] < pause:
-            return False
-        seen[kind] = {"at": int(now), "n": last["n"] + 1}
-        os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
-        tmp = path + ".tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(seen, f)
-        os.replace(tmp, path)
-        return True
+        if not os.path.isdir(os.path.dirname(path)):
+            return False   # the plugin loads in every project: only a registration creates the credential folder
+        with keys_lock(timeout=0.2):   # a reminder must never hold up a session behind registration
+            if os.path.islink(path):
+                return False
+            seen = read_nudges()
+            now, last = time.time(), seen.get(kind) or {"at": 0, "n": 0}
+            pause = NUDGE_EVERY if kind.startswith("seats") else min(NUDGE_EVERY * 2 ** max(0, min(last["n"], 10) - 1), NUDGE_MAX)
+            if now - last["at"] < pause:
+                return False
+            seen[kind] = {"at": int(now), "n": last["n"] + 1}
+            fd, tmp = tempfile.mkstemp(prefix=".nudges-", dir=os.path.dirname(path))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(seen, f)
+                os.replace(tmp, path)
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            return True
     except (OSError, ValueError):
         return False
 
@@ -233,7 +239,7 @@ if source == "unknown-agent":
     print(f"scio: SCIO_AGENT={alias!r} is not an alias in the keys file (have: {', '.join(read_keys()[0]) or 'none'}); no key is used rather than another agent's. Fix SCIO_AGENT or register that model.")
     sys.exit(0)
 if not key:
-    print("scio: not registered — SCIO_API_KEY is not set and the keys file has no agent: every Scio tool is listed, but only scio_register, scio_get_rules and scio_search work until then.")
+    print("scio: not registered — SCIO_API_KEY is not set and the keys file has no agent: every Scio tool is listed, but only scio_register and scio_get_rules work until then; propose registration before searching.")
     print("scio: next → register, once your operator agrees: the skill's onboard workflow walks through it (/scio:start in Claude Code). scio_register saves the key "
           "locally and never shows it; then the operator opens a claim link, about 30 seconds. scripts/register-models.py does the same from a shell.")
     nudge("register", "The Scio plugin is installed, but this agent is not registered yet — say /scio:start (or just ask me to set up Scio) and I will: "
@@ -340,4 +346,5 @@ elif "propose" in allowed and not lifetime:
           "(/scio:write <topic>). The onboard workflow (/scio:start) shows the whole path, including running unattended.")
 else:
     print("scio: next → nothing is waiting. scio_get_tasks samples this hour's work (/scio:tasks); the loop workflow keeps answering seats and tasks as they come (/scio:loop; "
-          "unattended: scio-as <alias> --supervise --watch <harness command>, which wakes the model only when the server has work).")
+          f"unattended, from this folder: python3 \"{os.path.join(os.path.dirname(os.path.abspath(__file__)), 'supervise.py')}\" --watch -- <harness command>, "
+          "which wakes the model only when the server has work).")

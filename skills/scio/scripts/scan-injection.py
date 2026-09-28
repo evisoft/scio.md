@@ -187,7 +187,7 @@ ENCODING = [
     # a command line, not a sentence that starts with the name of a program ("Python was created…", "Bash is a shell"):
     # the word must be followed by something a shell would take — a flag, a path, a URL, a script, a quote, a pipe. An
     # article about a tool may show its command line; steering is the skill's own launcher and key
-    ("shell_command", re.compile(r"(?:^|`|:[ \t]+|\$[ \t]+|[;&|])[ \t]*(?:(?:curl|wget|bash|sh|python3?)\s+(?:[-/~.$\x22\x27<|(]|https?://|\S+\.[a-z]{2,4}(?:/|\s|$))|scio-as\s+[A-Za-z0-9_-]+\s+\S|export\s+SCIO_API_KEY)[^\n`]{0,120}", _IM),
+    ("shell_command", re.compile(r"(?:^|`|[:$](?=[ \t])|[;&|])[ \t]*(?:(?:curl|wget|bash|sh|python3?)\s+(?:[-/~.$\x22\x27<|(]|https?://|\S+\.[a-z]{2,4}(?:/|\s|$))|scio-as\s+[A-Za-z0-9_-]+\s+\S|export\s+SCIO_API_KEY)[^\n`]{0,120}", _IM),
      re.compile(r"\bscio-as\s+[A-Za-z0-9_-]+\s+\S|\bexport\s+SCIO_API_KEY\b"
                 # a download piped into an interpreter, or run from a substitution: the one-liner that runs whatever a
                 # server sends, whoever reads it. "running: python3 collatz.py" names a program; this is the payload.

@@ -172,8 +172,15 @@ def _names_last_marker(line, bid):
 
 
 def markers(text):
-    """The distinct claim ordinals the markers of a text name, ascending (MarkdownDialect.Markers)."""
-    return sorted({int(n) for n in _MARKER.findall(text)})
+    """The distinct claim ordinals the markers of a text name, ascending — outside code blocks and code spans, what a
+    reader renders (MarkdownDialect.Markers, platform 61a3e57)."""
+    ordinals, spans = set(), _CodeSpans()
+    for code, content, _, _ in _read_blocks(dl_lines(text)):
+        if code or not content.strip(_WS):
+            spans.end_paragraph()
+            continue
+        ordinals.update(int(n) for n in _MARKER.findall(spans.blank(content)))
+    return sorted(ordinals)
 
 
 # --- hidden text (MarkdownDialect.HasHiddenText): the same characters, no more — ZWNJ and ZWJ are text ------------------
@@ -1136,25 +1143,27 @@ def has_transclusion(body):
 def citing_lines(prose):
     """(line, ordinals, folded text) for every prose line that cites claims — outside code, tables, headings, callout titles
     and a demonstration's working (MarkdownDialect.CitingLines)."""
-    result, callout = [], None
+    result, callout, spans = [], None, _CodeSpans()
     blocks = _read_blocks(dl_lines(prose))
     tables = _table_roles(blocks)
     for i, (code, content, depth, _) in enumerate(blocks):
-        if code:
+        if code or not content.strip(_WS):   # before the callout reset, as the platform reads it: a blank line ends no callout
+            spans.end_paragraph()
             continue
+        rendered = spans.blank(content)   # a marker inside a code span cites nothing (platform 61a3e57)
         if depth == 0:
             callout = None
         if depth > 0:
-            head = _CALLOUT.match(content)
+            head = _CALLOUT.match(rendered)
             if head:
                 callout = head.group(1).lower()
                 continue
-        text = _after_container_markers(content)
+        text = _after_container_markers(rendered)
         if callout == "demonstration" or _HEADING.match(text) or tables[i] != _TABLE_NONE:
             continue
-        ordinals = markers(text)
+        ordinals = sorted({int(n) for n in _MARKER.findall(text)})
         if ordinals:
-            result.append((i + 1, ordinals, claim_text(text)))
+            result.append((i + 1, ordinals, claim_text(_after_container_markers(content))))
     return result
 
 
@@ -1381,9 +1390,16 @@ def _dialect_problem(kind, where, text):
 
 
 def _forbidden(url):
-    """ForbiddenSources.IsForbidden over the signed host list, plus the Wikimedia wiki pages the plugin keeps out too (P7)."""
+    """ForbiddenSources.IsForbidden over the signed host list, on the host's IDNA form as the platform reads it (Uri.IdnHost:
+    ｗｉｋｉｐｅｄｉａ。org is wikipedia.org), plus the Wikimedia wiki pages the plugin keeps out too (P7) — by host and path,
+    not by a mention in the query."""
     host = source_host(url)
-    return bool(host) and (any(host == f or host.endswith("." + f) for f in FORBIDDEN_HOSTS) or "wikimedia.org/wiki" in url.lower())
+    try:
+        host = host.encode("idna").decode("ascii").rstrip(".")
+    except UnicodeError:
+        pass
+    return bool(host) and (any(host == f or host.endswith("." + f) for f in FORBIDDEN_HOSTS)
+                           or ((host == "wikimedia.org" or host.endswith(".wikimedia.org")) and urlparse(url).path.lower().startswith("/wiki")))
 
 
 def _claim_texts(c):
@@ -1505,8 +1521,7 @@ def gate_zero(inp, claims, base=None, page_domain=None):
     marked = body if (body is not None and fm_error) else prose   # an unparsed front matter is read as prose, summary and all
     stray = sorted(set(markers(marked) + markers(added_fm)) - ordinals)
     if stray:
-        problems.append(f"gate 0 refuses no_claim_marker — markers without a claim: {stray[:8]} (code blocks included: never write a "
-                        "marker in an example)")
+        problems.append(f"gate 0 refuses no_claim_marker — markers without a claim: {stray[:8]}")
     used = set(markers(kept_lines(patch or "")) if body is None else markers(marked))
     if fm:
         used |= set(markers(fm["summary"]))
@@ -1823,19 +1838,23 @@ def source_host(url):
 
 def _prose_lines(prose):
     """(line, is a table row) for every line that holds sentences: outside code, headings, table headers, callout titles and
-    a demonstration's working — what the style rules and the one-sentence-per-line rule read."""
+    a demonstration's working — what the style rules and the one-sentence-per-line rule read. Code spans are blanked, as
+    the platform reads markers (61a3e57): an example's words and markers are not the line's."""
     blocks = _read_blocks(dl_lines(prose))
-    tables, callout, out = _table_roles(blocks), None, []
+    tables, callout, out, spans = _table_roles(blocks), None, [], _CodeSpans()
     for i, (code, content, depth, _) in enumerate(blocks):
+        if code or not content.strip(_WS):
+            spans.end_paragraph()
         if code:
             continue
         if depth == 0:
             callout = None
-        head = _CALLOUT.match(content) if depth > 0 else None
+        rendered = spans.blank(content)
+        head = _CALLOUT.match(rendered) if depth > 0 else None
         if head:
             callout = head.group(1).lower()
             continue
-        text = _after_container_markers(content)
+        text = _after_container_markers(rendered)
         if callout == "demonstration" or _HEADING.match(text) or tables[i] in (_TABLE_HEADER, _TABLE_DELIMITER):
             continue
         out.append((text, tables[i] == _TABLE_ROW))
@@ -1868,47 +1887,47 @@ def check(inp, base=None, page_domain=None):
     for i, c in enumerate(claims):
         if isinstance(c.get("ordinal"), int):
             if c["ordinal"] in by_ordinal:
-                problems.append(f"claim {i}: ordinal {c['ordinal']} is used twice — every claim its own number (markdown.md §2)")
+                problems.append(f"claims[{i}]: ordinal {c['ordinal']} is used twice — every claim its own number (markdown.md §2)")
             by_ordinal[c["ordinal"]] = c
         elif "ordinal" in c:
-            problems.append(f"claim {i}: ordinal must be an integer ≥ 1 (claim.schema.json)")
+            problems.append(f"claims[{i}]: ordinal must be an integer ≥ 1 (claim.schema.json)")
         else:
-            problems.append(f"claim {i}: missing ordinal")
+            problems.append(f"claims[{i}]: missing ordinal")
         kind = c.get("kind", "sourced")
         if kind not in CLAIM_KINDS:
-            problems.append(f"claim {i}: kind must be sourced or demonstrated, not {kind!r} (claim.schema.json)")
+            problems.append(f"claims[{i}]: kind must be sourced or demonstrated, not {kind!r} (claim.schema.json)")
         unknown = sorted(set(c) - CLAIM_PROPS)
         if unknown:
-            problems.append(f"claim {i}: unknown propert{'y' if len(unknown) == 1 else 'ies'} {', '.join(unknown)} (claim.schema.json allows no extra properties)")
+            problems.append(f"claims[{i}]: unknown propert{'y' if len(unknown) == 1 else 'ies'} {', '.join(unknown)} (claim.schema.json allows no extra properties)")
         if kind == "demonstrated":
             d = c.get("demonstration") if isinstance(c.get("demonstration"), dict) else {}
             methods = set(_SCHEMA["properties"]["demonstration"]["properties"]["method"]["enum"])
             if d and d.get("method") not in methods:
-                problems.append(f"claim {i}: demonstration.method must be one of {', '.join(sorted(methods))} (claim.schema.json)")
+                problems.append(f"claims[{i}]: demonstration.method must be one of {', '.join(sorted(methods))} (claim.schema.json)")
             extra = sorted(set(d) - set(_SCHEMA["properties"]["demonstration"]["properties"]))
             if extra:
-                problems.append(f"claim {i}: demonstration has unknown propert{'y' if len(extra) == 1 else 'ies'} {', '.join(extra)} (claim.schema.json)")
+                problems.append(f"claims[{i}]: demonstration has unknown propert{'y' if len(extra) == 1 else 'ies'} {', '.join(extra)} (claim.schema.json)")
             if d.get("method") in ("proof_assistant", "program") and not (d.get("checker") and d.get("output")):
-                problems.append(f"claim {i}: a {d.get('method')} demonstration needs checker and output (C10)")
+                problems.append(f"claims[{i}]: a {d.get('method')} demonstration needs checker and output (C10)")
             if d.get("method") in ("proof", "calculation") and len(d.get("text") or "") < 40:
-                problems.append(f"claim {i}: the demonstration text is too short to re-derive (C10)")
+                problems.append(f"claims[{i}]: the demonstration text is too short to re-derive (C10)")
             for j, p in enumerate(c.get("premises") if isinstance(c.get("premises"), list) else []):
                 extra = sorted(set(p) - set(_SCHEMA["properties"]["premises"]["items"]["properties"])) if isinstance(p, dict) else []
                 if extra:
-                    problems.append(f"claim {i}: premise {j} has unknown propert{'y' if len(extra) == 1 else 'ies'} {', '.join(extra)} (claim.schema.json)")
+                    problems.append(f"claims[{i}]: premise {j} has unknown propert{'y' if len(extra) == 1 else 'ies'} {', '.join(extra)} (claim.schema.json)")
             if doc_sensitive:
-                warnings.append(f"claim {i}: demonstrated claim in a sensitive domain — observations there are sourced, not derived (C10, Part V)")
+                warnings.append(f"claims[{i}]: demonstrated claim in a sensitive domain — observations there are sourced, not derived (C10, Part V)")
             continue
         if c.get("second_source_url") and c.get("source_url") and \
            re.sub(r"^www\.", "", source_host(str(c["second_source_url"]))) == re.sub(r"^www\.", "", source_host(str(c["source_url"]))):
-            warnings.append(f"claim {i}: both sources are on the same host — are they independent (S3)?")
+            warnings.append(f"claims[{i}]: both sources are on the same host — are they independent (S3)?")
         q, t = (c.get("quote") or ""), (c.get("text") or "")
         if q and t:
             nums = [n.rstrip(".,") for n in re.findall(r"\d[\d,.]*", t)]
             missing_nums = [n for n in nums if n not in q]
             if missing_nums:  # report a measurement before a year: that is where precision drifts
                 worst = sorted(missing_nums, key=lambda n: bool(re.fullmatch(r"(19|20)\d{2}", n)))[0]
-                warnings.append(f"claim {i}: number {worst} in the sentence is not in the quote — check precision (C1, C4)")
+                warnings.append(f"claims[{i}]: number {worst} in the sentence is not in the quote — check precision (C1, C4)")
 
     # --- what the platform refuses: admission, then gate 0 ------------------------------------------------------------------
     problems.extend(admission(inp, claims))
@@ -1946,6 +1965,8 @@ def check(inp, base=None, page_domain=None):
     pair_verdicts, url_verdicts = read_verdicts()
     unverified, spans = [], 0
     for i, c in enumerate(claims):
+        # named by its marker, the sentence the agent must fix; by its place when the ordinal is unusable
+        name = f"[^c{c['ordinal']}]" if type(c.get("ordinal")) is int and c["ordinal"] >= 1 else f"claims[{i}]"
         cited = [("", c.get("source_url"), c.get("quote")), ("second ", c.get("second_source_url"), c.get("second_quote"))]
         cited += [("premise's ", p.get("source_url"), p.get("quote")) for p in (c.get("premises") if isinstance(c.get("premises"), list) else []) if isinstance(p, dict)]
         for which, u, q in cited:   # gate 2 retrieves all three kinds of span
@@ -1955,27 +1976,27 @@ def check(inp, base=None, page_domain=None):
             url_id, pair_id = source_ids(u, q)
             about_source, about_quote = url_verdicts.get(url_id), pair_verdicts.get(pair_id)
             if about_source and about_source["status"] in ("dead", "likely_fabricated", "forbidden_source"):
-                problems.append(f"claim {i}: scio_verify_source found the {which}source '{about_source['status']}' — gate 1 refuses it; re-source the sentence "
+                problems.append(f"{name}: scio_verify_source found the {which}source '{about_source['status']}' — gate 1 refuses it; re-source the sentence "
                                 "(never with an archived_url: that is Scio's own copy, a forbidden source; maintain.md)")
             elif about_source and about_source.get("reliability") in ("blacklisted", "deprecated"):
-                problems.append(f"claim {i}: scio_verify_source rates the {which}source '{about_source['reliability']}' — gate 4 refuses it (source_blacklisted); use another source")
+                problems.append(f"{name}: scio_verify_source rates the {which}source '{about_source['reliability']}' — gate 4 refuses it (source_blacklisted); use another source")
             elif about_quote and about_quote.get("quote_found") is None and about_quote["status"] == "live":
                 # a verdict for a pair is recorded only when a quote was given: live, a quote, and no answer about it means
                 # the platform extracted no text from the page (VerifySource scores against ExtractedText, or not at all)
-                problems.append(f"claim {i}: scio_verify_source could extract no text from the {which}source (a PDF or another binary format?) — gate 1 refuses it "
+                problems.append(f"{name}: scio_verify_source could extract no text from the {which}source (a PDF or another binary format?) — gate 1 refuses it "
                                 "(unsupported_source_format); cite a page that carries the same words as text")
             elif about_quote and about_quote.get("quote_found") is False:
                 score = f" (match {about_quote['match_score']})" if about_quote.get("match_score") is not None else ""
-                problems.append(f"claim {i}: scio_verify_source did not find the {which}quote in its source{score} — gate 2 refuses it (quote_not_found); "
+                problems.append(f"{name}: scio_verify_source did not find the {which}quote in its source{score} — gate 2 refuses it (quote_not_found); "
                                 "quote the source's exact words and verify again")
             elif not about_quote or about_quote.get("quote_found") is not True:
-                unverified.append(i)
+                unverified.append(name)
             elif about_source and about_source.get("reliability") == "generally_unreliable":
-                warnings.append(f"claim {i}: the {which}source is rated generally_unreliable — unfit for a lone claim (write.md step 3)")
+                warnings.append(f"{name}: the {which}source is rated generally_unreliable — unfit for a lone claim (write.md step 3)")
     if unverified:
-        which = sorted(set(unverified))
+        which = list(dict.fromkeys(unverified))
         warnings.insert(0, f"{len(unverified)} of {spans} source/quote pairs have no scio_verify_source verdict from the last 7 days in this workspace "
-                           f"(claims {', '.join(map(str, which[:10]))}{'…' if len(which) > 10 else ''}): the gates fetch every one, and a single quote they cannot find "
+                           f"({', '.join(which[:10])}{'…' if len(which) > 10 else ''}): the gates fetch every one, and a single quote they cannot find "
                            "fails the proposal and spends the quota unit — verify each pair first, with the quote (write.md step 3)")
 
     # --- the dialect's own conventions and the constitution's style, on the lines that hold sentences ---------------------------

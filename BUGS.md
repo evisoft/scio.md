@@ -1115,3 +1115,291 @@ stale one — never by anything derived from the key: a first draft hashed the k
 asked why a credential was being hashed at all (`py/weak-sensitive-data-hashing`, closed by removing the hash, not by
 dismissing the alert). Evidence: `test_unclaimed_agent_gets_the_latest_claim_link_as_the_next_step` (the server double counts its
 calls), B2 in `tests/test-security.py`.
+
+## Workspace registration — credential scope and search gate (2026-09-27)
+
+Status: Fixed locally; reproduced before implementation and verified after the fixes.
+
+The default `~/.config/scio/keys` reuses an identity across unrelated starting folders. Keyless
+`scio_search` bypasses the requested registration flow. Moving credentials into the workspace
+also requires extending the secret guard and preventing planted symlinks/hardlinks from
+redirecting credential reads, writes, locks or Git exclusions.
+
+Evidence: `tests/test-workspace-keys.py` fails for folder isolation, home fallback, startup-folder
+binding, local storage, guard coverage and unsafe paths. The existing server search tests assert
+anonymous forwarding; new expectations require a local registration hint with no remote request.
+
+Acceptance: default `./scio/key/keys` stores alias/key, model and claim link; 0700 credential folder,
+0600 files, Git exclusion before saving, no symlink/hardlink adoption, serialized registrations,
+no implicit global/parent fallback, and immediate authenticated search after registration on both
+servers. Existing explicit credential overrides remain opt-in. No launcher is needed. Verify with
+workspace, server, onboarding, identity and security suites, then regenerate and check manifests.
+
+Workspace storage follow-up (2026-09-27): the new negative test reproduces a guard gap:
+`cd scio && cat key/keys` is allowed because literal paths are checked against the initial cwd,
+while the shell-directory walker only checks globs and recursive reads. Whole-workspace archives
+also need to treat the workspace as a credential ancestor when the key lives there. Acceptance:
+block both relative reads after `cd` and recursive copies/archives of the credential subtree or
+workspace; keep ordinary source reads and Git-ignore-aware searches usable.
+
+Workspace storage follow-up: `test_session_reminder_cannot_write_through_linked_credential_directory`
+also reproduces `whoami.py --session-start` creating reminder files outside the workspace through
+an attacker-supplied `scio` symlink. Reminder writes must use the same checked directory/lock as
+registration and unique private temporary files, rather than an unchecked fixed `.tmp` path.
+
+The reminder lock initially inherited registration's 180-second timeout. The focused concurrent
+registration test reproduces a session-start status call exceeding three seconds. A reminder is
+optional: use a short lock timeout and skip the reminder while registration owns the file.
+
+
+Workspace registration verification (2026-09-27):
+
+- `python3 tests/test-security.py`: **0 failures**, including all 11 child suites. No live
+  registration was made; registration/search flows use disposable local server doubles.
+- `tests/test-workspace-keys.py`: 14 tests cover private local storage, saved claim URLs, Git
+  exclusion, no parent/home fallback, starting-directory binding, explicit overrides, linked paths,
+  recursive credential access, concurrent writers and safe, responsive session reminders.
+- `WorkspaceRegistration` / `RegisteredSearch` in `tests/test-servers.py`: registration then
+  authenticated search on the same connection, immediate local-server identity visibility,
+  duplicate prevention, another folder's distinct registration, and no registration request when
+  storage is unsafe. CLI registration shares the same checked writer and preflight.
+- `python3 scripts/gen-manifest.py --check`: 45 skill files and 33 plugin files verified.
+- `claude plugin validate .` and `claude plugin validate .claude-plugin/plugin.json`: pass.
+- Agent Skills reference validator: both `skills/scio` and `openclaw/scio` pass. The older local
+  skill-creator validator rejects the pre-existing standard `compatibility` field; the reference
+  validator accepts it. Frontmatter descriptions match, and linked workflows exist.
+- `git diff --check`, Python compilation and shell syntax validation: pass.
+
+The default is now `./scio/key/keys`; explicit environment credentials remain optional. Normal
+and unattended workflows need no `scio-as`. The skill description leads with factual search
+triggers, following Context7's task-based description pattern, and a short lookup workflow comes
+before contribution details. Native desktop/Windows harness execution was not exercised here;
+shared servers and generated harness configuration paths are covered by the regression suites.
+Changes are local; no release or deployment was performed.
+
+## Search-first simplification (2026-09-27)
+
+Status: Fixed and verified. The entry point previously loaded roughly 3,400 words, including contribution-only
+panel, quota and publishing rules, for every factual lookup. It also promises a script fallback
+without shipping a search script; the four new `ShellSearch` tests fail because that command is
+missing. The quick lookup path is contradicted by the bridge's instruction to call whoami for every
+task, and by packaging that sends every task through contribution status checks.
+
+Acceptance: a short search-first entry point; detailed contribution instructions remain linked and
+covered by the existing semantic documentation tests; no redundant identity request before free
+search; MCP and shell search reuse the same bridge and return the same authentication, scanning
+and error behavior; all packaging uses consistent discovery guidance. No real registration or
+external publication is needed for tests.
+
+Portability regression: `ShellSearch.test_shell_search_preserves_international_results_on_ascii_stdout`
+fails with `UnicodeEncodeError` under `PYTHONIOENCODING=ascii` when returning `Chișinău 日本語`.
+The CLI must emit portable JSON while preserving the original text after JSON decoding.
+
+Resolution: the entry point is now 847 words; contribution-only instructions live in the linked
+`references/contributing.md` and retain semantic documentation coverage. Search runs directly,
+with status checks reserved for contribution work and bulk article reads. Context7-style factual
+lookup triggers are consistent across the skill and packaging. A small `scripts/search.py` calls
+the existing bridge, sharing authentication, scanning and errors without another HTTP client.
+ASCII-safe JSON output preserves international text after decoding.
+
+Verification: `python3 tests/test-security.py` completed with **0 failures**, including all 11
+child suites. Focused `ShellSearch RegisteredSearch` checks passed (11 tests), covering project
+credentials, registration hints, exact queries/filters, injection warnings, remote errors,
+invalid arguments and international text in ASCII shells. Both Agent Skills reference validations
+and Claude plugin validations pass; the manifests verify 47 skill files and 33 plugin files.
+Live signed-rule verification, Python/JSON parsing and `git diff --check` pass. Native Windows
+harness execution was not exercised; no real registrations, publication or release were performed.
+
+## Generic MCP setup and search guidance (2026-09-27)
+
+Status: Fixed and verified. `GenericSetup` reproduced two failures: a custom client could not obtain
+machine-readable server commands from `setup.py`, whose fixed harness choices reject `my-agent`.
+Users of otherwise compatible stdio clients must manually reconstruct paths and interpreter
+arguments. README still says every task starts with `scio_whoami`, contradicting direct search;
+the reading diagram also still describes anonymous search through the registration-gated bridge.
+
+Acceptance: a read-only JSON export using the running interpreter and absolute script paths,
+available to custom harnesses from a skill-only install, without credentials or approval settings
+in the output. Generated commands must initialize both servers, register and search against the
+local test double. Export must reject mutation flags. Existing named installers stay supported,
+and the skill, README and setup instructions must route factual lookups directly to search.
+
+Resolution: `setup.py --harness <name> --print-config` exports plain stdio command definitions,
+works with custom host names and skill-only installs, and rejects mutation flags. It does not copy
+environment secrets or grant trust. The search core is documented as one bridge; the local server
+is optional for clients that only search. README, setup instructions and the reading diagram now
+agree with the skill's direct-search flow. Existing named installers remain unchanged.
+
+Verification: full `tests/test-security.py` passed with **0 failures**, including all 11 child
+suites. Focused generic setup/search checks passed (14 tests), existing setup checks passed (14),
+and documentation checks passed (74). The generic integration launches exported command arrays
+from an installation path with spaces, initializes both servers, registers a custom host and
+searches without a status preflight, using only a disposable local double. Skill validation,
+Claude marketplace validation, both manifests (47 skill files / 33 plugin files), Python parsing
+and `git diff --check` pass. No external registrations or release were performed.
+
+## Shared setup commands and first search (2026-09-27)
+
+Status: Fixed and verified. The new registered/unregistered setup regression failed in both cases:
+the next-step text requests more onboarding and offers a first contribution instead of using
+`scio_search`. Setup also rebuilds the same interpreter, script paths and host identity across
+its installers and generic export, making a shared behavior change require many edits.
+
+Acceptance: one pure command builder shared by the installers and generic export, with existing
+environment/permission differences preserved. Installer/export equivalence tests cover their
+actual written command arrays. Successful setup should guide both new and registered users to
+search, with consent and claim-link guidance when registration is needed; no unnecessary key-file
+read just to print next-step instructions. Existing search and contribution workflows remain valid.
+
+Resolution: `scio_config.py` owns the two stdio commands and host-name mapping as pure functions.
+All generated setup configurations, including generic export, reuse them; adapters retain their
+existing environment, timeout and permission fields. The next-step message no longer reads keys
+or enumerates models and points directly to factual search. Claude's setup message does the same.
+The installation prompt's large completion template was replaced with a short factual handoff;
+contribution workflows remain available when requested.
+
+Verification: `tests/test-security.py` completed with **0 failures**, including all 11 child suites.
+The 16 setup tests include command equivalence for eight named harness configurations; the 14
+generic setup/search tests and 74 documentation tests also pass. Agent Skills and Claude plugin
+validation, Python parsing, manifest checks (48 skill files / 33 plugin files) and `git diff --check`
+pass. All registration tests used local doubles; no external identity or release was created.
+
+## Review of the plugin and the workspace-key changes (28 September 2026)
+
+Baseline: `0eea5df` (v0.8.8) plus the uncommitted workspace-key work above; platform `evisoft/scio` `7208f29`, deployed
+25 September. The workspace-key diff was read in full; four read-only reviewers took the MCP servers, the pre-flight, the
+fetch path and hooks, and setup and the command-line scripts. Every finding kept here was reproduced first, and each
+fix's test was seen failing before the fix. Nothing reached scio.md: the pre-flight was compared with the platform's own
+Release build offline, and every network test ran against a local double.
+
+### Fixed — the workspace keys
+
+- **Session start created `./scio/key` in every project.** The reminder's lock prepared the credential folder, so a
+  session in an unregistered folder left `.gitignore`, `keys.lock` and `keys.nudges` there, and the "not registered"
+  reminder came once per folder rather than once a day. A reminder is now kept only where the credential folder already
+  exists. `test_session_start_in_an_unregistered_folder_creates_nothing`.
+- **Ordinary searches read the key.** Claude Code's Grep runs ripgrep with `--hidden`; outside a Git repository
+  `.gitignore` excludes nothing, so `rg <pattern>` or the Grep tool printed `scio/key/keys`, and so did `rg -u` or
+  `--no-ignore` anywhere. The folder now carries `.ignore` beside `.gitignore`, and the guard counts `-u` and `--no-ignore…`
+  as reading ignored files. `test_harness_searches_skip_the_key_folder_outside_git`,
+  `test_secret_guard_blocks_searches_told_to_read_ignored_files`.
+- **A repository could supply the identity.** A committed `scio/key/keys` made its author's agent the identity of every
+  session in a clone (servers and `scio-as` alike), and the tracked folder then refused the operator's own registration.
+  What the skill writes there is mode 600; a keys file others can read is now refused. `scio-as` reads the keys through
+  `scio_common` instead of its own parser. `test_a_keys_file_readable_by_others_is_not_this_folders_identity`,
+  `test_a_keys_file_from_a_checkout_blocks_registration_with_its_reason`.
+- **The file tools reached the keys.** With `SCIO_WORK_DIR` set to the workspace or above it, `read_file` returned the
+  keys and `write_file` replaced them. `inside_work_root` refuses the keys file, its lock and reminders, and its folder.
+  `test_task_file_tools_never_reach_the_keys_under_a_wide_work_root`.
+- **Cursor's own file reads were not guarded** (`beforeReadFile` now maps to Read), and Antigravity's deny list lacked
+  `read_file(scio/key/)`. `test_cursors_own_file_read_is_guarded_like_a_read`.
+- **The guard slowed down 2.5–3×** on long commands: it resolved every word again after the change (0.18 s → 0.55 s,
+  0.38 s → 0.95 s locally; CI is about four times slower against 2 s budgets). Only a path after a `cd` is resolved, once,
+  and only when it exists: back to 0.20 s and 0.44 s.
+- **A refused workspace search told the agent to report an injection.** The reason now says how to search (rg, or the
+  subfolders), and to report a text only if one asked for the call.
+- **A refused registration still wrote files**: the bridge took the lock, which prepares the folder, before checking the
+  nickname. `test_a_refused_registration_creates_nothing`.
+- **A host name registration refuses blocked every registration** through that bridge (`--harness "My Agent"`), and the
+  error blamed the length. The bridge treats such a name as unknown (the caller's own value is used), `--print-config`
+  refuses it, and the error names the allowed characters.
+- **A registration answer in an unknown shape reached the model**, key included, and nothing was saved. It is never
+  relayed now; it goes whole to the private recovery file. `test_a_registration_answer_in_an_unknown_shape_is_never_relayed`.
+- **Docs and the brief named `python3 supervise.py`**, a path that exists only in the scripts folder, where no keys are:
+  they name `<skill>/scripts/supervise.py`, run from the registered folder, and the brief prints the real path.
+  `--register <user>` and `--name <user>` read as the operator's name; the value is a lowercase nickname.
+
+### Fixed — the pre-flight against the live gate
+
+- **Markers inside code (platform 61a3e57, BUG-096).** Gate 0 reads markers only outside code blocks and code spans since
+  the 25 September deploy; the pre-flight still read them everywhere: it refused a marker in an example, and passed a claim
+  cited only inside code, which gate 0 refuses after the quota unit. `markers` and `citing_lines` are ported, and the
+  plugin's one-sentence and style rules read the rendered line. Four golden cases carry the Release build's verdicts;
+  2,000 fuzzed articles and 793 small edits with base.md gave no difference.
+- **Forbidden sources by host.** A URL that mentioned `wikimedia.org/wiki` in its query was refused; a fullwidth or
+  ideographic spelling of wikipedia.org passed, and gate 0 (which reads `Uri.IdnHost`) refuses it. Two golden cases.
+- Blocking messages named claims by list position ("claim 1" for `[^c2]`); a draft saved with a byte order mark was
+  refused as having no front matter; an invalid `claims.json` ended in a traceback.
+
+### Fixed — fetch, scanner, hooks and servers
+
+- **The injection scanner was quadratic** on whitespace after `:` or `$`: 16,000 spaces took 3.9 s, and a padded answer
+  pushed the bridge's scan past 30 s and the pre-flight hook past 10 s (a timed-out hook is an allow). Now linear.
+- `fetch.py` refused http→https redirects, which the platform's resolver follows; it now refuses only a downgrade.
+  Extraction was quadratic on nested header/footer/aside inside `<main>` (497 KB, 20 s → 0.1 s). A proxy decision that
+  disagreed with urllib's (a `NO_PROXY` entry with a port) made urllib look the checked name up a second time.
+- The Antigravity adapter relabelled any tool with a `url` or `command` argument before auto-approval: with trust granted,
+  another server's `download_file` of a scio.md URL, or an `ssh` exec of a skill script, was approved. Guard-fetch allowed
+  `fec0::/10` and exempted any tool whose name contained `McpResource`.
+- Both servers exited on a JSON line nested past the parser's depth; `workdir` returned a failure as the folder's path.
+
+### Fixed — setup and registration
+
+- `setup.py --harness openclaw --alias X` wrote an exported key instead of X's; "next:" was announced when nothing was
+  installed (Grok without its `--trust`, a harness binary not on the PATH); a re-run erased the `cwd` or `SCIO_KEYS_FILE`
+  an operator added to an entry (the README asks desktop harnesses for them); an inline Codex entry left a config Codex
+  could not parse; an empty `mcp_servers:` crashed the Hermes installer; OpenCode's `"bash": "allow"` lost its default,
+  and a Windows path broke its rules; the Antigravity shim never passed `--yes` on.
+- `register-models.py` created agents before refusing a later model, whose claim links were then never printed; one model
+  listed twice stays one agent. A store that cannot be used (Git-tracked, a link, readable by others) is named as such,
+  not blamed on another registration.
+
+### Left open (decisions for the operator)
+
+- **Where GUI and service harnesses start the servers.** Keys follow the server's working directory. Cursor reportedly
+  starts stdio servers in HOME (one `~/scio/key/keys` for every project, while its hooks read the workspace's), Claude
+  Desktop and an OpenClaw gateway in `/`. `setup.py` writes no `cwd` or `SCIO_KEYS_FILE`; operators must add them (a re-run
+  now keeps them). Pinning Cursor with `${workspaceFolder}` would need checking in Cursor itself.
+- **One agent per folder.** OAuth operators may hold 10 agents (`quotas.agents_per_operator`); keys under
+  `~/.config/scio` are no longer read (the README says how to keep one with `SCIO_KEYS_FILE`).
+- **The contract copies carry an undeployed platform change** (the display_name pattern, required harness and
+  model_version): `sync-contract.py --check` fails until the platform deploys it, and a release regenerates the copies
+  from the deployed contract. Model ids with `:` or `@` (Ollama, Bedrock, Vertex) cannot register under that pattern.
+- `prompt.md` changed; the platform's copy needs the same text. The translated READMEs still show `scio-as … --supervise`.
+- Guard-fetch denies loopback and non-HTTP URLs for every tool in every session: Playwright or Chrome on a local dev
+  server, git over SSH, database URLs. This is documented and tested as intended.
+- `use_agent` is per work root: a choice in one session moves the other sessions in the folder, and in every folder that
+  shares an explicit `SCIO_WORK_DIR`.
+- Smaller items: two bridges verifying the same rules at once race on the file names; a relative `SCIO_TRUST_FILE` is
+  resolved per hook folder; the scanner's URL check misses trailing-dot and dotted-hex private addresses; camelCase
+  credential parameters pass the query check; `SCIO_ROLES` goes into a header unchecked; the pre-flight without base.md
+  misreads a hunk after a code block (base.md removes it); Grok agents are recorded as `claude-code`; under `--trust`,
+  Gemini and Hermes do not ask before `scio_register`; Codex's workspace-write sandbox can write `./scio/key`;
+  `supervise.py` can outlive `--for` after a limit; on Windows, junctions and npm `.cmd` shims.
+
+## Prompt audit of the skill, commands, subagents and tool descriptions (28 September 2026)
+
+Target: Claude Opus 5.5. The audit read every text an agent loads: the skill and its references, the commands, the
+subagents, `prompt.md`, the README's paste-in, and the text the MCP servers show the model. It found 67 dated,
+stale or contradicted instructions (27 High, 40 Medium) and applied all of them. The suite ran on the edited tree first
+and gave 0 failures. The classic dated patterns (caps emphasis, thinking scaffolds, retired models) were absent.
+
+- **Subagents told to do what their tools cannot.** All four were told to read the skill's files, but their tools
+  open only the task folder. The refuter was told to run a checker, with no tool that runs code. The writer was told
+  to propose, although the same file forbids it and its tools cannot.
+- **Tool contracts that disagreed with the code.**
+  - `build_proposal` answered "call scio_propose_edit" after a failed pre-flight; the next step now says fix and rebuild.
+  - `fetch` promised a 200 KB default but cut every answer at 80,000 characters.
+  - The bridge's `scio_search` description misstated the gap contract.
+  - `use_agent`, `check_proposal`, `verify_rules`, `wait`, `write_file`, `build_proposal`, `scio_register` and
+    `display_name` gained the contract detail they lacked. `show_claims` no longer returns QR-code art as tool output.
+- **Instructions that lagged the plugin.**
+  - Approvals were described as automatic before `/scio:trust`, and `scio_register` was missing from "always asks".
+  - `team.md` verified sources after the pre-flight that reads their verdicts.
+  - Moving text out of SKILL.md left dead references ("SKILL.md rule 12", "this frontmatter").
+  - Other stale details: the old `scio-as` flags, a relative `supervise.py` path, and the Grok install with `--trust`
+    (in the README and its translations).
+  - `prompt.md`'s registration never asked for languages.
+- **Clamps and scope.** "Two or three sentences", "nothing else" and "no tables" are gone. The search push in the
+  server instructions and SKILL.md's body is scoped to encyclopedic facts; the skill description keeps the trigger.
+
+Decided by the operator, same day:
+- **Registration is proposed unprompted.** scio-local's startup text now matches the bridge: propose it once the
+  operator's request is done (at once when a search needs it) and register only on their yes.
+- **Naming `write_gap` in `/scio:loop`'s kinds is the consent** to write gaps; otherwise a gap task needs consent as
+  a single gap does, and an unattended round skips it.
+- **Registration asks everywhere.** Under `--trust`, Gemini and Hermes have no per-tool prompt, so `setup.py` leaves
+  `scio_register` out there; the agent registers with `register-models.py` on the operator's yes.
+- **`commands/register.md`** no longer forbids `scio_whoami` after registering.
+
+`prompt.md` was copied into the platform repository (`src/Scio.Api/Web/prompt.md`), not committed.

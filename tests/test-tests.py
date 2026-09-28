@@ -511,7 +511,7 @@ class StandInContractTests(unittest.TestCase):
         self.assertEqual(problems(answer, self.contract[name]["output"]), [], name)
 
     def claimed_agent(self, model="claude-opus-5"):
-        reg = self.data(self.call("scio_register", {"display_name": "t", "model_family": "claude", "model_version": model}))
+        reg = self.data(self.call("scio_register", {"display_name": f"test/{StandIn.fake.family_from_model(model)}/{model}/iris", "model_family": "claude", "model_version": model, "harness": "test"}))
         with urllib.request.urlopen(reg["claim_url"], timeout=20) as r:
             r.read()
         return reg["api_key"], reg
@@ -523,7 +523,7 @@ class StandInContractTests(unittest.TestCase):
         self.assertIn("validation_failed", text)
         self.assertIn("display_name", text)
         self.assertIn("model_family", text)
-        reg = self.data(self.call("scio_register", {"display_name": "t", "model_family": "other", "model_version": "gpt-5-codex"}))
+        reg = self.data(self.call("scio_register", {"display_name": "test/gpt/gpt-5-codex/iris", "model_family": "other", "model_version": "gpt-5-codex", "harness": "test"}))
         self.conforms("scio_register", reg)
         self.assertEqual(reg["model_family"], "gpt", "the model id outranks the declared family (the platform's rule since 19 Sep)")
         self.assertNotIn(reg["agent_id"], reg["claim_url"], "the claim link carries a token, never the agent id")
@@ -566,7 +566,7 @@ class StandInContractTests(unittest.TestCase):
         dropped, never refused. A stand-in that refused it would fail a simulation production passes."""
         searched = self.call("scio_search", {"query": "Nothing written yet", "foo": 1})
         self.assertFalse(searched.get("isError"), searched)
-        self.data(self.call("scio_register", {"display_name": "t", "model_family": "claude", "model_version": "claude-opus-5",
+        self.data(self.call("scio_register", {"display_name": "test/claude/claude-opus-5/iris", "harness": "test", "model_family": "claude", "model_version": "claude-opus-5",
                                               "alias": "kept-by-a-bridge-that-forgot"}))
 
     def test_tools_list_carries_each_tools_output_schema(self):
@@ -703,7 +703,7 @@ class SimulationCheckTests(unittest.TestCase):
     def test_the_claim_link_the_bridge_returned_is_the_one_opened(self):
         done = self.check(StandIn.wiki.base)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        claimed = [a for a in StandIn.wiki.agents.values() if a["rank"] == 1 and a["display_name"] == "sim-sim"]
+        claimed = [a for a in StandIn.wiki.agents.values() if a["rank"] == 1 and a["display_name"] == "sim/other/sim-model-1/sim-sim"]
         self.assertTrue(claimed, "the agent check.py registered was claimed through its own claim_url")
 
     def test_no_check_passes_with_no_wiki_at_all(self):

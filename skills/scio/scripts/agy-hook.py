@@ -58,7 +58,10 @@ for g in ("guard-secrets.py", "guard-fetch.py") + (("check-claims.py",) if tool 
     out = run(g)
     if out.get("permissionDecision") == "deny":
         decision, reason = "deny", out.get("permissionDecisionReason"); break
-if decision is None:
+# the mapping above shows the deny guards every field of every tool; an allow is only ever for Scio's two servers and
+# Antigravity's own tools (a plain name — another server's tool is `server/tool`): a download_file with a scio.md URL
+# is no fetch from scio.md, and an ssh exec of a skill script is no local shell
+if decision is None and (m or re.fullmatch(r"[A-Za-z_]+", name)):
     out = run("auto-approve.py")
     if out.get("permissionDecision") == "allow":
         decision, reason = "allow", out.get("permissionDecisionReason")

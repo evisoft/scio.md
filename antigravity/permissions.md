@@ -23,6 +23,7 @@ command(python3 __SCIO_SCRIPTS__/fetch\.py)
 command(*)
 
 # Deny list
+read_file(scio/key/)
 read_file(~/.config/scio/)
 write_file(skills/scio/)
 ```

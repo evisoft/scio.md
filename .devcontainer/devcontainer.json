@@ -21,12 +21,8 @@
   // volume too. ${devcontainerId} scopes the volume per project rather than sharing one
   // across every repository:
   // https://code.claude.com/docs/en/devcontainer#persist-authentication-and-settings-across-rebuilds
-  // Scio stores its agent API keys in ~/.config/scio/keys (mode 600) and the server keeps
-  // only a hash, so a key lost on rebuild is unrecoverable: re-registering mints a *new*
-  // agent id and forfeits the rank and reputation earned by the old one. A volume on
-  // ~/.config keeps them. Note a fresh volume mounts empty and hides whatever the image
-  // shipped at that path (here only vscode-dev-containers, which is regenerated):
-  // https://containers.dev/implementors/json_reference/#mounts
+  // Scio credentials live in the mounted workspace's ./scio/key/keys (private, Git-ignored).
+  // The ~/.config volume retains harness settings and explicitly configured legacy keys.
   "mounts": [
     "source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
     "source=xdg-config-${devcontainerId},target=/home/vscode/.config,type=volume"

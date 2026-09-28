@@ -424,20 +424,198 @@ class UseAgentAfterARegistration(ServersBase):
 
 
 # ------------------------------------------------------------------------------------ bridge-local-5, ident-13, e2e-14
-class AnonymousSearch(ServersBase):
-    """The contract gives scio_search `auth: optional`: the server answers it without a key (summaries, no gap)."""
+class GenericSetup(ServersBase):
+    """Custom MCP clients can consume setup output without installing a harness adapter."""
 
-    def test_a_keyless_search_reaches_the_server_without_a_key(self):
+    def export(self, *args, **env):
+        return subprocess.run([PY, str(self.SCRIPTS / "setup.py"), *args], cwd=self.ws,
+                              env=dict(self.env, **env), capture_output=True, text=True, timeout=30)
+
+    def test_export_is_json_only_and_does_not_copy_secrets_or_write_config(self):
+        before = set(self.base.rglob("*"))
+        result = self.export("--harness", "my-agent", "--print-config", SCIO_API_KEY="sk_live_DO_NOT_EXPORT")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(result.stdout)
+        self.assertEqual(set(config["mcpServers"]), {"scio", "scio-local"})
+        self.assertNotIn("sk_live", result.stdout + result.stderr)
+        self.assertEqual(set(self.base.rglob("*")), before)
+        self.assertEqual(self.wiki.seen, [])
+
+    def test_exported_commands_start_both_servers_and_search_from_a_skill_only_install(self):
+        # Spaces in the installation path must remain one argument, without shell quoting.
+        installed = self.base / "skill with spaces"
+        shutil.copytree(self.copy / "scio", installed, ignore=shutil.ignore_patterns("__pycache__"))
+        result = subprocess.run([PY, str(installed / "scripts/setup.py"), "--harness", "Research.Agent_2", "--print-config"],
+                                cwd=self.ws, env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(result.stdout)["mcpServers"]
+        for name, server in config.items():
+            messages = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]
+            if name == "scio":
+                messages.extend([call(3, "scio_register", {"display_name": "iris", "model_version": "gpt-test"}),
+                                 call(4, "scio_search", {"query": "astronomy"})])
+            run = subprocess.run([server["command"], *server["args"]],
+                                 input="".join(json.dumps(m) + "\n" for m in messages), cwd=self.ws,
+                                 env=dict(self.env, **server.get("env", {})), capture_output=True, text=True, timeout=30)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            replies = {r["id"]: r for line in run.stdout.splitlines() if "id" in (r := json.loads(line))}
+            self.assertIn("serverInfo", replies[1]["result"])
+            self.assertTrue(replies[2]["result"]["tools"])
+            if name == "scio":
+                self.assertFalse(replies[3]["result"].get("isError"), replies[3])
+                self.assertFalse(replies[4]["result"].get("isError"), replies[4])
+        self.assertEqual(self.wiki.calls("scio_register")[0]["args"]["harness"], "Research.Agent_2")
+        self.assertTrue(self.wiki.calls("scio_search")[0]["auth"].startswith("Bearer "))
+        self.assertEqual(self.wiki.calls("scio_whoami"), [])
+
+    def test_export_rejects_mutation_flags_and_unknown_install_targets(self):
+        for args in (("--harness", "my-agent"), ("--harness", "My Agent", "--print-config"),
+                     ("--harness", "my-agent", "--print-config", "--trust"),
+                     ("--harness", "my-agent", "--print-config", "--register", "iris", "--models", "agent=gpt-test")):
+            with self.subTest(args=args):
+                result = self.export(*args)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(self.wiki.seen, [])
+
+
+class ShellSearch(ServersBase):
+    """A harness with only a shell gets the same identity, search gate and scanner as MCP."""
+
+    def search(self, *args, **env):
+        return subprocess.run([PY, str(self.SCRIPTS / "search.py"), *args], cwd=self.ws,
+                              env=dict(self.env, **env), capture_output=True, text=True, timeout=30)
+
+    def test_unregistered_shell_search_proposes_registration_without_network(self):
+        result = self.search("history of astronomy")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertTrue(data["isError"])
+        self.assertIn("scio_register", json.dumps(data))
+        self.assertIn(str(self.SCRIPTS / "register.py"), json.dumps(data))   # a shell has no MCP tool: it is told its own way
+        self.assertEqual(self.wiki.calls(), [])
+
+    def test_shell_search_uses_project_key_and_preserves_query_and_filters(self):
+        self.env["SCIO_KEYS_FILE"] = ""
+        self.keys = self.ws / "scio/key/keys"
+        self.write_keys("demo=sk_live_SHELL_TEST_0123456789\n")
+        query = 'Chișinău "history" $(not-a-command)'
+        result = self.search(query, "--limit", "3", "--lang", "ro", "--state", "consensus")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(json.loads(result.stdout).get("isError"))
+        self.assertEqual(self.wiki.calls("scio_search")[-1], {
+            "method": "tools/call", "name": "scio_search", "auth": "Bearer sk_live_SHELL_TEST_0123456789",
+            "args": {"query": query, "limit": 3, "lang": "ro", "state": "consensus"}})
+        self.assertNotIn("sk_live", result.stdout + result.stderr)
+
+    def test_shell_search_preserves_bridge_injection_warnings(self):
+        self.write_keys("demo=sk_live_SHELL_TEST_0123456789\n")
+        self.wiki.override = lambda req: sse(req["id"], text_result(INJECTION))
+        result = self.search("test")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertGreater(len(data["content"]), 1)
+        self.assertEqual(data["content"][-1]["text"], INJECTION)
+
+    def test_shell_search_returns_failure_on_remote_error(self):
+        self.write_keys("demo=sk_live_SHELL_TEST_0123456789\n")
+        self.wiki.override = lambda req: sse(req["id"], error={"code": -32001, "message": "unavailable"})
+        result = self.search("test")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("unavailable", result.stdout)
+        self.assertNotIn("sk_live", result.stdout + result.stderr)
+
+    def test_invalid_shell_input_is_rejected_without_network(self):
+        for args in ((" ",), ("x" * 501,), ("test", "--limit", "0"), ("test", "--limit", "21")):
+            with self.subTest(args=args):
+                result = self.search(*args)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+        self.assertEqual(self.wiki.calls(), [])
+
+    def test_shell_search_preserves_international_results_on_ascii_stdout(self):
+        self.write_keys("demo=sk_live_SHELL_TEST_0123456789\n")
+        self.wiki.override = lambda req: sse(req["id"], text_result("Chișinău 日本語"))
+        result = self.search("history", PYTHONIOENCODING="ascii")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["content"][-1]["text"], "Chișinău 日本語")
+
+
+class WorkspaceRegistration(ServersBase):
+    def test_register_then_search_and_local_identity_without_restart_or_launcher(self):
+        bridge = self.live(self.BRIDGE, SCIO_KEYS_FILE="")
+        local = self.live(self.LOCAL, SCIO_KEYS_FILE="")
+        before = bridge.ask(call(1, "scio_search", {"query": "test"}))
+        self.assertTrue(before["result"]["isError"])
+        registered = bridge.ask(call(2, "scio_register", {"display_name": "amber", "model_version": "gpt-test", "harness": "test"}))
+        data = registered["result"]["structuredContent"]
+        self.assertIn("claim_url", data)
+        self.assertNotIn("api_key", data)
+        self.assertNotIn("sk_live", json.dumps(registered))
+        path = self.ws / "scio/key/keys"
+        self.assertIn(data["claim_url"], path.read_text())
+        self.assertFalse(bridge.ask(call(3, "scio_search", {"query": "test"}))["result"]["isError"])
+        self.assertTrue(self.wiki.calls("scio_search")[-1]["auth"].startswith("Bearer "))
+        listing = local.ask(call(4, "use_agent"))
+        self.assertIn("gpt-test", json.dumps(listing))
+        # Same folder reuses its registration, including after a fresh server start.
+        self.bridge([call(5, "scio_register", {"display_name": "amber", "model_version": "gpt-test", "harness": "test"})], SCIO_KEYS_FILE="")
+        self.assertEqual(self.wiki.registrations, 1)
+        # Another starting folder gets a distinct key and claim link for the same model.
+        other = self.base / "other-project"
+        other.mkdir()
+        out, _ = self.bridge([call(6, "scio_register", {"display_name": "amber", "model_version": "gpt-test", "harness": "test"})], cwd=other, SCIO_KEYS_FILE="")
+        self.assertFalse(out[0]["result"]["isError"], out)
+        self.assertEqual(self.wiki.registrations, 2)
+        self.assertNotEqual(path.read_text(), (other / "scio/key/keys").read_text())
+
+    @unittest.skipUnless(hasattr(os, "getuid"), "POSIX file modes")
+    def test_a_keys_file_from_a_checkout_blocks_registration_with_its_reason(self):
+        (self.ws / "scio/key").mkdir(parents=True)
+        (self.ws / "scio/key/keys").write_text("other=sk_live_PLANTED_0123456789\n")
+        os.chmod(self.ws / "scio/key/keys", 0o644)
+        out, _ = self.bridge([call(1, "scio_register", {"display_name": "amber", "model_version": "gpt-test", "harness": "test"})], SCIO_KEYS_FILE="")
+        self.assertTrue(out[0]["result"]["isError"])
+        self.assertIn("readable by others", out[0]["result"]["content"][0]["text"])
+        self.assertEqual(self.wiki.registrations, 0)
+
+    def test_a_refused_registration_creates_nothing(self):
+        out, _ = self.bridge([call(1, "scio_register", {"display_name": "Amber Fox", "model_version": "gpt-test", "harness": "test"})], SCIO_KEYS_FILE="")
+        self.assertTrue(out[0]["result"]["isError"])
+        self.assertEqual(self.wiki.registrations, 0)
+        self.assertFalse((self.ws / "scio").exists())
+
+    def test_unsafe_default_store_never_sends_registration(self):
+        outside = self.base / "outside"
+        outside.mkdir()
+        (self.ws / "scio").symlink_to(outside, target_is_directory=True)
+        out, _ = self.bridge([call(1, "scio_register", {"display_name": "amber", "model_version": "gpt-test", "harness": "test"})], SCIO_KEYS_FILE="")
+        self.assertTrue(out[0]["result"]["isError"])
+        self.assertEqual(self.wiki.registrations, 0)
+        self.assertEqual(list(outside.iterdir()), [])
+
+
+class RegisteredSearch(ServersBase):
+    """The plugin requires a local identity before search, even if the upstream accepts anonymous calls."""
+
+    def test_listed_status_tool_does_not_require_preflight_for_free_search(self):
+        out, _ = self.bridge([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}])
+        tools = {t["name"]: t for t in out[0]["result"]["tools"]}
+        self.assertNotIn("start of every task", tools["scio_whoami"]["description"])
+        self.assertIn("bulk article reads", tools["scio_whoami"]["description"])
+
+    def test_a_keyless_search_proposes_registration_without_contacting_server(self):
         out, _ = self.bridge([call(1, "scio_search", {"query": "consensus protocols"})])
-        self.assertFalse(out[0]["result"].get("isError"), out)
+        self.assertTrue(out[0]["result"].get("isError"), out)
+        self.assertIn("scio_register", out[0]["result"]["content"][0]["text"])
         searches = self.wiki.calls("scio_search")
-        self.assertEqual(len(searches), 1)
-        self.assertIsNone(searches[0]["auth"])
+        self.assertEqual(searches, [])
 
     def test_an_unknown_scio_agent_searches_without_anyone_elses_key(self):
         self.write_keys("other=sk_live_OTHER_KEY_0123456789\n")
         self.bridge([call(1, "scio_search", {"query": "x"})], SCIO_AGENT="typo")
-        self.assertEqual([s["auth"] for s in self.wiki.calls("scio_search")], [None])
+        self.assertEqual(self.wiki.calls("scio_search"), [])
 
     def test_a_search_with_a_key_still_carries_it(self):
         self.write_keys("t=sk_live_ANY_TEST_KEY_0123456789\n")
@@ -637,6 +815,22 @@ class RegistrationKeepsItsKey(ServersBase):
         self.assertNotIn("cannot be written", text)
         self.assertEqual(self.wiki.calls("scio_register"), [])
 
+    def test_a_registration_answer_in_an_unknown_shape_is_never_relayed(self):
+        # a key the bridge cannot find is a key it cannot keep out of the model's context: none of the answer is shown
+        def nested(req):
+            if (req.get("params") or {}).get("name") != "scio_register":
+                return None
+            data = {"agent": {"agent_id": "ag_00000000000000bb", "api_key": "sk_live_NESTED_0123456789"}}
+            return sse(req["id"], {**text_result(json.dumps(data)), "structuredContent": data})
+        self.wiki.override = nested
+        out, r = self.bridge([call(1, "scio_register", self.ARGS)])
+        self.assertTrue(out[0]["result"]["isError"])
+        self.assertNotIn("sk_live_NESTED", r.stdout + r.stderr)
+        text = out[0]["result"]["content"][0]["text"]
+        recovery = [w.strip(".,;:()'\"`") for w in text.split() if "recover" in w and os.sep in w]
+        self.assertTrue(recovery, text)
+        self.assertIn("sk_live_NESTED_0123456789", Path(recovery[0]).read_text())
+
     def test_a_key_that_cannot_be_saved_after_registering_goes_to_a_private_recovery_file(self):
         def odd(req):
             if (req.get("params") or {}).get("name") != "scio_register":
@@ -657,6 +851,35 @@ class RegistrationKeepsItsKey(ServersBase):
 
 
 # ------------------------------------------------------------------------------------ ident-8: Python 3.8
+class UnregisteredStanding(ServersBase):
+    def test_an_unregistered_folder_hears_an_offer_to_register(self):
+        out = self.local([{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}])
+        text = out[0]["result"]["instructions"]
+        self.assertIn("propose registration", text)
+        self.assertNotIn("Do not register unasked", text)
+
+
+class WorkdirFailure(ServersBase):
+    def test_a_task_folder_that_cannot_be_made_is_an_error_not_a_path(self):
+        blocker = self.base / "not-a-dir"
+        blocker.write_text("x")
+        out = self.local([call(1, "workdir", {"kind": "write", "ref": "some-article"})], SCIO_WORK_DIR=str(blocker / "work"))
+        self.assertTrue(out[0]["result"]["isError"], out[0])
+
+
+class HostileInput(ServersBase):
+    def test_a_line_nested_too_deep_is_skipped_and_the_server_keeps_answering(self):
+        # json.loads raises RecursionError, not ValueError, past the parser's depth: it ended the server for the session
+        deep = "[" * 200000 + "]" * 200000
+        for script in (self.BRIDGE, self.LOCAL):
+            with self.subTest(server=script.name):
+                argv = [PY, str(script)] + (["--harness", "test"] if script.name == "scio_bridge.py" else [])
+                r = subprocess.run(argv, input=deep + "\n" + json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n",
+                                   capture_output=True, text=True, env=self.env, cwd=str(self.ws), timeout=60)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertEqual([json.loads(line)["id"] for line in r.stdout.splitlines() if line.strip()], [1])
+
+
 class Python38(unittest.TestCase):
     def test_the_plugin_uses_no_string_method_newer_than_python_3_8(self):
         for path in SKILL.rglob("*.py"):
@@ -723,7 +946,7 @@ class RegistrationScripts(ServersBase):
     MODELS = ["--name", "u", "--harness", "h", "--models", "opus=claude-opus-5"]
 
     def script(self, name, *args, **env):
-        return [PY, str(self.SCRIPTS / name), *args], dict(self.env, SCIO_MODEL_VERSION="claude-opus-5", **env)
+        return [PY, str(self.SCRIPTS / name), *args], dict(self.env, SCIO_MODEL_VERSION="claude-opus-5", SCIO_HARNESS="test", **env)
 
     def at_once(self, name, *args):
         self.wiki.hold = 1.5
@@ -736,6 +959,34 @@ class RegistrationScripts(ServersBase):
 
     def key_lines(self):
         return [l for l in self.keys.read_text().splitlines() if "=" in l and not l.startswith("#")]
+
+    def test_every_model_is_checked_before_the_first_agent_is_created(self):
+        # a later model the name rules refuse ended the run after earlier agents were created, before their claim links
+        argv, env = self.script("register-models.py", "--name", "u", "--harness", "h", "--models", "opus=claude-opus-5,local=llama3.1:8b")
+        r = subprocess.run(argv, capture_output=True, text=True, env=env, cwd=str(self.ws), timeout=60)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("local", r.stderr)
+        self.assertEqual(self.wiki.rest_registrations(), [])
+
+    def test_one_model_listed_twice_is_one_agent(self):
+        argv, env = self.script("register-models.py", "--name", "u", "--harness", "h", "--models", "a=claude-opus-5,b=claude-opus-5")
+        r = subprocess.run(argv, capture_output=True, text=True, env=env, cwd=str(self.ws), timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(self.wiki.rest_registrations()), 1)
+
+    def test_a_store_that_cannot_be_used_is_named_not_blamed_on_another_registration(self):
+        subprocess.run(["git", "init", "-q", str(self.ws)], check=True)
+        (self.ws / "scio/key").mkdir(parents=True)
+        (self.ws / "scio/key/notes").write_text("tracked\n")
+        subprocess.run(["git", "add", "scio/key/notes"], cwd=self.ws, check=True)
+        for name, args in (("register-models.py", self.MODELS), ("register.py", ["probe"])):
+            with self.subTest(script=name):
+                argv, env = self.script(name, *args, SCIO_KEYS_FILE="")
+                r = subprocess.run(argv, capture_output=True, text=True, env=env, cwd=str(self.ws), timeout=60)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("Git-tracked", r.stdout + r.stderr)
+                self.assertNotIn("another registration", r.stdout + r.stderr)
+        self.assertEqual(self.wiki.rest_registrations(), [])
 
     def test_two_register_models_runs_of_one_model_create_one_agent(self):
         self.at_once("register-models.py", *self.MODELS)
@@ -779,13 +1030,47 @@ class RegistrationRecordsTheHarness(ServersBase):
     def test_the_bridge_sends_its_harness_with_the_registration(self):
         self.assertEqual(self.registered_harness(), "test")
 
-    def test_a_harness_the_caller_gave_wins(self):
-        self.assertEqual(self.registered_harness(harness="codex"), "codex")
+    def test_the_installed_harness_wins_over_the_callers_guess(self):
+        self.assertEqual(self.registered_harness(harness="codex"), "test")
 
-    def test_an_unknown_or_malformed_harness_is_not_sent_and_a_long_one_is_cut(self):
-        self.assertEqual(self.registered_harness(args=()), "(not sent)")
-        self.assertEqual(self.registered_harness(args=("--harness", "x" * 100)), "x" * 64)
-        self.assertEqual(self.registered_harness(args=("--harness", "a b")), "(not sent)")
+    def test_missing_or_malformed_harness_requires_a_real_host_name(self):
+        for args in ((), ("--harness", "x" * 100), ("--harness", "a\nb")):
+            with self.subTest(args=args):
+                self.wiki.reset()
+                msgs, _ = self.run_server(self.BRIDGE, [call(1, "scio_register", self.ARGS)], args=args)
+                self.assertFalse(self.wiki.calls("scio_register"))
+                self.assertTrue(msgs[0]["result"]["isError"])
+
+    def test_a_configured_host_that_cannot_be_registered_yields_to_the_callers(self):
+        # "My Agent" names no valid host id: registration through that bridge was impossible, whatever the model sent
+        self.assertEqual(self.registered_harness(args=("--harness", "My Agent"), harness="my-agent"), "my-agent")
+
+    def test_an_unconfigured_host_can_be_supplied_explicitly(self):
+        self.assertEqual(self.registered_harness(args=(), harness="codex"), "codex")
+
+    def test_name_uses_installed_host_active_model_and_derived_family(self):
+        self.run_server(self.BRIDGE, [call(1, "scio_register", dict(self.ARGS,
+            display_name="amber-fox", harness="cursor", model_version="openai/gpt-6-luna"))], args=("--harness", "codex"))
+        body = self.wiki.calls("scio_register")[0]["args"]
+        self.assertEqual(body["display_name"], "codex/gpt/openai-gpt-6-luna/amber-fox")
+        self.assertEqual(body["harness"], "codex")
+        self.assertEqual(body["model_family"], "gpt")
+        self.assertEqual(body["model_version"], "openai/gpt-6-luna")
+
+    def test_a_complete_name_is_not_prefixed_twice(self):
+        self.run_server(self.BRIDGE, [call(1, "scio_register", dict(self.ARGS,
+            display_name="test/claude/claude-fable-5/iris"))], args=("--harness", "test"))
+        self.assertEqual(self.wiki.calls("scio_register")[0]["args"]["display_name"], "test/claude/claude-fable-5/iris")
+
+    def test_a_missing_model_or_invalid_nickname_never_registers(self):
+        for extra in ({"model_version": ""}, {"display_name": ""}, {"display_name": "amber/fox"},
+                      {"display_name": "Amber Fox"}, {"display_name": "iris\n"}, {"display_name": "x" * 64}):
+            with self.subTest(extra=extra):
+                self.wiki.reset()
+                msgs, _ = self.run_server(self.BRIDGE, [call(1, "scio_register", dict(self.ARGS, **extra))], args=("--harness", "test"))
+                self.assertFalse(self.wiki.calls("scio_register"))
+                self.assertTrue(msgs[0]["result"]["isError"])
+
 
 
 if __name__ == "__main__":

@@ -314,6 +314,107 @@ class SetupTests(Scratch):
         self.assertNotIn("next:", out)
         self.assertEqual((home / ".gemini/settings.json").read_text(), '// my settings\n{"theme": "dark"}\n')
 
+    def test_openclaw_writes_the_named_agents_key_not_the_exported_one(self):
+        # --alias names the agent the gateway runs as; a key left exported by a launch for another agent must not win
+        keys = self.base / "keys"
+        keys.write_text("opus=sk_live_OPUS_0123456789\ngpt5=sk_live_GPT5_0123456789\n")
+        os.chmod(keys, 0o600)
+        home = self.base / "home"
+        r = self.setup("--harness", "openclaw", "--alias", "gpt5", "--yes", home=home, **{"SCIO_" + "API_KEY": "sk_live_OPUS_0123456789"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        env_file = (home / ".openclaw/.env").read_text()
+        self.assertIn("sk_live_GPT5_0123456789", env_file)
+        self.assertNotIn("sk_live_OPUS_0123456789", env_file)
+
+    def test_opencode_trust_keeps_a_users_single_bash_rule_as_the_default(self):
+        # `"bash": "allow"` is OpenCode's shorthand for {"*": "allow"}: it was replaced, and the default became "ask"
+        home = self.base / "home"
+        path = home / ".config/opencode/opencode.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"permission": {"bash": "allow"}}))
+        r = self.setup("--harness", "opencode", "--trust", "--yes", home=home)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads(path.read_text())["permission"]["bash"]["*"], "allow")
+
+    def test_hermes_with_an_empty_server_list_gets_scios_servers(self):
+        try:
+            import yaml   # noqa: F401 — without it setup prints the entries to add by hand
+        except ImportError:
+            self.skipTest("pyyaml is not installed")
+        home = self.base / "home"
+        (home / ".hermes").mkdir(parents=True)
+        (home / ".hermes/config.yaml").write_text("mcp_servers:\n  # old: {}\n")   # every entry commented out reads as null
+        r = self.setup("--harness", "hermes", "--yes", home=home)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("scio-local", (home / ".hermes/config.yaml").read_text())
+
+    def test_a_rerun_keeps_the_folder_the_operator_pointed_the_servers_at(self):
+        # the README tells desktop harnesses to add a cwd or SCIO_KEYS_FILE: a later setup run erased both
+        home = self.base / "home"
+        path = home / ".cursor/mcp.json"
+        path.parent.mkdir(parents=True)
+        mine = {"command": "old", "args": [], "cwd": "/proj", "env": {"SCIO_KEYS_FILE": "/proj/scio/key/keys"}}
+        path.write_text(json.dumps({"mcpServers": {"scio": dict(mine), "scio-local": dict(mine)}}))
+        self.assertEqual(self.setup("--harness", "cursor", "--yes", home=home).returncode, 0)
+        for name, server in json.loads(path.read_text())["mcpServers"].items():
+            with self.subTest(server=name):
+                self.assertEqual(server["cwd"], "/proj")
+                self.assertEqual(server["env"]["SCIO_KEYS_FILE"], "/proj/scio/key/keys")
+                self.assertNotEqual(server["command"], "old")
+
+    def test_a_rerun_without_trust_takes_the_trust_back(self):
+        home = self.base / "home"
+        self.assertEqual(self.setup("--harness", "gemini", "--trust", "--yes", home=home).returncode, 0)
+        self.assertEqual(self.setup("--harness", "gemini", "--yes", home=home).returncode, 0)
+        servers = json.loads((home / ".gemini/settings.json").read_text())["mcpServers"]
+        self.assertNotIn("trust", servers["scio"])
+        self.assertNotIn("trust", servers["scio-local"])
+
+    def test_a_codex_config_it_cannot_rewrite_is_left_as_it_was(self):
+        # scio defined inline under [mcp_servers]: the table stripper does not see it, and the merge declared it twice
+        try:
+            import tomllib   # noqa: F401 — the check needs Python 3.11+
+        except ImportError:
+            self.skipTest("tomllib needs Python 3.11+")
+        home = self.base / "home"
+        path = home / ".codex/config.toml"
+        path.parent.mkdir(parents=True)
+        mine = '[mcp_servers]\nscio = { command = "old", args = [] }\n'
+        path.write_text(mine)
+        r = self.setup("--harness", "codex", "--yes", home=home)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(path.read_text(), mine)
+        self.assertNotIn("next:", r.stdout + r.stderr)
+
+    def test_under_trust_registration_is_never_silent(self):
+        # Gemini's trust and Hermes' full trust skip every prompt of a server: registration, which creates an identity in
+        # the operator's name, is left out of the trusted entry there (a shell registration still asks)
+        home = self.base / "home-gemini"
+        self.assertEqual(self.setup("--harness", "gemini", "--trust", "--yes", home=home).returncode, 0)
+        self.assertIn("scio_register", json.loads((home / ".gemini/settings.json").read_text())["mcpServers"]["scio"]["excludeTools"])
+        plain = self.base / "home-gemini-plain"   # without --trust Gemini asks for every call: registration stays available
+        self.assertEqual(self.setup("--harness", "gemini", "--yes", home=plain).returncode, 0)
+        self.assertNotIn("scio_register", json.loads((plain / ".gemini/settings.json").read_text())["mcpServers"]["scio"]["excludeTools"])
+        try:
+            import yaml
+        except ImportError:
+            return
+        home = self.base / "home-hermes"
+        self.assertEqual(self.setup("--harness", "hermes", "--trust", "--yes", home=home).returncode, 0)
+        self.assertIn("scio_register", yaml.safe_load((home / ".hermes/config.yaml").read_text())["mcp_servers"]["scio"]["exclude_tools"])
+
+    def test_the_antigravity_shim_passes_yes_on(self):
+        r = self.setup("-", "antigravity", "--yes", setup_py=self.setup_py.parent / "write-mcp-config.py")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_nothing_installed_announces_no_next_step(self):
+        # grok refuses a plugin without its own --trust; without the openclaw binary only the commands are printed
+        for args in (("--harness", "grok", "--yes"), ("--harness", "openclaw", "--yes")):
+            with self.subTest(args=args):
+                r = self.setup(*args, PATH="/usr/bin:/bin")
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertNotIn("next:", r.stdout + r.stderr)
+
     def test_a_failed_registration_announces_no_next_step(self):
         r = self.setup("--harness", "codex", "--register", "u", "--models", "fable=claude-fable-5", "--yes")
         out = r.stdout + r.stderr
@@ -357,6 +458,37 @@ class SetupTests(Scratch):
         for name in ("scio", "scio-local"):
             self.assertNotEqual(servers[name]["command"], str(stub))
             self.assertEqual(os.path.realpath(servers[name]["command"]), os.path.realpath(sys.executable))
+
+    def test_installers_and_generic_export_launch_the_same_servers(self):
+        cases = self.CONFIGS + [("kimi", ".kimi-code/mcp.json", "mcpServers"),
+                                ("kimi-cli", ".kimi/mcp.json", "mcpServers"),
+                                ("windsurf", ".codeium/windsurf/mcp_config.json", "mcpServers"),
+                                ("antigravity", ".gemini/config/mcp_config.json", "mcpServers")]
+        for harness, path, field in cases:
+            with self.subTest(harness=harness):
+                home = self.base / harness
+                exported = self.setup("--harness", harness, "--print-config", home=home, KIMI_CODE_HOME="")
+                self.assertEqual(exported.returncode, 0, exported.stderr)
+                expected = json.loads(exported.stdout)["mcpServers"]
+                installed = self.setup("--harness", harness, "--yes", home=home, KIMI_CODE_HOME="")
+                self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+                actual = json.loads((home / path).read_text())[field]
+                for name, definition in expected.items():
+                    command = actual[name]["command"]
+                    argv = command if isinstance(command, list) else [command, *actual[name]["args"]]
+                    self.assertEqual(argv, [definition["command"], *definition["args"]])
+
+    def test_setup_routes_registered_and_new_users_to_search(self):
+        for registered in (False, True):
+            with self.subTest(registered=registered):
+                if registered:
+                    self.already_registered()
+                result = self.setup("--harness", "kimi-cli", "--yes")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                next_step = result.stdout.split("next:")[-1]
+                self.assertIn("scio_search", next_step)
+                self.assertIn("claim", next_step)
+                self.assertNotIn("first contribution", next_step)
 
     def already_registered(self):
         (self.base / "keys").write_text(f"claude-opus-5={KEY}\n# default claude-opus-5\n# model claude-opus-5 claude-opus-5\n")
@@ -788,16 +920,16 @@ class SkillDocsTests(unittest.TestCase):
     def test_the_source_check_counter_is_where_the_agent_reads_its_quota(self):
         """e2e-13: SKILL.md's list of quota fields, roles.md's example and /scio:status left it out; write.md never said a
         check spends a daily allowance."""
-        for path in (SKILL / "SKILL.md", ROOT / "commands/status.md", SKILL / "references/roles.md"):
+        for path in (SKILL / "references/contributing.md", ROOT / "commands/status.md", SKILL / "references/roles.md"):
             with self.subTest(file=str(path.relative_to(ROOT))):
                 self.assertIn("verifications_left_today", path.read_text(encoding="utf-8"))
         write = (SKILL / "references/workflows/write.md").read_text(encoding="utf-8")
         self.assertIn("verifications_left_today", write)
         self.assertIn("from_snapshot", write)
 
-    def test_skill_md_says_a_pending_version_is_not_adopted(self):
+    def test_contribution_guide_says_a_pending_version_is_not_adopted(self):
         """R-PENDING-LOCAL: 'Adopt only an answer with verified: true' held for a version published ahead of its date too."""
-        rules = next(line for line in (SKILL / "SKILL.md").read_text(encoding="utf-8").splitlines() if line.startswith("- `rules_version`"))
+        rules = next(line for line in (SKILL / "references/contributing.md").read_text(encoding="utf-8").splitlines() if line.startswith("- `rules_version`"))
         self.assertIn("`in_force`", rules)
         self.assertIn("effective_at", rules)
 

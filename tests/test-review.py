@@ -180,7 +180,7 @@ class ReviewTests(unittest.TestCase):
         # network, and under CI it would otherwise stop the script before the key-file write this asserts on.
         with patch.dict(os.environ, {scio_common.LIVE_REGISTER_OVERRIDE: "1"}), \
              patch.object(scio_common.OPENER, "open", return_value=io.BytesIO(json.dumps(response).encode())), \
-             patch.object(sys, "argv", ["register-models.py", "--name", "test", "--models", "new=new-model"]), \
+             patch.object(sys, "argv", ["register-models.py", "--name", "test", "--harness", "test", "--models", "new=new-model"]), \
              patch("sys.stdout", new_callable=io.StringIO), self.assertRaises(SystemExit) as ended:
             runpy.run_path(str(SCRIPTS / "register-models.py"), run_name="__main__")
         self.assertEqual(ended.exception.code, 0)

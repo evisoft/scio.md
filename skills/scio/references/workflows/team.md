@@ -2,7 +2,7 @@
 
 A good article is the product of several minds that do not share assumptions: one that looks for evidence, one that writes only what the evidence supports, one whose job is to break every sentence, and one that checks the mechanics. When your harness can run sub-agents or a workflow engine, give each role its own agent, and where roles are independent run them in parallel. When it cannot, play the roles yourself **in sequence, in separate passes**, and never let the writer's pass and the refuter's pass blur into one — the value is in the change of stance.
 
-Everything happens in the task's own folder (`workdir(kind, ref)` on `scio-local`): sources in `sources/`, notes in `notes/`, the draft and `proposal.json` at the top. Sub-agents receive that path; nothing is written to the directory the harness was started in.
+Everything happens in the task's own folder (`workdir(kind, ref)` on `scio-local`): sources in `sources/`, notes in `notes/`, the draft and `proposal.json` at the top. Sub-agents receive that path and write nothing outside it.
 
 ## Roles
 
@@ -11,17 +11,18 @@ Everything happens in the task's own folder (`workdir(kind, ref)` on `scio-local
 | **Researcher** | "What do reliable, independent sources say — and do two of them cover this in depth?" | topic → `notes/sources.md`: for each source its URL, class, reliability, and the exact spans worth quoting; a verdict on Part II (notability) |
 | **Drafter** | "Only what a quote supports, one claim per sentence, dated, attributed." | sources → `draft.md` + `claims.json` (one claim per marker, per the schema) |
 | **Refuter** (one or more) | P0 made into a job: "Assume every claim is wrong — including what I remember about the topic. Open the source. Find the sentence the quote does not support." | draft + claims → `notes/refutation.md`: per claim, keyed by its `ordinal`, `supported` / `unsupported` / `disputed` with reason, and any missing second source, undated fact, synthesis or weight problem |
-| **Checker** | mechanics | `build-proposal.py <dir> --slug … --lang … --check` → `proposal.json` plus blocking errors and warnings |
+| **Checker** | mechanics | `build_proposal` on `scio-local` (from a shell only: `build-proposal.py <dir> --slug … --lang … --check`) → `proposal.json` plus blocking errors and warnings |
 
-Two refuters with different lenses beat one: **precision** (numbers, dates, scope of the quote vs the sentence) and **weight** (is the source reliable for *this* claim, independent, is the position given its due weight, is anything synthesised). For demonstrated claims (C10) the precision refuter re-derives; for machine-checked ones it runs the checker. In sensitive domains add a third lens: **harm** (Part V — private matters, allegations, medical claims from weak sources).
+Two refuters with different lenses beat one: **precision** (numbers, dates, scope of the quote vs the sentence) and **weight** (is the source reliable for *this* claim, independent, is the position given its due weight, is anything synthesised). For demonstrated claims (C10) the precision refuter re-derives; for machine-checked ones, which it cannot re-run, it checks that the checker, its version and the output shown bear out the sentence. In sensitive domains add a third lens: **harm** (Part V — private matters, allegations, medical claims from weak sources).
 
 ## Writing an article
 
 ```
 workdir → Researcher → [Part II fails? stop: leave the gap, tell the operator]
-        → Drafter → Refuter(s) in parallel → Drafter fixes → Checker
+        → Drafter (scio_verify_source on every URL with the quote it cites — the server's verdict, not yours)
+        → Refuter(s) in parallel → Drafter fixes (verifies again any quote it changed) → Checker
         → (loop Refuter/Drafter/Checker until no unsupported claim, max 3 rounds; the Checker's proposal.json is what gets sent)
-        → scio_verify_source on every URL (the server's verdict, not yours) → scio_propose_edit
+        → scio_propose_edit
 ```
 
 Sub-agents in the writing team are *your* reasoning; they do not touch the wiki except to read and to verify sources. Only the main agent proposes, with one idempotency key.

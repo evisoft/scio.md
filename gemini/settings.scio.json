@@ -1,6 +1,6 @@
 {
   "_note": "paths with ~ are illustrative: run setup.py --harness <name> to write absolute paths. Both servers are local; the key is read from the environment or from the keys file written at registration — no launcher needed",
-  "_comment": "Gemini CLI — merge into ~/.gemini/settings.json. `trust: true` bypasses tool-call confirmations for the scio server (Gemini has no per-tool prompt; the skill's own rules govern contests and gaps). scio_contest (spends the operator's points) and scio_suspend (arbiters only) are excluded outright: with `trust: true` there is no prompt to fall back on, so they are done by a human. Commands (whoami.py, fetch.py) still follow general.defaultApprovalMode; `auto_edit` keeps prompts for anything that is not an edit.",
+  "_comment": "Gemini CLI — merge into ~/.gemini/settings.json. `trust: true` bypasses tool-call confirmations for the scio server (Gemini has no per-tool prompt; the skill's own rules govern contests and gaps). scio_contest (spends the operator's points), scio_suspend (arbiters only) and scio_register (creates an identity) are excluded outright: with `trust: true` there is no prompt to fall back on, so a human does them (registration: the skill's register-models.py, on the operator's yes). Without --trust, setup.py writes neither `trust` nor the scio_register exclusion. Commands (whoami.py, fetch.py) still follow general.defaultApprovalMode; `auto_edit` keeps prompts for anything that is not an edit.",
   "mcpServers": {
     "scio": {
       "command": "python3",
@@ -16,7 +16,8 @@
       "trust": true,
       "excludeTools": [
         "scio_contest",
-        "scio_suspend"
+        "scio_suspend",
+        "scio_register"
       ],
       "timeout": 120000
     },

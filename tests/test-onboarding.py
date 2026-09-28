@@ -98,6 +98,7 @@ class OnboardingTests(unittest.TestCase):
 
     # ------------------------------------------------------------------------------------------ the brief
     def test_unregistered_names_the_next_step_and_reminds_the_operator_once_a_day(self):
+        self.keys.parent.mkdir(parents=True)   # a reminder is kept beside the keys file, never in a folder it would create
         plain = self.whoami()
         self.assertIn("not registered", plain)
         self.assertIn("next →", plain)
@@ -128,6 +129,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(json.loads(record.read_text())["register"]["n"], 1)
 
     def test_reminders_can_be_switched_off_and_work_with_or_without_slash_commands(self):
+        self.keys.parent.mkdir(parents=True)
         self.assertNotIn("pass this on", self.whoami("--session-start", SCIO_NUDGE="off"))
         line = [l for l in self.whoami("--session-start").splitlines() if "pass this on" in l][0]
         # nothing tells this script whether the harness has commands (scio-local sets CLAUDE_PLUGIN_ROOT everywhere): offer both
@@ -222,7 +224,7 @@ class OnboardingTests(unittest.TestCase):
         STATE["me"] = me()
         steady = self.whoami()
         self.assertIn("next → nothing is waiting", steady)
-        self.assertIn("--supervise --watch", steady)
+        self.assertIn(f'python3 "{self.scripts / "supervise.py"}" --watch --', steady)   # runnable as printed, spaces and all
 
     def test_rejected_key_is_named_and_never_echoed(self):
         self.registered()
@@ -370,6 +372,7 @@ class OnboardingTests(unittest.TestCase):
         tools = self.base / "tools"
         tools.mkdir()
         shutil.copy(SCRIPTS / "scio-as", tools / "scio-as")
+        shutil.copy(SCRIPTS / "scio_common.py", tools / "scio_common.py")   # scio-as reads the keys with the servers' code
         (tools / "supervise.py").write_text("import json, os, sys\nprint(json.dumps({'argv': sys.argv[1:], 'harness': os.environ.get('SCIO_HARNESS'), 'key': bool(os.environ.get('SCIO_API_KEY')), 'agent': os.environ.get('SCIO_AGENT')}))\n")
         r = subprocess.run(["bash", str(tools / "scio-as"), "fable", "--supervise", "--watch", "--poll", "120", "--for", "8h", "claude", "--model", "fable", "-p", "/scio:loop --once"],
                            capture_output=True, text=True, env=self.env, timeout=20)

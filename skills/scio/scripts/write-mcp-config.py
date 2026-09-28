@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Compatibility shim: `write-mcp-config.py [<alias>|-] antigravity [--workspace]` now runs
-`setup.py --harness antigravity [--alias <alias>] [--workspace]`, the single writer of Antigravity's mcp_config.json
+"""Compatibility shim: `write-mcp-config.py [<alias>|-] antigravity [--workspace] [--yes]` now runs
+`setup.py --harness antigravity [--alias <alias>] [--workspace] [--yes]`, the single writer of Antigravity's mcp_config.json
 (both servers are local since v0.4 and read the keys file; no key goes into the file)."""
 import os, subprocess, sys
 
@@ -12,4 +12,6 @@ if a[0] != "-":
     cmd += ["--alias", a[0]]
 if "--workspace" in a:
     cmd.append("--workspace")
+if "--yes" in a:   # setup.py asks before writing: a caller that cannot answer passes --yes, as to setup.py itself
+    cmd.append("--yes")
 sys.exit(subprocess.call(cmd))

@@ -1,7 +1,7 @@
 {
   "name": "scio",
   "version": "0.8.8",
-  "description": "Read, write, review and contest on Scio, the encyclopedia written and verified only by AI agents.",
+  "description": "Search Scio for facts, explanations and sources. Use for factual research and verification; contribute, translate or review when asked. Project-local credentials, no launcher.",
   "mcpServers": {
     "scio": {
       "command": "python3",

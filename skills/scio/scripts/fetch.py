@@ -4,7 +4,7 @@
   fetch.py <url> [--out file] [--max-bytes 200000]
 
 Refuses what guard-fetch.py refuses (private or link-local addresses, names resolving to them, non-HTTP schemes,
-homoglyph/punycode hosts, identifiers in the query); follows at most 3 same-scheme redirects, each re-checked;
+homoglyph/punycode hosts, identifiers in the query); follows at most 3 redirects, never from https down to http, each re-checked;
 reads up to RAW_DOWNLOAD_CAP off the wire (a fixed safety ceiling on the raw response — separate from --max-bytes,
 security.md §3, in the note below) — decodes it as the server does (the Content-Type's charset, then the page's own
 <meta charset>, then UTF-8, each only if the server's runtime decodes it), extracts the article content from that, stripping scripts/styles/nav/dialogs and form
@@ -86,7 +86,10 @@ class PinnedHandler(urllib.request.HTTPHandler, urllib.request.HTTPSHandler):
 def get_once(req, ip, cap):
     """One request to one checked address (or through the proxy when ip is None): ("ok", page) | ("redirect", location) |
     ("http", code) | ("conn", error — try the next address) | ("err", error)."""
-    opener = urllib.request.build_opener(NoRedirect) if ip is None else urllib.request.build_opener(NoRedirect, PinnedHandler(ip))
+    # the pinned path never takes the environment's proxy: that decision was made once, in fetch(), and urllib's own
+    # ProxyHandler would take it again and differently (a trailing dot, a NO_PROXY entry with a port)
+    opener = (urllib.request.build_opener(NoRedirect) if ip is None
+              else urllib.request.build_opener(NoRedirect, urllib.request.ProxyHandler({}), PinnedHandler(ip)))
     try:
         with opener.open(req, timeout=20) as r:
             data = r.read(cap + 1)
@@ -104,13 +107,15 @@ def get_once(req, ip, cap):
 def fetch(url, cap=RAW_DOWNLOAD_CAP):
     proxies = urllib.request.getproxies()
     for hop in range(4):
-        reason, host, addrs = guard.resolve(url)  # every address checked; DNS failure is a refusal
+        reason, _, addrs = guard.resolve(url)  # every address checked; DNS failure is a refusal
         if reason:
             return None, f"refused: {reason}", url
         # behind a proxy (HTTP_PROXY / HTTPS_PROXY, which urllib honours) the proxy resolves and connects — pinning our
         # address would send the request to the target's address on the proxy's port; the name was still checked above
-        via_proxy = urllib.parse.urlparse(url).scheme in proxies and not urllib.request.proxy_bypass(host)
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,text/plain,application/xhtml+xml,*/*;q=0.5"})
+        # the bypass is asked about req.host (name:port), as urllib's ProxyHandler asks it: a direct connection urllib makes
+        # on its own looks the name up again, and the pinning exists to prevent exactly that second answer
+        via_proxy = req.type in proxies and not urllib.request.proxy_bypass(req.host)
         status, payload = "conn", "no address"
         for ip in ([None] if via_proxy else addrs):   # every address passed the guard; the first reachable one is used
             status, payload = get_once(req, ip, cap)
@@ -122,7 +127,7 @@ def fetch(url, cap=RAW_DOWNLOAD_CAP):
             if hop >= 3:
                 break
             new = urllib.parse.urljoin(url, payload)
-            if urllib.parse.urlparse(new).scheme != urllib.parse.urlparse(url).scheme:   # same-scheme only: no https→http downgrade
+            if urllib.parse.urlparse(url).scheme == "https" and urllib.parse.urlparse(new).scheme != "https":   # no https→http downgrade; an upgrade is followed, as the platform's resolver follows it
                 return None, f"refused: redirect changes the scheme ({url} → {new})", url
             url = new
             continue
@@ -234,7 +239,7 @@ class _Extractor(HTMLParser):
         if tag in FORM_CONTROLS:
             return self.open["form"] > 0
         if tag in CONTEXTUAL_BOILERPLATE:   # boilerplate only outside an <article>/<main> ancestor — see CONTENT_ROOTS
-            return not (set(self.stack[:-1]) & CONTENT_ROOTS)
+            return not any(self.open[root] for root in CONTENT_ROOTS)   # the counter, not a copy of the stack per tag
         return False
 
     def _banner(self, tag, attrs):
