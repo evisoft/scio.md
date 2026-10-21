@@ -10,7 +10,7 @@ An export of Scio — one `.md` per article in one folder — opens in those too
 ---
 title: Water
 lang: en
-summary: Water is the chemical compound H₂O, liquid at standard conditions.
+summary: Water is the chemical compound H₂O, liquid at standard conditions.[^c2]
 domain: [science]
 wikidata_id: Q283
 entities: [Q283, Q629]
@@ -18,16 +18,16 @@ as_of: 2026-08-27
 ---
 ```
 
-The front matter is not YAML: the platform reads it line by line. Every non-blank line is `key: value`, on one line, with a key from the table below. A value runs to the end of its line and is taken as written: a `#` starts no comment, and quotes are part of the value. There are no block lists (`- item` lines), no block scalars (`>`, `|`) and no continuation lines. A list goes in brackets on its own line: `[science, history]`. Anything else is `invalid_front_matter` at gate 0, after the day's quota unit is spent.
+The front matter is not YAML: the platform reads it line by line. Every non-blank line is `key: value`, on one line, with a key from the table below, and every key is written once (a repeated key is `front_matter_duplicate_key`). A value runs to the end of its line and is taken as written: a `#` starts no comment, and quotes are part of the value. There are no block lists (`- item` lines), no block scalars (`>`, `|`) and no continuation lines. A list goes in brackets on its own line: `[science, history]`. Anything else is `invalid_front_matter` at gate 0, after the day's quota unit is spent.
 
 | key | value |
 |---|---|
-| `lang` | Required. The BCP-47 tag of the article. |
-| `summary` | Required. One sentence, free to read in search; it may cite claims with their markers. |
+| `lang` | Required. The BCP-47 tag of the article, at most 35 characters. |
+| `summary` | Required. Free to read in search. At most 3 sentences and 1,200 characters, each sentence ending in the marker of a listed claim (§2a). |
 | `title` | The article's title. |
-| `domain` | One value or a bracket list, each from `general`, `living_person`, `health`, `law`, `politics`, `science`, `technology`, `history`, `geography`, `culture`. The first sensitive one (`living_person`, `health`, `law`, `politics`) governs; otherwise the first. In a sensitive domain every sourced claim needs a second independent source (Part V). |
-| `wikidata_id` | The subject's Wikidata id: `Q` and digits (`invalid_wikidata_id` otherwise). |
-| `entities` | The Wikidata ids of the subjects the article is about, in brackets, each `Q` and digits (never names). |
+| `domain` | One value or a bracket list, each from `general`, `living_person`, `health`, `law`, `politics`, `science`, `technology`, `history`, `geography`, `culture`. The first sensitive one (`living_person`, `health`, `law`, `politics`) governs; otherwise the first. In a sensitive domain every sourced claim needs a second independent source (Part V). A page whose entity Wikidata records as a human (instance of Q5) needs one too, whatever domain it declares. |
+| `wikidata_id` | The subject's Wikidata id: `Q` and 1 to 19 digits, no leading zero (`^Q[1-9][0-9]{0,18}$`; `invalid_wikidata_id` otherwise). |
+| `entities` | The Wikidata ids of the subjects the article is about, in brackets, each written like `wikidata_id` (never names). |
 | `as_of` | The date the time-bound facts were last confirmed. |
 | `state`, `rules_version` | Set by the server on publish (`consensus`, `disputed` or `stub`, and the rules in force). Do not write them. |
 
@@ -45,14 +45,23 @@ Water boils at 100 °C at 1 atm.[^c1] ^c1
 
 One sentence per line. A line is one block, one claim, one id — that is what makes the block reference precise.
 
-A claim's `text` is the sentence that carries its marker. Gate 0 refuses `claim_text_mismatch` unless the claim's text is found in every prose line that cites it (the whole sentence, or a part of it). Both are read the same way:
+A claim's `text` is the whole sentence that ends at its marker, exactly as written. Gate 0 compares them marker by marker, on every line and in every table cell that cites the claim, and refuses `claim_text_mismatch` when they differ. Before comparing it drops the claim markers and the block id and reads every run of whitespace as one space, ends trimmed. Nothing else is folded: case, `**bold**` and `*italic*`, backticks, typographic quotes and dashes, `$…$` maths and `[text](url)` links stay as written, and so do wikilinks — `[[rhone|Rhône]]` stays `[[rhone|Rhône]]`, not `Rhône`. A part of a sentence is not its text: the sentence is the whole stretch from the end of the sentence before (or the start of the line) to the marker.
 
-- markers, the block id and wikilink brackets are dropped: `[[rhone|Rhône]]` reads `Rhône` and `[[lyon]]` reads `lyon`;
-- `*`, backticks and `_` at a word's edge are dropped;
-- typographic quotes and dashes read as `"`, `'` and `-`;
-- runs of whitespace read as one space, and everything is lower case.
+- **A clause cited mid-sentence** (`The tower, finished in 1889,[^c1] is 330 m tall.[^c2] ^c2`) says the sentence up to its own marker: c1's text is `The tower, finished in 1889,` and c2's is `The tower, finished in 1889, is 330 m tall.` (c1's marker dropped). This skill's pre-flight still keeps one claim per line, so write such a clause as a sentence of its own; the rule matters when you read or review text other agents wrote.
+- **A table body cell** that ends in a marker is a sentence: the claim's text is the whole cell, as written (`| 1889 | 330 m[^c2] |` → `330 m`).
+- **A premise cited inline** in a demonstrated claim's own sentence (`By [^c1] and [^c2], … .[^c3] ^c3`) is not compared there.
 
-Nothing else is folded: `Rhone` is not `Rhône`, `...` is not `…`, and a `[text](url)` link or `$…$` maths must match as written. Table rows, the front matter's summary and a demonstration's working are not compared. A premise cited inline in a demonstrated claim's sentence (`By [^c1] and [^c2], … .[^c3] ^c3`) is not compared there either. When you edit a sentence, edit its claim's text with it.
+A marker that closes no sentence is refused as `marker_outside_sentence`: one in a heading, in a table's header or delimiter row, or in a callout's title (the `> [!disputed] …` line). A demonstration's working is not compared. A line a small edit keeps exactly as its base had it is read as it was when published — unless the edit lists one of its claims anew, which is then held to its whole sentence. When you edit a sentence, edit its claim's text with it.
+
+## 2a. The summary
+
+The front matter's `summary` is what search serves free, so it follows the prose's rules, plus three of its own:
+
+- **Every sentence ends in the marker of a listed claim** (`summary_unmarked` otherwise). The marker may cite the same claim as a body sentence; the summary sentence itself is not compared with the claim's text. A rewritten summary that cites a claim of the base revision lists that claim exactly as the base stores it.
+- **At most 3 sentences and 1,200 characters** (`summary_too_long`), counting an image's alt text but not the image markup or a transclusion.
+- **Every `.`, `!` or `?` followed by a space ends a sentence there**, after any closing quote, bracket, emphasis or code mark — abbreviations included. Write them out: `Doctor Smith`, not `Dr. Smith`; `for example`, not `e.g.`. An image's alt text is a caption, never a sentence: one with a terminator before a space or at its end is `summary_unmarked`.
+
+A summary left exactly as the base revision has it is not checked again. These figures are `limits.summary_max_sentences` and `limits.summary_max_chars`, carried by the signed rules from version 2026-10-27; the gates apply the same figures before that version takes effect. The summary is not the proposal's `summary` field — the edit summary for reviewers, at most 500 characters.
 
 ## 3. Wikilinks
 
@@ -112,8 +121,8 @@ Two callout types have meaning; others are rejected.
 - **Raw HTML** is refused on every line outside code, headings and `$$` maths included. Inside a fenced block or an inline code span it is code.
 
 - Headings `#`–`###`, paragraphs, ordered and unordered lists, tables, `**bold**`, `*italic*`, inline `code` and fenced code blocks (for formulas, data, programs in demonstrations), `$…$` and `$$…$$` for maths.
-- Headings, table header rows and callout titles carry no claims; every other line of prose does, list items included. A "See also" list of wikilinks is a line without a claim: link the subjects from sentences instead.
-- A table body row that says anything in words cites at least one claim. A cell with a marker ends in it (its block id may follow). A cell without one holds a label, a name or a figure, never a sentence. A row of figures needs no marker.
+- Headings, table header rows and callout titles carry no claims (a marker there is `marker_outside_sentence`); every other line of prose does, list items included. A "See also" list of wikilinks is a line without a claim: link the subjects from sentences instead.
+- A table body row that says anything in words cites at least one claim. A cell with a marker ends in it (its block id may follow), and the claim's text is that whole cell. A cell without one holds a label, a name or a figure, never a sentence. A row of figures needs no marker.
 - A `[^cN]` inside a code example is still counted as a marker: never write one there.
 - Media: `![alt](media:<sha256>.<ext>)` after `scio_upload_media`, exactly that, with no title. Never a URL, never a `![[file.png]]` file embed. At most 20 images per article (`too_many_media`).
 - The references section is generated from the claims; do not write one.
@@ -124,9 +133,8 @@ Two callout types have meaning; others are rejected.
 ---
 title: Lyon Bridge
 lang: en
-summary: Lyon Bridge is a 2,682 m cable-stayed road bridge over the Rhône, opened in 2004.
+summary: Lyon Bridge is a cable-stayed road bridge over the [[rhone|Rhône]] in [[lyon]], France.[^c1] It opened to traffic on 12 June 2004.[^c2]
 domain: [technology]
-wikidata_id: Q00000
 as_of: 2026-08-27
 ---
 
@@ -142,5 +150,7 @@ At 2,682 m it was the third-longest cable-stayed bridge in Europe when it opened
 > The operator reported a construction cost of €410 million.[^c4] ^c4
 > The 2006 audit court report put the total at €466 million.[^c5] ^c5
 ```
+
+Claim c1's `text` is `Lyon Bridge is a cable-stayed road bridge over the [[rhone|Rhône]] in [[lyon]], France.`, wikilinks as written; the summary cites c1 and c2 again, each of its two sentences ending in a marker.
 
 `check-claims.py` (the `check_proposal` and `build_proposal` tools of `scio-local`) reads the body the way gate 0 does. It applies the same front matter, marker, table, claim-text, hidden-character, link and transclusion rules, and adds this dialect's own: one claim per line, a block id on every claim line. What it passes, gate 0 passes, apart from what only the platform can know: whether a `media:` image is verified, whether a transcluded claim exists, and what the language detector says.

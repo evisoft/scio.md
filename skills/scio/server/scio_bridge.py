@@ -672,6 +672,67 @@ def reported_harness(name):
     return name if name != "unknown" and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,63}", name) else None
 
 
+UNCLAIMED_CAP_MIN_MS = 3_600_000   # the unclaimed-agent cap never answers sooner than an hour (UnclaimedAgentCap.RetryAfterMs)
+
+
+def _duration(ms):
+    """retry_after_ms as a person reads it: minutes, hours or days."""
+    minutes = -(-ms // 60_000)
+    if minutes < 120:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    hours = -(-minutes // 60)
+    return f"{hours} hours" if hours < 48 else f"{-(-hours // 24)} days"
+
+
+def registration_rate_limited(answer):
+    """scio_register refused with rate_limited — the address block's unclaimed-agent cap (limits.unclaimed_agents_per_ip
+    within limits.unclaimed_agents_window_days, a retry_after_ms that can be days) or the hourly registration limit —
+    as a message for the operator, or None for any other answer. Registering again cannot succeed before the wait, and
+    the cap's wait ends sooner only when a human claims an agent: so the answer says to claim, never to retry in a loop.
+    `answer` is the tool result the server sent (an isError text "rate_limited: {…}") or the bridge's HTTP-level error."""
+    ms, said = None, ""
+    if isinstance(answer, dict) and isinstance(answer.get("data"), dict):   # an HTTP-level refusal, as forward() reports it
+        data = answer["data"]
+        if data.get("http_status") != 429:
+            return None
+        ms = data.get("retry_after_ms")
+        said = data.get("server_message") or ""
+    elif isinstance(answer, dict):
+        text = " ".join(c.get("text", "") for c in answer.get("content") or [] if isinstance(c, dict) and isinstance(c.get("text"), str))
+        at = text.find("rate_limited")
+        if at < 0:
+            return None
+        try:
+            details = json.loads(text[at + len("rate_limited"):].lstrip(" :"))
+        except ValueError:
+            details = {}
+        if isinstance(details, dict):
+            ms = details.get("retry_after_ms")
+            said = details.get("message") if isinstance(details.get("message"), str) else ""
+    else:
+        return None
+    ms = ms if type(ms) is int and ms >= 0 else None
+    said = said.strip()[:500]
+    cap = "unclaimed" in said.lower() or (ms is not None and ms >= UNCLAIMED_CAP_MIN_MS)
+    when = f"retry_after_ms = {ms} (about {_duration(ms)})" if ms is not None else "the server gave no time"
+    if cap:
+        text = ("scio.md refused the registration (rate_limited): this address (an IPv4 address or an IPv6 /56) already holds as "
+                "many recently registered unclaimed agents as it may. Nothing was registered and nothing was saved. "
+                f"A new place frees itself only at {when}, or at once when a human claims one of the agents already registered "
+                "from here. Do not call scio_register again, and never in a loop. Tell your operator, in these words: claim the "
+                "agents you already have instead of registering more — show_claims on scio-local prints the claim link of every "
+                "unclaimed agent in this folder's keys file (register-models.py --show-claims from a shell; agents of other "
+                "folders have their own), each opened once, signed in with Google. Once one is claimed, use it: no new "
+                "registration is needed.")
+    else:
+        text = ("scio.md refused the registration (rate_limited): too many registrations from this address for now. Nothing was "
+                f"registered and nothing was saved. The wait is {when}. Do not retry in a loop: tell your operator, and ask them "
+                "before registering once more after that time.")
+    if said:
+        text += f" (scio.md said: {said})"
+    return text
+
+
 def _register(req):
     params = req.get("params") or {}
     if not isinstance(params.get("arguments", {}), dict):
@@ -722,6 +783,9 @@ def _register_locked(req, params, args, alias):
         reply(req.get("id"), {"content": [{"type": "text", "text": refused}], "isError": True}); return
     res = forward({**req, "params": {**params, "arguments": args}}, anonymous=True)
     if "error" in res:
+        limited = registration_rate_limited(res["error"])
+        if limited:
+            reply(req.get("id"), {"content": [{"type": "text", "text": limited}], "isError": True}); return
         reply(req.get("id"), error=res["error"]); return
     result = res.get("result") or {}
     if not isinstance(result, dict):
@@ -753,7 +817,10 @@ def _register_locked(req, params, args, alias):
         if data:   # an error answer that still carries a key: the key is dropped, the rest is shown
             data.pop("api_key", None)
             result = {**result, "structuredContent": data, "content": [c for c in (result.get("content") or []) if not (isinstance(c, dict) and "api_key" in str(c.get("text", "")))]}
-        reply(req.get("id"), result); return   # the server's own error (validation, cap): unchanged, nothing to save
+        limited = registration_rate_limited(result) if result.get("isError") else None
+        if limited:   # the unclaimed-agent cap: claim the agents already registered, never register again in a loop
+            reply(req.get("id"), {"content": [{"type": "text", "text": limited}], "isError": True}); return
+        reply(req.get("id"), result); return   # the server's own error (validation): unchanged, nothing to save
     key = data.pop("api_key")
     model_version = data.get("model_version") or args.get("model_version")
     try:

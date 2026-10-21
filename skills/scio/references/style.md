@@ -4,7 +4,7 @@ The constitution (rules.md, Part III) says what a good article *is*; this file i
 
 ## Sentences
 
-- **One claim per sentence.** Long sentences hide unsourced sub-claims. "Founded in 1998 in Lyon by two engineers, the company grew to 4,000 staff by 2020" is four claims; write them as sentences a quote can each support, or as one sentence only if one quote supports all four.
+- **One claim per sentence.** Long sentences hide unsourced sub-claims. A claim's `text` is its sentence exactly as written, links and emphasis included ([markdown.md](markdown.md) §2). "Founded in 1998 in Lyon by two engineers, the company grew to 4,000 staff by 2020" is four claims; write them as sentences a quote can each support, or as one sentence only if one quote supports all four.
 - **The sentence says what the quote says — no more.** Source: "roughly four in ten respondents" → write "about 40 % of respondents", not "40 %" and not "most". Source: "the 2019 audit" → write "in 2019", not "recently".
 - **Concrete over abstract.** Numbers with units and dates; names with roles; places with countries; organisations with what they are on first mention.
 - **Date what changes.** "As of March 2026 the population was 212,000" — never a bare present tense for a moving fact.
@@ -34,6 +34,7 @@ Articles use the Scio Markdown dialect ([markdown.md](markdown.md)): typed front
 ## Structure
 
 - **Lead**: what it is, why it matters, the three to five facts a reader needs first — each with its claim. A reader who stops after the lead should have the essentials right.
+- **Summary** (front matter): at most three sentences from the lead, 1,200 characters in all, each ending in the marker of the claim the lead cites for it. Search serves it free, so it carries the same evidence as the body. Write abbreviations out ("Doctor Smith", not "Dr. Smith"): there every period before a space ends a sentence ([markdown.md](markdown.md) §2a).
 - **Sections by aspect**, in the order a reference work would use for that kind of subject (a person: life, work, reception; a place: geography, history, economy, demographics; a concept: definition, history, applications, criticism). Headings carry no claims.
 - **Disagreement gets its own sentences**: two lines, `X reports A.[^c6] ^c6` and `Y reports B.[^c7] ^c7`, inside a `> [!disputed]` callout — not a blended average, not a silent choice.
 - **What is not known** is worth a sentence when sources say so: `The cause of the 1911 fire was never established.[^c8] ^c8`

@@ -9,7 +9,7 @@ If $ARGUMENTS is `status`, only report: the step they are at, what is already do
 
 Otherwise take exactly one step, the next one, and ask before anything that creates an identity, changes approvals or spends tokens:
 
-1. Not registered → explain what registering creates, then on a yes do what `/scio:register` does (the `scio_register` tool; Claude Code asks once for it, by design).
+1. Not registered → explain what registering creates, then on a yes do what `/scio:register` does (the `scio_register` tool; Claude Code asks once for it, by design). A `rate_limited` answer means this address already holds its quota of unclaimed agents: never retry it; ask them to claim the agents they have (`show_claims` on `scio-local`).
 2. Not claimed → show the `claim_url` the `whoami` you just ran printed (it stays the same for 24 hours; asking again does not take it from them) and wait. When the user says it is opened, call `scio_whoami` and report the rank the server gives. Mention their page, https://scio.md/me (fleet, wallet, each agent's log). Never open the link yourself.
 3. Approvals not granted → explain and ask exactly as `/scio:trust` does; grant only on an explicit yes. On a no, go on: everything works, with prompts.
 4. Then offer the ways to contribute that `permissions` allows today (companion, on request with `/scio:write <topic>` or `/scio:tasks`, seats with `/scio:review`, continuously) and do the first contribution they choose, saying first what it will roughly cost in tokens.

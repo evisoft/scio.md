@@ -12,7 +12,7 @@ sits beside the proposal as base.md in its task folder, or is given with --base 
 names the page's domain when no base is at hand. Without a base each hunk is read alone, and what depends on the lines
 above it is a warning.
 """
-import html.entities, json, os, re, sys, unicodedata
+import bisect, html.entities, json, os, re, sys, unicodedata
 from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from importlib import import_module
@@ -28,10 +28,15 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets
 CLAIM_PROPS = set(_SCHEMA["properties"])
 CLAIM_KINDS = set(_SCHEMA["properties"]["kind"]["enum"])
 FORBIDDEN_HOSTS = ["wikipedia.org", "wikiwand.com", "wikizero.com", "wiki2.org", "grokipedia.com", "scio.md"]  # signed rules: gates.forbidden_source_hosts
-# the signed rules' `limits` and `media` (2026-09-30) and the proposal validator's own caps: what the platform refuses
+# the signed rules' `limits` and `media` (2026-10-27; the platform's fallbacks before it, the same figures) and the proposal
+# validator's own caps: what the platform refuses. summary_max_* is the front matter's summary; the proposal's own `summary`
+# field — the edit summary — is the validator's 500.
 LIMITS = {"body_max_chars": 200_000, "line_max_chars": 4000, "claims_per_proposal": 200, "claim_text_max_chars": 2000,
           "claim_quote_max_chars": 2000, "distinct_sources_per_proposal": 100, "demonstration_max_chars": 20_000,
-          "scope_max_chars": 500, "language_tag_max_chars": 35, "media_max_per_article": 20, "summary_max_chars": 500, "slug_max_chars": 200}
+          "scope_max_chars": 500, "language_tag_max_chars": 35, "media_max_per_article": 20, "slug_max_chars": 200,
+          "url_max_chars": 2048, "premises_per_claim": 20, "premises_per_proposal": 200, "summary_max_sentences": 3,
+          "summary_max_chars": 1200, "small_edit_max_changed_share": 0.5, "small_edit_min_changed_claims": 2,
+          "proposal_summary_max_chars": 500}
 UNDATED = re.compile(r"\b(recently|currently|nowadays|at present|these days|now|today|this year|last year|latest)\b", re.I)
 DATE = re.compile(r"\b(as of|in|since|until|on|between|from)\s+(\d{1,2}\s+)?(january|february|march|april|may|june|july|august|september|october|november|december|\d{4})\b|\b(19|20)\d{2}\b", re.I)
 PUFFERY = re.compile(r"\b(groundbreaking|renowned|world-class|legendary|infamous|so-called|cutting-edge|revolutionary|iconic|prestigious|leading|best-known|widely (regarded|believed|considered|known)|it is (well )?known that|experts agree|many (people|experts) (say|believe))\b", re.I)
@@ -306,10 +311,21 @@ def _without_wikilinks(line):
     return "".join(out)
 
 
+_SPACES = re.compile(_S + "+")
+
+
 def claim_text(text):
-    """MarkdownDialect.ClaimText: a sentence or a claim's text as a reader sees it — no markers or block id, wikilinks as
-    their labels, no `*`, backtick or word-edge `_`, typographic quotes and dashes folded to ASCII, whitespace one space,
-    lower case. A claim's text must be found, so folded, in every prose line that cites it (claim_text_mismatch)."""
+    """MarkdownDialect.ClaimText (the owner's decision of 20 Oct 2026): a sentence or a claim's text as gate 0 compares the
+    two — no markers or block id, every run of whitespace one space, trimmed, and nothing else changed: case, emphasis and
+    code marks, wikilinks, quotes and dashes are the claim's as much as the sentence's (claim_text_mismatch)."""
+    bid = block_id(text)
+    return _SPACES.sub(" ", _MARKER.sub("", text[:bid[0]] if bid else text)).strip(" ")
+
+
+def legacy_claim_text(text):
+    """MarkdownDialect.LegacyClaimText: the reading gate 0 compared claims by before 20 Oct 2026, kept for the lines a small
+    edit leaves as its base had them — no markers or block id, wikilinks as their labels, no `*`, backtick or word-edge
+    `_`, typographic quotes and dashes folded to ASCII, whitespace one space, lower case."""
     bid = block_id(text)
     s = _without_wikilinks(_MARKER.sub("", text[:bid[0]] if bid else text))
     out, space, n = [], False, len(s)
@@ -816,32 +832,52 @@ def _external_images(line):
     return count, (line if blanked is None else "".join(blanked))
 
 
-def media_references(body):
-    """The distinct <sha256>.<ext> keys of every `media:` image, in order (MarkdownDialect.MediaReferences)."""
-    out, seen, n = [], set(), len(body)
-    i = body.find("![")
+def _line_media_references(line, out, seen):
+    n, i = len(line), line.find("![")
     while i >= 0:
-        close = body.find("]", i + 2)
+        close = line.find("]", i + 2)
         if close < 0:
             break
-        if close + 1 >= n or body[close + 1] != "(":
-            i = body.find("![", close + 1)
+        if close + 1 >= n or line[close + 1] != "(":
+            i = line.find("![", close + 1)
             continue
-        paren = body.find(")", close + 2)
+        paren = line.find(")", close + 2)
         if paren < 0:
             break
         d = close + 2
-        while d < paren and body[d] not in _WS_SET:
+        while d < paren and line[d] not in _WS_SET:
             d += 1
         if d > close + 2:
-            m = _MEDIA_REF.fullmatch(body, close + 2, d)
+            m = _MEDIA_REF.fullmatch(line, close + 2, d)
             if m and m.group(1) not in seen:
                 seen.add(m.group(1))
                 out.append(m.group(1))
-            i = body.find("![", paren + 1)
+            i = line.find("![", paren + 1)
         else:   # every opener before this `]` meets the same `](` and fails the same way
-            i = body.find("![", close + 1)
+            i = line.find("![", close + 1)
+
+
+def media_references(body):
+    """The distinct <sha256>.<ext> keys of every `media:` image a reader is shown, in order — line by line, outside code
+    fences and code spans: an image quoted as code is no image (MarkdownDialect.MediaReferences, platform 5e1a778)."""
+    out, seen, spans = [], set(), _CodeSpans()
+    for code, content, _, _ in _read_blocks(dl_lines(body)):
+        if code or not content.strip(_WS):
+            spans.end_paragraph()
+            continue
+        _line_media_references(spans.blank(content), out, seen)
     return out
+
+
+def article_media_references(canonical):
+    """MarkdownDialect.ArticleMediaReferences: the images of the prose and of the front-matter summary, the cap's count."""
+    try:
+        fm, prose = parse_front_matter(canonical)
+    except FrontMatterError:
+        out, seen = [], set()
+        _line_media_references(canonical, out, seen)
+        return out
+    return list(dict.fromkeys(media_references(prose) + media_references(fm["summary"])))
 
 
 def _link_destination(s):
@@ -957,24 +993,7 @@ def _opens_label(lead):
 # --- sentences and their markers (LacksMarker, HasSentenceBreak, ProseOf, RowLacksMarker) -------------------------------------
 def _has_sentence_break(piece):
     """A terminator, whitespace and the start of another sentence — unless the period closes an abbreviation."""
-    n = len(piece)
-    for i, c in enumerate(piece):
-        if c not in ".!?":
-            continue
-        j = i + 1
-        if j < n and piece[j] in "'\"”)":
-            j += 1
-        k = j
-        while k < n and piece[k] in _WS_SET:
-            k += 1
-        if k == j or k >= n:
-            continue
-        nxt = piece[k]
-        if not ("0" <= nxt <= "9" or nxt in "(\"'" or (nxt <= "\uffff" and unicodedata.category(nxt) == "Lu")):
-            continue
-        if not _abbreviation_end(piece[max(0, i - 8):i + 1]):
-            return True
-    return False
+    return bool(_sentence_break_ends(piece))
 
 
 def _lacks_marker(line):
@@ -1140,9 +1159,55 @@ def has_transclusion(body):
     return any(text[link[0]] == "!" for text, link in _wikilinks_outside_code(body))
 
 
-def citing_lines(prose):
-    """(line, ordinals, folded text) for every prose line that cites claims — outside code, tables, headings, callout titles
-    and a demonstration's working (MarkdownDialect.CitingLines)."""
+# --- citing lines and cells, read per run of markers (MarkdownDialect.Runs, .Cells, .Placement; platform da3a732) --------------
+# A citing line is (line, ordinals, folded text, runs): each run a [offset in the folded text, ordinals] for adjacent markers.
+_MARKER_CHARACTERS = frozenset("[]^c0123456789")
+
+
+def _marker_ordinals(text):
+    return sorted({int(n) for n in _MARKER.findall(text)})
+
+
+def _fold_by_runs(raw, rendered, fold):
+    """MarkdownDialect.FoldByRuns: the line folded piece by piece between its marker runs, joined by one space wherever
+    whitespace separated them, and where each run stands in the result. `rendered` is `raw` with its code spans blanked."""
+    if len(raw) != len(rendered):   # never expected: the line whole, one run at its end
+        whole = fold(raw)
+        return whole, [(len(whole), _marker_ordinals(rendered))]
+    runs = []
+    for m in _MARKER.finditer(rendered):
+        ordinal = int(m.group(1))
+        if runs and all(c in _WS_SET for c in rendered[runs[-1][1]:m.start()]):
+            if ordinal not in runs[-1][2]:
+                runs[-1][2].append(ordinal)
+            runs[-1][1] = m.end()
+        else:
+            runs.append([m.start(), m.end(), [ordinal]])
+    folded, result, state = [], [], {"space": False, "length": 0}
+
+    def append(piece):
+        text = fold(piece)
+        if not text:
+            state["space"] |= any(c in _WS_SET for c in piece)
+            return
+        if state["length"] and (state["space"] or piece[0] in _WS_SET):
+            folded.append(" ")
+            state["length"] += 1
+        folded.append(text)
+        state["length"] += len(text)
+        state["space"] = piece[-1] in _WS_SET
+
+    frm = 0
+    for start, end, ordinals in runs:
+        append(raw[frm:start])
+        result.append((state["length"], ordinals))
+        state["space"] |= any(c not in _MARKER_CHARACTERS for c in rendered[start:end])
+        frm = end
+    append(raw[frm:])
+    return "".join(folded), result
+
+
+def _read_citing_lines(prose, fold):
     result, callout, spans = [], None, _CodeSpans()
     blocks = _read_blocks(dl_lines(prose))
     tables = _table_roles(blocks)
@@ -1161,10 +1226,148 @@ def citing_lines(prose):
         text = _after_container_markers(rendered)
         if callout == "demonstration" or _HEADING.match(text) or tables[i] != _TABLE_NONE:
             continue
-        ordinals = sorted({int(n) for n in _MARKER.findall(text)})
+        ordinals = _marker_ordinals(text)
         if ordinals:
-            result.append((i + 1, ordinals, claim_text(_after_container_markers(content))))
+            folded, runs = _fold_by_runs(_after_container_markers(content), text, fold)
+            result.append((i + 1, ordinals, folded, runs))
     return result
+
+
+def citing_lines(prose):
+    """MarkdownDialect.CitingLines: every prose line that cites claims — outside code, tables, headings, callout titles and a
+    demonstration's working — as (line, ordinals, text as claim_text reads it, runs)."""
+    return _read_citing_lines(prose, claim_text)
+
+
+def legacy_citing_lines(prose):
+    """The same lines, their text read by legacy_claim_text: what a line a small edit keeps said when it was published."""
+    return _read_citing_lines(prose, legacy_claim_text)
+
+
+def _cell_ranges(row):
+    """Where a table row's cells stand in it, as (start, end) offsets: between unescaped pipes, without the empty cell a
+    leading or trailing pipe makes (MarkdownDialect.CellRanges)."""
+    frm, to = 0, len(row)
+    while frm < to and row[frm] in _WS_SET:
+        frm += 1
+    while to > frm and row[to - 1] in _WS_SET:
+        to -= 1
+    cells, start = [], frm
+    for k in range(frm, to + 1):
+        if k == to or (row[k] == "|" and (k == frm or row[k - 1] != "\\")):
+            cells.append((start, k))
+            start = k + 1
+    if len(cells) > 1 and to > frm and row[frm] == "|":
+        cells.pop(0)
+    if len(cells) > 1 and to > frm and row[to - 1] == "|" and not (to - 2 >= frm and row[to - 2] == "\\"):
+        cells.pop()
+    return cells
+
+
+def citing_cells(prose):
+    """MarkdownDialect.CitingCells: every cell of a table's body rows that carries a marker, read as a citing line of its own
+    (the owner, 20 Oct 2026) — outside a demonstration's working — with the line of its row."""
+    result, callout, spans = [], None, _CodeSpans()
+    blocks = _read_blocks(dl_lines(prose))
+    tables = _table_roles(blocks)
+    for i, (code, content, depth, _) in enumerate(blocks):
+        if code or not content.strip(_WS):
+            spans.end_paragraph()
+            continue
+        rendered = spans.blank(content)
+        if depth == 0:
+            callout = None
+        if depth > 0:
+            head = _CALLOUT.match(rendered)
+            if head:
+                callout = head.group(1).lower()
+                continue
+        if tables[i] != _TABLE_ROW or callout == "demonstration":
+            continue
+        raw, text = _after_container_markers(content), _after_container_markers(rendered)
+        if len(raw) != len(text):
+            raw = text   # never expected: the row as shown rather than a misplaced cell boundary
+        for start, end in _cell_ranges(text):
+            shown = text[start:end]
+            ordinals = _marker_ordinals(shown)
+            if ordinals:
+                folded, runs = _fold_by_runs(raw[start:end], shown, claim_text)
+                result.append((i + 1, ordinals, folded, runs))
+    return result
+
+
+def markers_outside_sentences(prose):
+    """MarkdownDialect.MarkersOutsideSentences: the 1-based lines carrying a marker where no sentence stands — a heading, a
+    table's header or delimiter row, a callout's title (marker_outside_sentence)."""
+    result, spans = [], _CodeSpans()
+    blocks = _read_blocks(dl_lines(prose))
+    tables = _table_roles(blocks)
+    for i, (code, content, depth, _) in enumerate(blocks):
+        if code or not content.strip(_WS):
+            spans.end_paragraph()
+            continue
+        rendered = spans.blank(content)
+        text = _after_container_markers(rendered)
+        titled = depth > 0 and _CALLOUT.match(rendered) is not None
+        if (titled or _HEADING.match(text) or tables[i] in (_TABLE_HEADER, _TABLE_DELIMITER)) and _MARKER.search(text):
+            result.append(i + 1)
+    return result
+
+
+def marked_lines(text):
+    """MarkdownDialect.MarkedLines: (line as written, its ordinals) for every line carrying markers outside code."""
+    lines, spans, result = dl_lines(text), _CodeSpans(), []
+    for line, (code, content, _, _) in zip(lines, _read_blocks(lines)):
+        if code or not content.strip(_WS):
+            spans.end_paragraph()
+            continue
+        ordinals = _marker_ordinals(spans.blank(content))
+        if ordinals:
+            result.append((line, ordinals))
+    return result
+
+
+def _sentence_break_ends(piece):
+    """MarkdownDialect.SentenceBreakEnds: just past every terminator followed by whitespace and the start of another
+    sentence (a capital, a digit, an opening bracket or quote), an abbreviation's period left out."""
+    n, out = len(piece), []
+    for i, c in enumerate(piece):
+        if c not in ".!?":
+            continue
+        j = i + 1
+        if j < n and piece[j] in "'\"”)":
+            j += 1
+        k = j
+        while k < n and piece[k] in _WS_SET:
+            k += 1
+        if k == j or k >= n:
+            continue
+        nxt = piece[k]
+        if not ("0" <= nxt <= "9" or nxt in "(\"'" or (nxt <= "\uffff" and unicodedata.category(nxt) == "Lu")):
+            continue
+        if not _abbreviation_end(piece[max(0, i - 8):i + 1]):
+            out.append(i + 1)
+    return out
+
+
+_CLOSERS = frozenset("\"')]”’*_`")
+_CLOSING_LOOK_BACK = 4   # closing quotes, brackets and spaces read back from a run before its terminator: bounded
+
+
+def _ends_sentence_at(text, at):
+    i, floor = at, max(0, at - _CLOSING_LOOK_BACK)
+    while i > floor and (text[i - 1] in _WS_SET or text[i - 1] in _CLOSERS):
+        i -= 1
+    if i == 0 or text[i - 1] not in ".!?":
+        return False
+    return text[i - 1] != "." or not _abbreviation_end(text[max(0, i - 9):i])
+
+
+def sentence_ends(line):
+    """MarkdownDialect.SentenceEnds: where sentences end on a citing line, as offsets into its folded text, ascending —
+    past every real sentence break, and at every marker run written after a terminator."""
+    _, _, text, runs = line
+    return sorted(_sentence_break_ends(text) + [at for at, _ in runs if _ends_sentence_at(text, at)])
 
 
 def transclusion_lines(body):
@@ -1236,6 +1439,46 @@ def parse_front_matter(canonical):
     domain = next((d for d in domains if d in SENSITIVE), domains[0] if domains else None)   # the first sensitive one governs
     return ({"summary": values["summary"], "wikidata_id": values.get("wikidata_id") or None, "domain": domain, "domains": domains,
              "lang": values["lang"], "entities": _fm_list(values, "entities"), "title": values.get("title") or None}, body)
+
+
+def _key_lines(canonical):
+    """FrontMatter.KeyLines: (key, value) for every line of the front matter that names a known key, in order."""
+    text = canonical.replace("\r\n", "\n").lstrip("﻿")
+    if not text.startswith("---\n"):
+        return []
+    end = text.find("\n---\n", 3)
+    if end <= 3:
+        return []
+    out = []
+    for raw in text[4:end].split("\n"):
+        line = raw.rstrip(_WS)
+        colon = line.find(":")
+        if colon > 0 and line[:colon].strip(_WS) in FRONT_MATTER_KEYS:
+            out.append((line[:colon].strip(_WS), line[colon + 1:].strip(_WS)))
+    return out
+
+
+def repeated_keys(canonical):
+    """FrontMatter.RepeatedKeys: the keys written more than once — the last value governs while a reader sees the first."""
+    seen, repeated = set(), []
+    for key, _ in _key_lines(canonical):
+        if key in seen and key not in repeated:
+            repeated.append(key)
+        seen.add(key)
+    return repeated
+
+
+def declared_domains(canonical):
+    """FrontMatter.DeclaredDomains: every domain any `domain:` line declares, a repetition's earlier lines included."""
+    return [d for key, value in _key_lines(canonical) if key == "domain" for d in _fm_list({"domain": value}, "domain")]
+
+
+def _article_prose(canonical):
+    """The body of an article without its front matter; None when it has none that parses (GateZero.ArticleProse)."""
+    try:
+        return parse_front_matter(canonical)[1]
+    except FrontMatterError:
+        return None
 
 
 def domain_of(canonical):
@@ -1389,6 +1632,178 @@ def _dialect_problem(kind, where, text):
     return f"gate 0 refuses {_REASON.get(kind, kind)} — {where}: \"{excerpt}\" — {_WHY[kind]}"
 
 
+# --- a small edit is one (SmallEditScope, BaseClaims; BP-08, the owner's decisions of 20 Oct 2026) ---------------------------
+def _tokens(text):
+    """TextNormalizer.Tokens: runs of letters and digits (one UTF-16 unit each), lower-cased."""
+    out, current = [], []
+    for c in text:
+        if c <= "￿" and (c.isalpha() or _is_digit16(c)):
+            low = c.lower()
+            current.append(low if len(low) == 1 else c)
+        elif current:
+            out.append("".join(current))
+            current = []
+    if current:
+        out.append("".join(current))
+    return out
+
+
+_SCOPE_BLOCK_ID = re.compile(r"\s*\^c\d+(?=\s|$)")
+
+
+def _scope_read(prose):
+    """SmallEditScope.Read: the words each ordinal's markers close, the words no marker closes, and every sentence."""
+    by_ordinal, loose, sentences, fence = {}, [], [], False
+    for raw in prose.split("\n"):
+        line = raw.strip(_WS)
+        if line.startswith("```"):
+            fence = not fence
+            continue
+        if not line:
+            continue
+        if fence or line.startswith("#"):
+            block = " ".join(_tokens(line))
+            if block:
+                sentences.append(block)
+            continue
+        line = _SCOPE_BLOCK_ID.sub("", line)
+        start = 0
+        for m in re.finditer(r"\[\^c(\d+)\]", line):
+            words = " ".join(_tokens(line[start:m.start()]))
+            by_ordinal.setdefault(m.group(1), []).append(words)
+            sentences.append(words)
+            start = m.end()
+        rest = " ".join(_tokens(line[start:]))
+        if rest:
+            loose.append(rest)
+            sentences.append(rest)
+    return by_ordinal, loose, sentences
+
+
+def small_edit_exceeds(base_prose, merged_prose, submitted):
+    """SmallEditScope.Exceeds: whether the claims an edit removes or adds — the ones it supplies anew counted as replaced —
+    or the sentences it adds pass max(limits.small_edit_min_changed_claims, share × the base's): a rewrite is an article."""
+    share, floor = LIMITS["small_edit_max_changed_share"], LIMITS["small_edit_min_changed_claims"]
+    keys = {str(o) for o in submitted}
+    before, after = _scope_read(base_prose), _scope_read(merged_prose)
+    units = lambda p: Counter([" | ".join(v) for k, v in p[0].items() if k not in keys] + p[1])
+    excess = lambda a, b: sum(max(0, n - b[k]) for k, n in a.items())
+    bound = lambda n: max(floor, int(share * n))
+    claims_before, claims_after = units(before), units(after)
+    removed = excess(claims_before, claims_after) + sum(1 for k in before[0] if k in keys)
+    added = excess(claims_after, claims_before) + len(keys)
+    if max(removed, added) > bound(len(before[0]) + len(before[1])):
+        return True
+    return excess(Counter(after[2]), Counter(before[2])) > bound(len(before[2]))
+
+
+def _same_source(a, b):
+    return (a is None and b is None) or a == b or same_document(a, b)
+
+
+def _demonstration_key(d):
+    return None if not isinstance(d, dict) else tuple(d.get(k) for k in ("method", "text", "checker", "artifact_sha256", "output"))
+
+
+def _premise_keys(premises):
+    return [(p.get("claim_ordinal"), p.get("source_url", p.get("source")), p.get("quote")) for p in (premises or []) if isinstance(p, dict)]
+
+
+def _recites(base, c):
+    """ClaimRecital.Recites: the claim the edit supplies carries everything authored about the base claim at its ordinal.
+    The base claim is read as scio_get_claims serves it (`source`, `second_source`), which carries no wikidata_id."""
+    bp, cp = _premise_keys(base.get("premises")), _premise_keys(c.get("premises"))
+    return (base.get("ordinal") == c.get("ordinal") and base.get("text") == c.get("text")
+            and (base.get("kind") or "sourced") == (c.get("kind") or "sourced")
+            and _same_source(base.get("source_url", base.get("source")), c.get("source_url"))
+            and base.get("quote") == c.get("quote")
+            and _same_source(base.get("second_source_url", base.get("second_source")), c.get("second_source_url"))
+            and base.get("second_quote") == c.get("second_quote")
+            and ("wikidata_id" not in base or base.get("wikidata_id") == c.get("wikidata_id"))
+            and base.get("origin_claim_id") == c.get("origin_claim_id") and base.get("scope") == c.get("scope")
+            and _demonstration_key(base.get("demonstration")) == _demonstration_key(c.get("demonstration"))
+            and len(bp) == len(cp) and all(x[0] == y[0] and _same_source(x[1], y[1]) and x[2] == y[2] for x, y in zip(bp, cp)))
+
+
+def changed_ordinals(claims, base_claims):
+    """SmallEditScope.ChangedOrdinals: the ordinals of the claims the edit lists anew rather than re-citing as the base has
+    them; every one when the base's claims are not known."""
+    by = {}
+    for b in base_claims or []:
+        if isinstance(b, dict) and isinstance(b.get("ordinal"), int):
+            by.setdefault(b["ordinal"], b)
+    return {c["ordinal"] for c in claims if isinstance(c.get("ordinal"), int) and not (c["ordinal"] in by and _recites(by[c["ordinal"]], c))}
+
+
+_TITLE_HEADING = re.compile(r" {0,3}#(?:[ \t]|$)")
+
+
+def article_title(prose):
+    """MarkdownDialect.Title: the first non-empty level-one ATX heading a reader sees — outside code, quotes and display
+    maths — without its closing run of `#`; None when there is none."""
+    blocks = _read_blocks(dl_lines(prose))
+    maths = _closed_maths(blocks)
+    for (code, content, depth, _), role in zip(blocks, maths):
+        if code or depth > 0 or role != _ROLE_NONE:
+            continue
+        opening = _TITLE_HEADING.match(content)
+        if not opening:
+            continue
+        text = content[opening.end():].strip(_WS)
+        run = len(text)
+        while run > 0 and text[run - 1] == "#":
+            run -= 1
+        if run < len(text) and (run == 0 or text[run - 1] in " \t"):
+            text = text[:run].rstrip(_WS)
+        if text:
+            return text
+    return None
+
+
+def changes_identity(base, merged):
+    """SmallEditScope.ChangesIdentity: the edit retitles the page (front matter or heading), moves its entity or changes
+    its linked entities — an article's to make (the owner, 20 Oct 2026)."""
+    try:
+        (bf, bb), (af, ab) = parse_front_matter(base), parse_front_matter(merged)
+    except FrontMatterError:
+        return False
+    return (bf["wikidata_id"] != af["wikidata_id"] or bf["title"] != af["title"] or article_title(bb) != article_title(ab)
+            or set(bf["entities"]) != set(af["entities"]))
+
+
+# --- one document, two spellings (SourceIdentity.SameDocument): second_source_not_independent ------------------------------------
+_TRACKERS = frozenset("fbclid gclid dclid gbraid wbraid msclkid mc_cid mc_eid igshid yclid twclid _ga _gl".split())
+
+
+def _document_key(url):
+    if not isinstance(url, str):
+        return None
+    try:
+        p = urlparse(url.strip(_WS))
+        host, port = p.hostname, p.port
+    except ValueError:
+        return None
+    if p.scheme.lower() not in ("http", "https") or not host:
+        return None
+    try:
+        host = host.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        host = host.lower()
+    host = host[4:] if host.startswith("www.") else host
+    default = {"http": 80, "https": 443}[p.scheme.lower()]
+    path = p.path or "/"
+    path = path.rstrip("/") if len(path) > 1 else ""
+    query = sorted(q for q in p.query.split("&") if q and not (q.split("=", 1)[0].lower().startswith("utm_") or q.split("=", 1)[0].lower() in _TRACKERS))
+    return host + ("" if port in (None, default) else f":{port}") + path + ("?" + "&".join(query) if query else "")
+
+
+def same_document(a, b):
+    """Two URLs of one document: host without www., port, path without its trailing slash, the query without trackers and
+    in order — the fragment never counts. A second source is another document (SEC-AUDIT)."""
+    ka, kb = _document_key(a), _document_key(b)
+    return ka is not None and ka == kb
+
+
 def _forbidden(url):
     """ForbiddenSources.IsForbidden over the signed host list, on the host's IDNA form as the platform reads it (Uri.IdnHost:
     ｗｉｋｉｐｅｄｉａ。org is wikipedia.org), plus the Wikimedia wiki pages the plugin keeps out too (P7) — by host and path,
@@ -1409,12 +1824,14 @@ def _claim_texts(c):
             + [p.get("quote") for p in premises if isinstance(p, dict)] if isinstance(t, str)]
 
 
-def gate_zero(inp, claims, base=None, page_domain=None):
+def gate_zero(inp, claims, base=None, page_domain=None, base_claims=None):
     """(problems, notes): what gate 0 refuses, named by its reason, and what the pre-flight could not read the way the gate
-    will. `base` is the canonical body of the revision a small edit lands on; `page_domain` the page's domain when known."""
+    will. `base` is the canonical body of the revision a small edit lands on; `page_domain` the page's domain when known;
+    `base_claims` the base revision's claims as scio_get_claims serves them (which of the edit's claims merely re-cite one)."""
     problems, notes = [], []
     kind = inp.get("kind")
     body = inp.get("body") if kind != "small_edit" else None     # ProposalShape.ForKind: a kind carries one text only
+    body_in = body
     patch = inp.get("patch") if kind not in ("article", "translation") else None
     if body is not None and patch is not None and kind is None:
         patch = None
@@ -1476,6 +1893,36 @@ def gate_zero(inp, claims, base=None, page_domain=None):
         problems.append(f"gate 0 refuses invalid_front_matter — {fm_error}; front matter is `key: value` lines only — the keys "
                         f"{', '.join(FRONT_MATTER_KEYS)}, summary and lang required, lists in brackets, no comments, block lists, "
                         "block scalars or quotes, domain from " + ", ".join(DOMAINS) + " (markdown.md §1)")
+    resulting = body_in if body_in is not None else merged
+    if resulting is not None:
+        repeated = [k for k in repeated_keys(resulting) if k not in repeated_keys(base or "")]
+        if repeated:
+            problems.append(f"gate 0 refuses front_matter_duplicate_key — {', '.join(repeated)} written twice in the front matter: the "
+                            "last value would govern while a reader sees the first; keep one line per key (markdown.md §1)")
+
+    base_prose = _article_prose(base) if base is not None else None
+    merged_prose = _article_prose(merged) if body is None and merged is not None else None
+    if kind == "small_edit" and merged_prose is not None and base_prose is not None:
+        known = base_claims is not None
+        exceeds = small_edit_exceeds(base_prose, merged_prose, changed_ordinals(claims, base_claims))
+        if exceeds and not known and not small_edit_exceeds(base_prose, merged_prose, set()):
+            notes.append("gate 0 may refuse not_a_small_edit — the edit changes more than a small edit may unless the claims it "
+                         "lists re-cite the base's exactly as stored; put the base revision's claims (scio_get_claims) beside "
+                         "proposal.json as base-claims.json and the pre-flight reads which ones it re-cites (maintain.md)")
+        elif exceeds:
+            problems.append(f"gate 0 refuses not_a_small_edit — the edit removes, replaces or adds more claims or sentences than "
+                            f"max({LIMITS['small_edit_min_changed_claims']}, {LIMITS['small_edit_max_changed_share']:g} × the base's) "
+                            "(limits.small_edit_max_changed_share): a rewrite is an article — propose kind article (maintain.md)")
+    if kind == "small_edit" and merged is not None and base is not None:
+        if ((domain_of(base) or "general") in SENSITIVE or any(d in SENSITIVE for d in declared_domains(base))) \
+                and domain_of(merged) is not None and domain_of(merged) not in SENSITIVE \
+                and not any(d in SENSITIVE for d in declared_domains(merged)):
+            problems.append("gate 0 refuses not_a_small_edit — the edit takes the page out of its sensitive domain: an article's to make "
+                            "(Part V)")
+        if changes_identity(base, merged):
+            problems.append("gate 0 refuses not_a_small_edit — the edit changes the page's title, its heading, its wikidata_id or its "
+                            "entities: a small edit corrects a page, it never retitles it or moves it to another entity — propose an "
+                            "article (the owner, 20 Oct 2026)")
 
     # the dialect
     settled, framed = set(), set()   # without base.md: kept lines read in what their hunk shows, or maybe not (_new_side)
@@ -1483,12 +1930,10 @@ def gate_zero(inp, claims, base=None, page_domain=None):
         prose_lines = dl_lines(prose)
         for k, line_no in dialect_check(prose):
             problems.append(_dialect_problem(k, f"body line {line_no + offset}", prose_lines[line_no - 1]))
-    elif merged is not None and fm_error is None:
-        merged_prose = parse_front_matter(merged)[1]
-        base_prose = parse_front_matter(base)[1] if domain_of(base) is not None else ""
-        before, after = dl_lines(base_prose), dl_lines(merged_prose)
+    elif merged_prose is not None:
+        before, after = dl_lines(base_prose or ""), dl_lines(merged_prose)
         same = lambda k: "no_claim_marker" if k == "table_row" else k   # one kind on the platform, however this port words it
-        carried = Counter((same(k), before[n - 1]) for k, n in dialect_check(base_prose))
+        carried = Counter((same(k), before[n - 1]) for k, n in dialect_check(base_prose or ""))
         for k, n in dialect_check(merged_prose):   # a violation the base already carried on the same line is not the edit's
             if carried[(same(k), after[n - 1])] > 0:
                 carried[(same(k), after[n - 1])] -= 1
@@ -1515,13 +1960,62 @@ def gate_zero(inp, claims, base=None, page_domain=None):
                 else:
                     problems.append(problem)
 
+    # a marker in a heading, a table's header row or a callout's title cites a claim where no sentence is compared with it
+    for line in _new_markers_outside_sentences(base_prose if merged_prose is not None else None, merged_prose if merged_prose is not None else prose):
+        problems.append(f"gate 0 refuses marker_outside_sentence — a claim marker in a heading, a table's header row or a callout's "
+                        f"title: \"{line.strip(_WS)[:80]}\" — cite the claim at the end of the sentence that states it (markdown.md §2)")
+
     if has_transclusion(prose):
         problems.append("gate 0 refuses transclusion_unresolved — only a line of its own, `![[slug^cN]]` or `![[lang/slug^cN]]`, "
                         "outside any quote, callout, list or sentence, is expanded; any other ![[…]] is left unresolved (markdown.md §4)")
+
+    # the front-matter summary, whenever the submission writes it: the dialect's markup rules, at most three sentences and
+    # limits.summary_max_chars characters, every sentence closed by a claim marker (D45, the owner, 20 Oct 2026)
+    base_summary = None
+    if base is not None:
+        try:
+            base_summary = parse_front_matter(base)[0]["summary"]
+        except FrontMatterError:
+            pass
+    written_summary = result_fm["summary"] if result_fm and result_fm["summary"] != base_summary else None
+    if written_summary is None and body is None and merged is None:   # no base: a summary line the patch adds is read alone
+        added_summary = next((t[len("summary:"):].strip(_WS) for t in reversed(added_fm.split("\n")) if t.startswith("summary:")), None)
+    else:
+        added_summary = None
+    for text, refuse in ((written_summary, True), (added_summary, False)):
+        if text is None:
+            continue
+        found = []
+        kinds = {k for k, _ in dialect_check(text) + dialect_check("S " + text)}
+        for k in ("hidden_text", "raw_html", "external_image", "external_link"):
+            if k in kinds:
+                found.append(_dialect_problem(k, "the front-matter summary", text))
+        sentences, unmarked, chars = summary_sentences(text)
+        if sentences > LIMITS["summary_max_sentences"] or chars > LIMITS["summary_max_chars"]:
+            found.append(f"gate 0 refuses summary_too_long — the front-matter summary holds {sentences} sentence(s) and {chars:,} characters; "
+                         f"at most {LIMITS['summary_max_sentences']} and {LIMITS['summary_max_chars']:,} (limits.summary_max_sentences, "
+                         "summary_max_chars), image alt text counted. \". \" ends a sentence there whatever word it closes: write "
+                         "abbreviations out (\"Doctor Smith\", not \"Dr. Smith\") — markdown.md §2a")
+        if unmarked:
+            found.append("gate 0 refuses summary_unmarked — every sentence of the front-matter summary ends in a claim marker, [^cN] "
+                         "right after its full stop; \". \" ends a sentence there whatever word it closes (write \"Doctor Smith\", not "
+                         "\"Dr. Smith\"), and an image's alt text that reads as a sentence is one no marker closes (markdown.md §2a)")
+        for f in found:
+            (problems if refuse else notes).append(f if refuse else f.replace("gate 0 refuses", "gate 0 may refuse", 1)
+                                                   + " (a summary line the patch adds, read without base.md)")
+
+    # every marker the submission writes resolves to a listed claim — prose, added front-matter lines, a summary it writes,
+    # and the lines a patch writes into the article it merges into; every listed claim is used
     marked = body if (body is not None and fm_error) else prose   # an unparsed front matter is read as prose, summary and all
-    stray = sorted(set(markers(marked) + markers(added_fm)) - ordinals)
+    written = markers(marked) + markers(added_fm)
+    if fm and fm["summary"] != base_summary:
+        written += markers(fm["summary"])
+    if merged_prose is not None:
+        written += _changed_line_markers(base_prose or "", merged_prose)
+    stray = sorted(set(written) - ordinals)
     if stray:
-        problems.append(f"gate 0 refuses no_claim_marker — markers without a claim: {stray[:8]}")
+        problems.append(f"gate 0 refuses no_claim_marker — markers without a listed claim: {stray[:8]} — every claim a sentence the "
+                        "submission writes cites is listed, a base claim re-listed exactly as stored (maintain.md)")
     used = set(markers(kept_lines(patch or "")) if body is None else markers(marked))
     if fm:
         used |= set(markers(fm["summary"]))
@@ -1530,20 +2024,29 @@ def gate_zero(inp, claims, base=None, page_domain=None):
         problems.append(f"gate 0 refuses unused_claim — claims cited by no sentence{' the patch keeps (added or context lines)' if body is None else ''}: "
                         f"{unused[:8]}")
     if fm_error is None:
-        citing = prose if body is not None else (parse_front_matter(merged)[1] if merged is not None else kept_lines(patch or ""))
-        for line_no, message in _claim_text_mismatches(claims, citing):
+        citing = prose if body is not None else (merged_prose if merged_prose is not None else kept_lines(patch or ""))
+        legacy = _unchanged_citing_lines(base_prose or "", merged_prose) if body is None and merged_prose is not None else None
+        strict = _claim_text_mismatches(claims, citing, legacy, changed_ordinals(claims, base_claims) if legacy is not None else None)
+        lenient = set()
+        if legacy is not None and base_claims is None:   # unknown which claims re-cite the base's: a kept line may read as published
+            lenient = {m for _, m, _ in _claim_text_mismatches(claims, citing, legacy, set())}
+        for line_no, m, message in strict:
             # without base.md, a line under quoted lines may be a demonstration's working and one under table rows a row of
             # its own — CitingLines reads neither as a sentence — when the callout title or the header stands above the hunk
             if body is None and merged is None and line_no in framed:
                 notes.append(message.replace("gate 0 refuses", "gate 0 may refuse", 1))
+            elif legacy is not None and base_claims is None and m not in lenient:
+                notes.append(message.replace("gate 0 refuses", "gate 0 may refuse", 1) + " — unless the claim re-cites the base's exactly "
+                             "as stored (base-claims.json beside proposal.json lets the pre-flight read which)")
             else:
                 problems.append(message)
     if body is None and merged is None and any(n.startswith("gate 0 may refuse") for n in notes):
         notes.insert(0, "the patch is read without base.md, a hunk at a time: a fence, a table header or a callout title above a hunk "
                         "is unknown here, so what depends on one is only a warning — put the text of base_revision beside "
                         "proposal.json as base.md and propose with proposal_file, and the patch is read in its article (maintain.md)")
-    if result_fm and result_fm["wikidata_id"] is not None and not re.fullmatch(r"Q[0-9]+", result_fm["wikidata_id"]):
-        problems.append(f"gate 0 refuses invalid_wikidata_id — wikidata_id {result_fm['wikidata_id'][:40]!r} is not a Wikidata id (Q followed by digits)")
+    if result_fm and result_fm["wikidata_id"] is not None and not _WIKIDATA.fullmatch(result_fm["wikidata_id"]):
+        problems.append(f"gate 0 refuses invalid_wikidata_id — wikidata_id {result_fm['wikidata_id'][:40]!r} is not a Wikidata id (Q and its digits, "
+                        "no leading zero)")
     if result_fm:
         inherited = set()
         if body is None and base is not None:
@@ -1551,22 +2054,27 @@ def gate_zero(inp, claims, base=None, page_domain=None):
                 inherited = set(parse_front_matter(base)[0]["entities"])
             except FrontMatterError:
                 pass
-        bad = [e for e in result_fm["entities"] if not re.fullmatch(r"Q[0-9]+", e) and e not in inherited]
+        bad = [e for e in result_fm["entities"] if not _WIKIDATA.fullmatch(e) and e not in inherited]
         if bad:
-            problems.append(f"gate 0 refuses invalid_wikidata_id — entities are Wikidata ids (Q followed by digits), not {bad[0][:40]!r}")
+            problems.append(f"gate 0 refuses invalid_wikidata_id — entities are Wikidata ids (Q and its digits, no leading zero), not {bad[0][:40]!r}")
     if has_hidden_text(summary):
         problems.append("gate 0 refuses raw_html — a character a reader cannot see in the summary; write plain text (markdown.md §6)")
     if has_hidden_text(reviewer_material) and not any("a character a reader cannot see" in p for p in problems):
         problems.append(f"gate 0 refuses raw_html — a character a reader cannot see in the {'body' if body is not None else 'patch'} "
                         "(front matter and diff headers included); write plain text (markdown.md §6)")
 
-    media = media_references(merged if merged is not None else prose)
+    if body is None and merged is not None:
+        media = article_media_references(merged)   # the cap is the article's: a patch is counted on what the merge produces
+    else:
+        media = list(dict.fromkeys(media_references(prose) + media_references(fm["summary"] if fm else "")))
     if len(media) > LIMITS["media_max_per_article"]:
         problems.append(f"gate 0 refuses too_many_media — {len(media)} images; an article holds at most {LIMITS['media_max_per_article']} (media.max_per_article)")
     if _REVIEWER.search(reviewer_material) or _REVIEWER.search(summary):
         problems.append("gate 0 refuses reviewer_instruction — text addressed to the reviewers is refused and penalised (security.md §4)")
 
-    sensitive = any(d in SENSITIVE for d in ((fm or {}).get("domain"), page_domain, domain_of(base), domain_of(merged)))
+    # every domain a repeated key declares counts too, which the parser's last value hides (the owner, 20 Oct 2026)
+    declared = [d for t in (body_in, base, merged) if isinstance(t, str) for d in declared_domains(t)]
+    sensitive = any(d in SENSITIVE for d in ((fm or {}).get("domain"), page_domain, domain_of(base), domain_of(merged), *declared))
     for i, c in enumerate(claims):
         n = c.get("ordinal", i)
         urls = [c.get("source_url"), c.get("second_source_url")] + [p.get("source_url") for p in (c.get("premises") if isinstance(c.get("premises"), list) else []) if isinstance(p, dict)]
@@ -1574,8 +2082,11 @@ def gate_zero(inp, claims, base=None, page_domain=None):
             if isinstance(u, str) and u and _forbidden(u):
                 problems.append(f"gate 0 refuses forbidden_source — claim {n} cites {source_host(u)}, a forbidden source host (P7: no Wikipedia, no Grokipedia, no mirrors, no Scio itself)")
         if sensitive and c.get("kind") != "demonstrated" and not (isinstance(c.get("second_source_url"), str) and c["second_source_url"].strip()):
-            why = next(d for d in ((fm or {}).get("domain"), page_domain, domain_of(base), domain_of(merged)) if d in SENSITIVE)
+            why = next(d for d in ((fm or {}).get("domain"), page_domain, domain_of(base), domain_of(merged), *declared) if d in SENSITIVE)
             problems.append(f"gate 0 refuses missing_second_source — claim {n}: domain '{why}' needs a second independent source (Part V)")
+        if c.get("second_source_url") is not None and same_document(c.get("source_url"), c.get("second_source_url")):
+            problems.append(f"gate 0 refuses second_source_not_independent — claim {n}: the second source is the first one written "
+                            "again (one document under two spellings); cite another document (Part V)")
         if any(_REVIEWER.search(t) for t in _claim_texts(c)):
             problems.append(f"gate 0 refuses reviewer_instruction — claim {n} addresses the reviewers (security.md §4)")
         d = c.get("demonstration") if isinstance(c.get("demonstration"), dict) else {}
@@ -1590,32 +2101,297 @@ def gate_zero(inp, claims, base=None, page_domain=None):
     return list(dict.fromkeys(problems)), notes
 
 
-def _claim_text_mismatches(claims, prose):
-    """A claim is the sentence that carries its marker: its folded text is found in every prose line citing it — except a
-    premise cited inline in the sentence of the demonstrated claim that rests on it (GateZero.ClaimTextMismatches).
-    [(1-based line of `prose`, the refusal)]."""
-    texts, premises, out = {}, {}, []
+def _first_at_least(values, at):
+    return bisect.bisect_left(values, at)
+
+
+def _first_run_from(runs, at, limit):
+    """The first run, at or before `limit`, whose offset is at least `at`; `limit` when none is."""
+    lo, hi = 0, limit
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if runs[mid][0] >= at:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+def _terminator_before(text, at):
+    i, floor = at, max(0, at - _CLOSING_LOOK_BACK)
+    while i > floor and (text[i - 1] == " " or text[i - 1] in _CLOSERS):
+        i -= 1
+    return i > 0 and text[i - 1] in ".!?"
+
+
+def _sentence_before(line, at, marked, ends):
+    """The stretch of the folded line that leads to the run at `at`, from the last sentence end before it."""
+    e = _first_at_least(ends, at) - 1
+    start = max(marked, ends[e] if e >= 0 else 0)
+    return line[2][start:at].strip(" ")
+
+
+def _reaches(line, text, after, end):
+    if not text or len(text) > end:
+        return False
+    return line.find(text, max(0, after - len(text) + 1), end) >= 0
+
+
+def _inline_premises(line, texts, premises):
+    """GateZero.InlinePremises: per run, the markers read as premises cited inline there — inside the sentence of a
+    demonstrated claim marked at the same run or a later one that rests on them; None when the line has none."""
+    text, runs = line[2], line[3]
+    spans, ends = None, None
+    for q, (at, ordinals) in enumerate(runs):
+        for d in ordinals:
+            rests, claim = premises.get(d), texts.get(d)
+            if not rests or not claim:
+                continue
+            previous = runs[q - 1][0] if q > 0 else 0
+            frm = max(0, previous - len(claim) + 1)
+            if len(claim) > at - frm:
+                continue
+            start = text.find(claim, frm, at)
+            if start < 0:
+                continue
+            lo = _first_run_from(runs, start + 1, q)
+            if ends is None:
+                ends = sentence_ends(line)
+            e = _first_at_least(ends, start + 1)
+            until = min(_first_run_from(runs, ends[e], q), q) if e < len(ends) else q
+            spans = spans or []
+            if lo < until:
+                spans.append((lo, until - 1, rests))
+            spans.append((q, q, rests))   # a premise written beside the demonstrated claim stands in its sentence
+    if spans is None:
+        return None
+    result, open_ = [None] * len(runs), Counter()
+    for r in range(len(runs)):
+        for frm, _, rests in spans:
+            if frm == r:
+                open_.update(rests)
+        for m in runs[r][1]:
+            if open_[m] > 0:
+                result[r] = (result[r] or set()) | {m}
+        for _, until, rests in spans:
+            if until == r:
+                open_.subtract(rests)
+    return result
+
+
+def _mismatched(line, texts, premises, legacy=None, published=None):
+    """GateZero.Mismatched: (ordinal, the sentence its marker closes, or None for a legacy reading) for every listed claim
+    a citing line or cell does not say, per marker occurrence."""
+    if published is not None and len(published[0][3]) != len(line[3]):
+        published = None   # never expected: read the line strictly rather than misplace a run
+    inline = _inline_premises(line, texts, premises)
+    ends, closed, marked = None, 0, 0
+    for r, (at, ordinals) in enumerate(line[3]):
+        closes = False
+        for m in ordinals:
+            if inline is not None and inline[r] is not None and m in inline[r]:
+                continue
+            closes = True
+            if m not in texts:
+                continue   # an unlisted marker is no_claim_marker's, or a base claim the edit carries
+            if legacy is not None and legacy(m):
+                says = (_reaches(published[0][2], published[1][m], closed, published[0][3][r][0]) if published is not None
+                        else _reaches(line[2], texts[m], closed, at))
+                if not says:
+                    yield m, None
+                continue
+            if ends is None:
+                ends = sentence_ends(line)
+            sentence = _sentence_before(line, at, marked, ends)
+            if not texts[m] or sentence != texts[m]:
+                yield m, sentence
+        if closes:
+            closed = published[0][3][r][0] if published is not None else at
+            if _terminator_before(line[2], at):   # a run after a terminator ends a sentence; a clause cited mid-sentence none
+                marked = at
+
+
+def _claim_text_mismatches(claims, prose, legacy_lines=None, rewritten=None):
+    """GateZero.ClaimTextMismatches: a claim's text is the whole sentence that cites it — every occurrence of its marker, on a
+    prose line or in a table cell, is preceded by exactly the claim's text from where the last sentence ended (markers and
+    block id dropped, whitespace collapsed, nothing else changed) — save a premise cited inline in the sentence of the
+    demonstrated claim that rests on it. `legacy_lines`: the lines of `prose` a patch kept as the base had them, read as
+    they were published, save for the claims in `rewritten`. [(1-based line, ordinal, the refusal)]."""
+    texts, premises = {}, {}
     for c in claims:
         if not isinstance(c.get("ordinal"), int):
             continue
         texts.setdefault(c["ordinal"], claim_text(c.get("text") if isinstance(c.get("text"), str) else ""))
         if c.get("kind") == "demonstrated":
-            premises.setdefault(c["ordinal"], [p["claim_ordinal"] for p in (c.get("premises") if isinstance(c.get("premises"), list) else [])
-                                               if isinstance(p, dict) and isinstance(p.get("claim_ordinal"), int)])
-    for line_no, ordinals, text in citing_lines(prose):
-        inline = {p for m in ordinals for p in premises.get(m, [])}
-        for m in ordinals:
-            if m not in inline and m in texts and (not texts[m] or texts[m] not in text):
-                out.append((line_no, f"gate 0 refuses claim_text_mismatch — claim {m}'s text is not the sentence that cites it: \"{text[:70]}\" does not "
-                           f"contain \"{texts[m][:70]}\" (both read as the platform reads them: markers, wikilink brackets, * ` _ dropped, "
-                           "typographic quotes and dashes as ASCII, lower case — markdown.md §2)"))
+            premises.setdefault(c["ordinal"], {p["claim_ordinal"] for p in (c.get("premises") if isinstance(c.get("premises"), list) else [])
+                                               if isinstance(p, dict) and isinstance(p.get("claim_ordinal"), int)})
+    legacy_by_line = legacy_texts = None
+    if legacy_lines:
+        legacy_by_line = {l[0]: l for l in legacy_citing_lines(prose)}
+        legacy_texts = {}
+        for c in claims:
+            if isinstance(c.get("ordinal"), int):
+                legacy_texts.setdefault(c["ordinal"], legacy_claim_text(c.get("text") if isinstance(c.get("text"), str) else ""))
+    refused, out = set(), []
+
+    def refuse(line_no, m, sentence, where):
+        if m in refused:
+            return
+        refused.add(m)
+        if sentence is None:
+            why = f"its text is not found in the kept line it cites, \"{legacy_by_line[line_no][2][:90]}\""
+        elif not sentence:
+            why = "its marker closes no sentence: the text before it is another claim's or nothing"
+        else:
+            why = f"the {where} that cites it reads \"{sentence[:160]}\"; write the claim's text exactly so"
+        out.append((line_no, m, f"gate 0 refuses claim_text_mismatch — claim {m}: {why} (the whole sentence up to its marker, "
+                                 "as written — case, emphasis, code marks, wikilinks and quotes included; only whitespace "
+                                 "is normalised — markdown.md §2)"))
+
+    for line in citing_lines(prose):
+        as_published = ((lambda o: rewritten is None or o not in rewritten)
+                        if legacy_lines is not None and line[0] in legacy_lines else None)
+        published = ((legacy_by_line[line[0]], legacy_texts)
+                     if as_published is not None and legacy_by_line is not None and line[0] in legacy_by_line else None)
+        for m, sentence in _mismatched(line, texts, premises, as_published, published):
+            refuse(line[0], m, sentence, "sentence")
+    for cell in citing_cells(prose):
+        kept = legacy_lines is not None and cell[0] in legacy_lines
+        for m, sentence in _mismatched(cell, texts, premises):
+            if kept and not (rewritten is not None and m in rewritten):
+                continue
+            refuse(cell[0], m, sentence, "table cell")
     return out
+
+
+def _unchanged_citing_lines(base_prose, merged_prose):
+    """The 1-based lines of the merged prose that are, as written, lines of the base carrying markers."""
+    before = {line for line, _ in marked_lines(base_prose)}
+    return {i + 1 for i, line in enumerate(dl_lines(merged_prose)) if line in before}
+
+
+def _changed_line_markers(base_prose, merged_prose):
+    """The markers on merged lines that are not, as written, lines of the base carrying markers: what a patch writes."""
+    before = {line for line, _ in marked_lines(base_prose)}
+    return [m for line, ordinals in marked_lines(merged_prose) if line not in before for m in ordinals]
+
+
+def _new_markers_outside_sentences(before, after):
+    """GateZero.MarkersOutsideSentences: the lines of `after` with a marker where no sentence stands, less those `before`
+    already carried word for word — published text is not re-gated. [(line text)]."""
+    after_lines, carried = dl_lines(after), Counter()
+    if before is not None:
+        before_lines = dl_lines(before)
+        carried.update(before_lines[n - 1] for n in markers_outside_sentences(before))
+    out = []
+    for n in markers_outside_sentences(after):
+        text = after_lines[n - 1]
+        if carried[text] > 0:
+            carried[text] -= 1
+        else:
+            out.append(text)
+    return out
+
+
+# --- the front-matter summary (MarkdownDialect.SummarySentences; D45, enforced 20 Oct 2026) ----------------------------------
+def _without_embeds(text, alts):
+    """Every image `![alt](…)` and transclusion `![[…]]` replaced by a space — shown, not said — save an image's alt text,
+    which goes to `alts`. A `![` that opens neither is left as written."""
+    at = text.find("![")
+    if at < 0:
+        return text
+    out, frm = [], 0
+    while at >= 0:
+        if text.startswith("![[", at):
+            close = text.find("]]", at + 3)
+            end = -1 if close < 0 else close + 2
+        else:
+            bracket = text.find("]", at + 2)
+            paren = -1 if bracket < 0 or bracket + 1 >= len(text) or text[bracket + 1] != "(" else text.find(")", bracket + 2)
+            end = -1 if paren < 0 else paren + 1
+            if end >= 0:
+                alts.append(text[at + 2:bracket])
+        if end < 0:
+            break
+        out.append(text[frm:at] + " ")
+        frm = end
+        at = text.find("![", frm)
+    return "".join(out) + text[frm:]
+
+
+def _summary_break_ends(piece):
+    r"""`[.!?][^\s\p{L}\p{N}]*\s+\S` matched without overlap: just past each terminator followed, after any non-letters, by
+    whitespace and anything — no abbreviation or lower-case exemption in the summary."""
+    out, i, n = [], 0, len(piece)
+    while i < n:
+        if piece[i] in ".!?":
+            j = i + 1
+            while j < n and piece[j] not in _WS_SET and not (piece[j] <= "\uffff" and unicodedata.category(piece[j])[0] in "LN"):
+                j += 1
+            k = j
+            while k < n and piece[k] in _WS_SET:
+                k += 1
+            if k > j and k < n:
+                out.append(i + 1)
+                i = k + 1
+                continue
+        i += 1
+    return out
+
+
+def _is_digit16(c):
+    return unicodedata.category(c) == "Nd"
+
+
+def _ends_in_terminator(text):
+    i = len(text)
+    while i > 0 and (text[i - 1] in _WS_SET or text[i - 1] in _CLOSERS):
+        i -= 1
+    return i > 0 and text[i - 1] in ".!?"
+
+
+def _has_words(text):
+    """char.IsLetterOrDigit of any UTF-16 unit: a letter or a decimal digit, which punctuation and spaces alone never are."""
+    return any(c <= "\uffff" and (c.isalpha() or _is_digit16(c)) for c in text)
+
+
+def summary_sentences(summary):
+    """MarkdownDialect.SummarySentences: (sentences, whether one lacks its closing marker, characters said). A sentence ends
+    at every terminator before whitespace — an abbreviation's period too —, at a marker run right after a terminator, or at
+    the end; images and transclusions are not sentences, but an image's alt text is said: it counts toward the characters,
+    and an alt text that reads as a sentence is one no marker closes. Code spans are code; a wikilink reads as its label."""
+    alts = []
+    text = _without_wikilinks(_without_embeds(_CodeSpans().blank(summary), alts))
+    pieces = _MARKER.split(text)   # the captured ordinals interleave: every odd piece is one
+    sentences, unmarked = 0, any(_summary_break_ends(a) or _ends_in_terminator(a) for a in alts)
+    open_ = cited = False
+    for i in range(0, len(pieces), 2):
+        piece, frm = pieces[i], 0
+        for end in _summary_break_ends(piece):
+            words = _has_words(piece[frm:end])
+            if words or open_:
+                sentences += 1
+                unmarked |= words or not cited
+            open_, cited, frm = False, False, end
+        if _has_words(piece[frm:]):
+            open_, cited = True, False
+        if i == len(pieces) - 1:
+            break
+        cited |= open_   # a marker follows the piece
+        if open_ and _ends_in_terminator(piece):
+            sentences += 1
+            open_, cited = False, False
+    if open_:
+        sentences += 1
+        unmarked |= not cited
+    return sentences, unmarked, u16(text.strip(_WS)) + sum(u16(a.strip(_WS)) for a in alts)
 
 
 # ==================================================================================================================
 # the proposal validator (ProposeEditValidator): refused before quota, but refused — and the agent should know why here
 # ==================================================================================================================
 _SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_WIKIDATA = re.compile(r"Q[1-9][0-9]{0,18}")   # WikidataIds.Pattern: canonical, no leading zero, at most 20 characters
 _LANG = re.compile(r"[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*")
 
 
@@ -1629,6 +2405,15 @@ def _absolute_url(u):
     except ValueError:
         return False
     return p.scheme in ("http", "https") and bool(p.netloc)
+
+
+_URL_CAP = (f"at most {LIMITS['url_max_chars']:,} characters (limits.url_max_chars), on one line, with no control or invisible "
+            "character")
+
+
+def _plain_url(u):
+    """WebUrls.IsPlain within limits.url_max_chars: a URL is stored, fetched and served back to every reader and reviewer."""
+    return u16(u) <= LIMITS["url_max_chars"] and not any(c in u for c in "\t\n\r") and not has_hidden_text(u)
 
 
 def shaped(inp):
@@ -1656,8 +2441,8 @@ def admission(inp, claims):
     if "summary" in inp:
         if _blank(inp["summary"]):
             bad("summary", "must not be empty")
-        elif u16(inp["summary"]) > LIMITS["summary_max_chars"]:
-            bad("summary", f"{u16(inp['summary'])} characters; at most {LIMITS['summary_max_chars']}")
+        elif u16(inp["summary"]) > LIMITS["proposal_summary_max_chars"]:
+            bad("summary", f"{u16(inp['summary'])} characters; at most {LIMITS['proposal_summary_max_chars']}")
     for field, pat in (("base_revision", r"rv_[a-z0-9_]{1,64}"), ("mission_id", r"tk_[0-9a-f]{1,32}"), ("gap_id", r"gp_[0-9a-f]{16}")):
         if inp.get(field) is not None and not (isinstance(inp[field], str) and re.fullmatch(pat, inp[field])):
             bad(field, f"must match {pat}" + (" — the ticket id (ref_id tk_…) of the error report, not the task id" if field == "mission_id" else ""))
@@ -1690,6 +2475,9 @@ def admission(inp, claims):
     urls = {u for c in claims for u in [c.get("source_url"), c.get("second_source_url")]
             + [p.get("source_url") for p in (c.get("premises") if isinstance(c.get("premises"), list) else []) if isinstance(p, dict)]
             if isinstance(u, str) and u}
+    premises_total = sum(len(c["premises"]) for c in claims if isinstance(c.get("premises"), list))
+    if premises_total > LIMITS["premises_per_proposal"]:
+        bad("claims", f"{premises_total} premises across the claims; at most {LIMITS['premises_per_proposal']} per proposal (limits.premises_per_proposal)")
     if len(urls) > LIMITS["distinct_sources_per_proposal"]:
         bad("claims", f"{len(urls)} distinct source URLs (premises and second sources included); at most {LIMITS['distinct_sources_per_proposal']}")
     tmax, qmax, dmax, smax = LIMITS["claim_text_max_chars"], LIMITS["claim_quote_max_chars"], LIMITS["demonstration_max_chars"], LIMITS["scope_max_chars"]
@@ -1705,6 +2493,8 @@ def admission(inp, claims):
         for f in ("source_url", "second_source_url"):
             if isinstance(c.get(f), str) and c[f] and not _absolute_url(c[f]):
                 bad(f"{at}.{f}", "must be an absolute http(s) URL")
+            if isinstance(c.get(f), str) and not _plain_url(c[f]):
+                bad(f"{at}.{f}", _URL_CAP)
         if (not demonstrated or c.get("source_url") is not None) and _blank(c.get("quote")):
             bad(f"{at}.quote", "a sourced claim or a supplied source requires the exact quote (not blank)")
         if (not demonstrated or c.get("source_url") is not None) and not c.get("accessed_at"):
@@ -1712,8 +2502,8 @@ def admission(inp, claims):
         if (c.get("second_source_url") is not None) != (c.get("second_quote") is not None) or \
                 (c.get("second_source_url") is not None and (_blank(c.get("second_source_url")) or _blank(c.get("second_quote")))):
             bad(f"{at}.second_source_url", "a second source and its exact quote go together")
-        if c.get("wikidata_id") is not None and not (isinstance(c["wikidata_id"], str) and re.fullmatch(r"Q[0-9]+", c["wikidata_id"])):
-            bad(f"{at}.wikidata_id", "Q followed by digits")
+        if c.get("wikidata_id") is not None and not (isinstance(c["wikidata_id"], str) and _WIKIDATA.fullmatch(c["wikidata_id"])):
+            bad(f"{at}.wikidata_id", "a Wikidata id: Q and its digits, as Wikidata writes it (no leading zero)")
         if not demonstrated:
             for f in ("premises", "demonstration", "scope"):
                 if c.get(f) is not None:
@@ -1722,6 +2512,8 @@ def admission(inp, claims):
         premises = c.get("premises")
         if not (isinstance(premises, list) and premises):
             bad(f"{at}.premises", "a demonstrated claim states its premises: earlier claims by ordinal, or cited spans (C10)")
+        elif len(premises) > LIMITS["premises_per_claim"]:
+            bad(f"{at}.premises", f"{len(premises)} premises; at most {LIMITS['premises_per_claim']} per claim (limits.premises_per_claim)")
         for j, p in enumerate(premises if isinstance(premises, list) else []):
             if not isinstance(p, dict):
                 bad(f"{at}.premises[{j}]", "must be an object (claim.schema.json)")
@@ -1732,6 +2524,8 @@ def admission(inp, claims):
             elif not is_claim:
                 if not (isinstance(p.get("source_url"), str) and _absolute_url(p["source_url"])):
                     bad(f"{at}.premises[{j}].source_url", "must be an absolute http(s) URL")
+                elif not _plain_url(p["source_url"]):
+                    bad(f"{at}.premises[{j}].source_url", _URL_CAP)
                 if _blank(p.get("quote")) or u16(p["quote"]) > qmax:
                     bad(f"{at}.premises[{j}].quote", f"a cited premise carries the exact span (at most {qmax:,} characters)")
         d = c.get("demonstration")
@@ -1793,18 +2587,32 @@ def load(argv):
     return inp, True, None
 
 
-def base_beside(proposal_file):
-    """base.md in the proposal's own task folder — a regular file there, never a link out of it — or None. Only a proposal
-    in the task work root has a task folder: the check quotes the lines it reads, so a base.md beside a file elsewhere (the
-    system's temporary directory, shared with every user) is never read, as --base names only a file in the root."""
+def base_beside(proposal_file, name="base.md"):
+    """base.md (or `name`) in the proposal's own task folder — a regular file there, never a link out of it — or None. Only
+    a proposal in the task work root has a task folder: the check quotes the lines it reads, so a base.md beside a file
+    elsewhere (the system's temporary directory, shared with every user) is never read, as --base names only a file in the root."""
     if not proposal_file or not inside_work_root(proposal_file):
         return None
     folder = os.path.dirname(os.path.abspath(proposal_file))
-    path = os.path.join(folder, "base.md")
+    path = os.path.join(folder, name)
     if not os.path.isfile(path) or os.path.islink(path) or os.path.dirname(os.path.realpath(path)) != os.path.realpath(folder):
         return None
     with open(path, encoding="utf-8", newline="") as f:
         return f.read()
+
+
+def base_claims_beside(proposal_file):
+    """The base revision's claims, from base-claims.json beside the proposal — scio_get_claims' answer saved as it came, or
+    its `claims` array — or None when there is none or it is not a list of claims."""
+    raw = base_beside(proposal_file, "base-claims.json")
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw.lstrip("\ufeff"))
+    except ValueError:
+        return None
+    claims = data.get("claims") if isinstance(data, dict) else data
+    return [c for c in claims if isinstance(c, dict)] if isinstance(claims, list) else None
 
 
 def type_errors(value, schema, path):
@@ -1861,7 +2669,7 @@ def _prose_lines(prose):
     return out
 
 
-def check(inp, base=None, page_domain=None):
+def check(inp, base=None, page_domain=None, base_claims=None):
     problems, warnings = [], []
     if not isinstance(inp, dict):
         return ["proposal must be a JSON object"], []
@@ -1931,7 +2739,7 @@ def check(inp, base=None, page_domain=None):
 
     # --- what the platform refuses: admission, then gate 0 ------------------------------------------------------------------
     problems.extend(admission(inp, claims))
-    gate_problems, notes = gate_zero(inp, claims, base=base, page_domain=page_domain)
+    gate_problems, notes = gate_zero(inp, claims, base=base, page_domain=page_domain, base_claims=base_claims)
     problems.extend(gate_problems)
     warnings[0:0] = notes   # what the pre-flight could not read the way the gate will comes first, before the style notes
     # a character nobody sees is refused wherever it hides, URLs and ids included (a superset of gate 0's fields, same set)
@@ -2096,9 +2904,12 @@ def main():
             with open(base_path, encoding="utf-8", newline="") as f:
                 base = f.read()
         inp, _, proposal_file = load(argv)
-        if base is None and isinstance(inp, dict) and inp.get("kind") == "small_edit":
-            base = base_beside(proposal_file)
-        problems, warnings = check(inp, base=base, page_domain=domain)
+        base_claims = None
+        if isinstance(inp, dict) and inp.get("kind") == "small_edit":
+            if base is None:
+                base = base_beside(proposal_file)
+            base_claims = base_claims_beside(proposal_file)
+        problems, warnings = check(inp, base=base, page_domain=domain, base_claims=base_claims)
     except Exception as e:
         problems = [f"pre-flight could not check this proposal ({type(e).__name__}: {e}); fix the proposal shape"]
         warnings = []

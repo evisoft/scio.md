@@ -49,11 +49,11 @@ def module(name, path):
 cc = module("preflight_check_claims", SCRIPTS / "check-claims.py")
 
 # --- the article every case varies: markdown.md §7's example, with claims that are its sentences ------------------------
-FM = ("---\ntitle: Lyon Bridge\nlang: en\nsummary: Lyon Bridge is a cable-stayed road bridge over the Rhône, opened in 2004.\n"
+FM = ("---\ntitle: Lyon Bridge\nlang: en\nsummary: Lyon Bridge is a cable-stayed road bridge over the Rhône, opened in 2004.[^c1]\n"
       "domain: [technology]\nwikidata_id: Q12345\nentities: [Q12345, Q456]\nas_of: 2026-08-27\n---\n")
 S1 = "Lyon Bridge is a cable-stayed road bridge over the [[rhone|Rhône]] in [[lyon]], France.[^c1] ^c1"
 S2 = "It opened to traffic on 12 June 2004 after four years of construction work.[^c2] ^c2"
-T1 = "Lyon Bridge is a cable-stayed road bridge over the Rhône in Lyon, France."
+T1 = "Lyon Bridge is a cable-stayed road bridge over the [[rhone|Rhône]] in [[lyon]], France."
 T2 = "It opened to traffic on 12 June 2004 after four years of construction work."
 BASE_REVISION = "rv_0123456789abcdef"
 
@@ -84,7 +84,7 @@ def small_edit(patch, claims, **kw):
     return p
 
 
-WATER_FM = with_fm("title: Water", "lang: en", "summary: Water boils at 100 °C at one atmosphere.", "domain: [science]", "wikidata_id: Q283")
+WATER_FM = with_fm("title: Water", "lang: en", "summary: Water boils at 100 °C at one atmosphere.[^c1]", "domain: [science]", "wikidata_id: Q283")
 W1 = "Water boils at 100 °C at 1 atm.[^c1] ^c1"
 W2 = "The enthalpy of vaporisation of water is 40.7 kJ/mol.[^c2] ^c2"
 W3 = "By the relation[^c1] and the enthalpy[^c2], water boils at about 81 °C at 0.5 atm.[^c3] ^c3"
@@ -119,9 +119,9 @@ def golden_cases():
     c = {}
     c["ok_base"] = article()
     # prep-1: a claim is the sentence that cites it, read as ClaimText reads both
-    c["ok_text_folded_markup"] = article(lines=[S1, "It opened to traffic on **12 June 2004** after “four years” of construction — work.[^c2] ^c2"],
+    c["no_text_folded_markup"] = article(lines=[S1, "It opened to traffic on **12 June 2004** after “four years” of construction — work.[^c2] ^c2"],
                                          claims=[claim(1, T1), claim(2, 'It opened to traffic on 12 June 2004 after "four years" of construction - work.')])
-    c["ok_text_substring"] = article(claims=[claim(1, T1), claim(2, "opened to traffic on 12 June 2004")])
+    c["no_text_substring"] = article(claims=[claim(1, T1), claim(2, "opened to traffic on 12 June 2004")])
     c["no_text_paraphrased"] = article(claims=[claim(1, T1), claim(2, "The bridge opened in June 2004 after four years of construction work.")])
     c["no_text_diacritic"] = article(claims=[claim(1, T1.replace("Rhône", "Rhone")), claim(2, T2)])
     c["ok_demonstrated_inline_premises"] = water()
@@ -141,11 +141,13 @@ def golden_cases():
     c["no_table_words_after_marker"] = article(lines=[S1, S2, "", *TABLE, "| Opening | 12 June 2004.[^c3] and more words |"],
                                                claims=[claim(1, T1), claim(2, T2), claim(3, "12 June 2004")])
     c["ok_table_figures_after_claim"] = article(lines=[S1, S2, "", "| Year | Length (m) |", "|---|---|", "| 2004 | 2,682 |"])
+    c["no_table_cell_claim_folded"] = article(lines=[S1, S2, "", *TABLE, "| Opening | 12 June 2004.[^c3] |", "| Length | 2,682 m.[^c4] ^c4 |"],
+                                              claims=[claim(1, T1), claim(2, T2), claim(3, "12 June 2004"), claim(4, "2,682 m")])
     c["ok_table_marked_cells"] = article(lines=[S1, S2, "", *TABLE, "| Opening | 12 June 2004.[^c3] |", "| Length | 2,682 m.[^c4] ^c4 |"],
-                                         claims=[claim(1, T1), claim(2, T2), claim(3, "12 June 2004"), claim(4, "2,682 m")])
+                                         claims=[claim(1, T1), claim(2, T2), claim(3, "12 June 2004."), claim(4, "2,682 m.")])
     c["ok_table_without_outer_pipes"] = article(lines=[S1, S2, "", "Year | Length (m)", "--- | ---", "2004 | 2,682"])
     # prep-3, prep-14, e2e-2, e2e-3: the front matter is `key: value` lines, nothing else
-    fm = lambda *extra, drop=(): with_fm(*[l for l in ["title: Lyon Bridge", "lang: en", "summary: Lyon Bridge is a road bridge.", "domain: [technology]",
+    fm = lambda *extra, drop=(): with_fm(*[l for l in ["title: Lyon Bridge", "lang: en", "summary: Lyon Bridge is a road bridge.[^c1]", "domain: [technology]",
                                                        "wikidata_id: Q12345"] if l.split(":")[0] not in drop], *extra)
     c["no_fm_without_lang"] = article(fm=fm(drop=("lang",)))
     c["no_fm_without_summary"] = article(fm=fm(drop=("summary",)))
@@ -270,17 +272,160 @@ def golden_cases():
     adlam = "The letter \U0001E900 opens the Adlam alphabet in 1989."
     c["no_text_astral_case"] = article(lines=[S1, adlam + "[^c2] ^c2"], claims=[claim(1, T1), claim(2, adlam.replace("\U0001E900", "\U0001E922"))])
     c["ok_text_astral_case_as_written"] = article(lines=[S1, adlam + "[^c2] ^c2"], claims=[claim(1, T1), claim(2, adlam)])
+    c.update(contract_2026_10_21())
     return c
 
 
-# The platform's verdicts on golden_cases(), recorded with the harness described at the top (platform 3d279a0, rules 2026-09-30;
-# the code-marker cases with platform 7208f29, deployed 2026-09-25, which reads markers only outside code — 61a3e57, BUG-096).
+def against(base, proposal, base_claims=None):
+    """A small edit read in the article it lands in: the harness merges the patch into `base` (GateTarget.MergedBody) and
+    compares its claims with `base_claims` (GateTarget.BaseClaims), as the platform does with the revision it names."""
+    target = {"base_body": base}
+    if base_claims is not None:
+        target["base_claims"] = base_claims
+    return {"command": proposal, "target": target}
+
+
+def unwrap(case):
+    """(the proposal, base, base claims) of a golden case."""
+    if "command" in case:
+        return case["command"], case["target"].get("base_body"), case["target"].get("base_claims")
+    return case, None, None
+
+
+def diff(before, after):
+    """A unified diff of two bodies, three lines of context, without file headers — what an agent writes as patch.diff."""
+    lines = list(difflib.unified_diff(before.split("\n"), after.split("\n"), lineterm="", n=3))
+    return "\n".join(lines[2:]) + "\n"
+
+
+S3 = "Its main span is 200 m long.[^c3] ^c3"
+S4 = "It carries four lanes of road traffic.[^c4] ^c4"
+T3, T4 = "Its main span is 200 m long.", "It carries four lanes of road traffic."
+LYON = article(lines=[S1, S2, S3, S4])["body"]
+LYON_CLAIMS = [claim(1, T1), claim(2, T2), claim(3, T3), claim(4, T4)]
+
+
+def base_claim(c):
+    """A claim as the base revision stores it (BaseClaim): what the edit re-cites when it lists it unchanged."""
+    return {"ordinal": c["ordinal"], "text": c["text"], "kind": c.get("kind", "sourced"), "source_url": c["source_url"], "quote": c["quote"],
+            "second_source_url": None, "second_quote": None, "wikidata_id": None, "origin_claim_id": None, "scope": None,
+            "demonstration": None, "premises": []}
+
+
+def edit(before, after, claims, base_claims=LYON_CLAIMS, **kw):
+    return against(before, small_edit(diff(before, after), claims, **kw), [base_claim(c) for c in base_claims])
+
+
+def contract_2026_10_21():
+    """The narrowings of platform da3a732 (deployed 21 Oct 2026): the claim text is the sentence as written, the summary is
+    claim-marked and bounded, no marker outside a sentence, no repeated front-matter key, a second source is another
+    document, the new caps, and a small edit that is one."""
+    c = {}
+    T2_ = T2.replace("12 June", "14 June")
+    # the claim text: the whole sentence up to its marker, only whitespace normalised
+    c["no_claim_text_case"] = article(claims=[claim(1, T1), claim(2, "it opened to traffic on 12 June 2004 after four years of construction work.")])
+    c["no_claim_text_emphasis_dropped"] = article(lines=[S1, S2.replace("12 June 2004", "**12 June 2004**")])
+    c["ok_claim_text_emphasis_as_written"] = article(lines=[S1, S2.replace("12 June 2004", "**12 June 2004**")],
+                                                     claims=[claim(1, T1), claim(2, T2.replace("12 June 2004", "**12 June 2004**"))])
+    c["ok_claim_text_whitespace_normalised"] = article(lines=[S1, S2.replace("12 June", "12\u00a0June  ")],
+                                                       claims=[claim(1, T1), claim(2, T2.replace("12 June", "12 June"))])
+    c["no_claim_text_wikilink_label"] = article(claims=[claim(1, T1.replace("[[rhone|Rhône]]", "Rhône")), claim(2, T2)])
+    c["no_claim_text_typographic_quotes"] = article(lines=[S1, "It opened after “four years” of work.[^c2] ^c2"],
+                                                    claims=[claim(1, T1), claim(2, 'It opened after "four years" of work.')])
+    c["ok_two_sentences_on_one_line"] = article(lines=[S1, "It opened in 2004.[^c2] It carries four lanes.[^c3] ^c3"],
+                                                claims=[claim(1, T1), claim(2, "It opened in 2004."), claim(3, "It carries four lanes.")])
+    c["no_second_sentence_borrows_the_first"] = article(lines=[S1, "It opened in 2004.[^c2] It carries four lanes.[^c3] ^c3"],
+                                                        claims=[claim(1, T1), claim(2, "It opened in 2004."), claim(3, "It opened in 2004. It carries four lanes.")])
+    c["ok_clause_cited_mid_sentence"] = article(lines=[S1, "The bridge, opened in 2004,[^c2] carries four lanes.[^c3] ^c3"],
+                                                claims=[claim(1, T1), claim(2, "The bridge, opened in 2004,"),
+                                                        claim(3, "The bridge, opened in 2004, carries four lanes.")])
+    c["no_clause_claim_is_the_rest"] = article(lines=[S1, "The bridge, opened in 2004,[^c2] carries four lanes.[^c3] ^c3"],
+                                               claims=[claim(1, T1), claim(2, "The bridge, opened in 2004,"), claim(3, "carries four lanes.")])
+    # the front-matter summary (D45): every sentence marked, at most three and 1,200 characters, alt text said
+    summary = lambda text: article(fm=FM.replace("summary: Lyon Bridge is a cable-stayed road bridge over the Rhône, opened in 2004.[^c1]", "summary: " + text))
+    c["no_summary_unmarked"] = summary("Lyon Bridge is a cable-stayed road bridge over the Rhône, opened in 2004.")
+    c["no_summary_marker_inside_its_sentence"] = summary("Lyon Bridge[^c1] is a cable-stayed road bridge over the Rhône.")
+    c["ok_summary_three_marked_sentences"] = summary("Lyon Bridge spans the Rhône.[^c1] It opened in 2004.[^c2] It is cable-stayed.[^c1]")
+    c["no_summary_four_sentences"] = summary("Lyon Bridge spans the Rhône.[^c1] It is cable-stayed.[^c1] It opened in 2004.[^c2] It took four years.[^c2]")
+    c["no_summary_abbreviation"] = summary("Its engineer was Dr. Smith of Lyon.[^c1]")
+    c["ok_summary_abbreviation_written_out"] = summary("Its engineer was Doctor Smith of Lyon.[^c1]")
+    c["no_summary_over_1200_characters"] = summary("Lyon Bridge " + "is a long and cable-stayed road bridge " * 32 + "over the Rhône.[^c1]")
+    c["no_summary_cites_an_unlisted_claim"] = summary("Lyon Bridge spans the Rhône.[^c9]")
+    c["no_summary_alt_text_sentence"] = summary("![The bridge at night. It is lit.](media:" + "a" * 64 + ".png) Lyon Bridge spans the Rhône.[^c1]")
+    c["no_summary_external_link"] = summary("Lyon Bridge spans the [Rhône](https://example.org/rhone).[^c1]")
+    # a marker where no sentence stands
+    c["no_marker_in_heading"] = article(lines=[S1, S2, "", "## Opening in 2004[^c2]"])
+    c["no_marker_in_table_header"] = article(lines=[S1, S2, "", "| Year[^c2] | Traffic |", "|---|---|", "| 2004 | 10,000 |"])
+    c["no_marker_in_callout_title"] = article(lines=[S1, S2, "", "> [!disputed] Opening[^c2]", "> The deck is 30 m wide.[^c3] ^c3"],
+                                              claims=[claim(1, T1), claim(2, T2), claim(3, "The deck is 30 m wide.")])
+    # one value per front-matter key
+    c["no_front_matter_duplicate_key"] = article(fm=FM.replace("domain: [technology]\n", "domain: [technology]\ndomain: [history]\n"))
+    c["no_front_matter_duplicate_key_hides_a_sensitive_domain"] = article(fm=FM.replace("domain: [technology]\n", "domain: [living_person]\ndomain: [technology]\n"))
+    # a second source is another document
+    c["no_second_source_same_document"] = article(claims=[claim(1, T1), claim(2, T2, second_source_url="https://www.example.org/bridge2/?utm_source=x#top",
+                                                                              second_quote="opened to traffic")])
+    c["ok_second_source_another_document"] = article(claims=[claim(1, T1), claim(2, T2, second_source_url="https://example.net/lyon-bridge",
+                                                                                 second_quote="opened to traffic")])
+    # caps: URLs, premises, Wikidata ids
+    c["no_source_url_over_2048"] = article(claims=[claim(1, T1, source_url="https://example.org/" + "a" * 2040), claim(2, T2)])
+    c["ok_source_url_of_2048"] = article(claims=[claim(1, T1, source_url="https://example.org/" + "a" * 2028), claim(2, T2)])
+    c["no_source_url_with_a_tab"] = article(claims=[claim(1, T1, source_url="https://example.org/a\tb"), claim(2, T2)])
+    many = [{"source_url": f"https://example.org/p{k}", "quote": f"premise {k}"} for k in range(21)]
+    c["no_premises_over_20"] = water({"premises": [{"claim_ordinal": 1}, {"claim_ordinal": 2}] + many[:19]})
+    c["ok_premises_of_20"] = water({"premises": [{"claim_ordinal": 1}, {"claim_ordinal": 2}] + many[:18]})
+    c["no_claim_wikidata_id_leading_zero"] = article(claims=[claim(1, T1, wikidata_id="Q0123"), claim(2, T2)])
+    c["no_fm_wikidata_id_leading_zero"] = article(fm=FM.replace("wikidata_id: Q12345", "wikidata_id: Q012345"))
+    c["no_fm_wikidata_id_over_20_characters"] = article(fm=FM.replace("wikidata_id: Q12345", "wikidata_id: Q" + "1" * 20))
+    # a small edit is one: it corrects, never rewrites, retitles, moves the entity or leaves a sensitive domain
+    c["ok_small_edit_corrects_a_date"] = edit(LYON, LYON.replace(S2, S2.replace("12 June", "14 June")), [claim(2, T2_)])
+    c["no_small_edit_rewrite"] = edit(LYON, LYON.replace(S2, "It opened in 2005.[^c2] ^c2").replace(S3, "Its span is 210 m.[^c3] ^c3")
+                                      .replace(S4, "It carries six lanes.[^c4] ^c4"),
+                                      [claim(2, "It opened in 2005."), claim(3, "Its span is 210 m."), claim(4, "It carries six lanes.")])
+    c["no_small_edit_adds_many_sentences"] = edit(LYON, LYON.replace(S4, S4 + "\n" + "\n".join(f"Fact {k} of the bridge.[^c{k}] ^c{k}" for k in range(5, 9))),
+                                                  [claim(k, f"Fact {k} of the bridge.") for k in range(5, 9)])
+    c["no_small_edit_retitle"] = edit(LYON, LYON.replace("title: Lyon Bridge", "title: Lyon Viaduct"), [claim(1, T1)])
+    c["no_small_edit_heading"] = edit(LYON, LYON.replace("# Lyon Bridge", "# Lyon Viaduct"), [claim(1, T1)])
+    c["no_small_edit_moves_the_entity"] = edit(LYON, LYON.replace("wikidata_id: Q12345", "wikidata_id: Q999"), [claim(1, T1)])
+    c["no_small_edit_changes_entities"] = edit(LYON, LYON.replace("entities: [Q12345, Q456]", "entities: [Q12345, Q789]"), [claim(1, T1)])
+    jane = LYON.replace("domain: [technology]", "domain: [living_person]")
+    two = lambda c_: dict(c_, second_source_url="https://example.net/second", second_quote="second")
+    c["no_small_edit_leaves_a_sensitive_domain"] = edit(jane, jane.replace("domain: [living_person]", "domain: [general]"), [two(claim(1, T1))],
+                                                        base_claims=[two(c_) for c_ in LYON_CLAIMS])
+    c["no_small_edit_adds_a_duplicate_key"] = edit(LYON, LYON.replace("as_of: 2026-08-27\n", "as_of: 2026-08-27\nas_of: 2026-10-21\n"), [claim(1, T1)])
+    doubled = LYON.replace("as_of: 2026-08-27\n", "as_of: 2026-08-27\nas_of: 2026-09-01\n")
+    c["ok_small_edit_keeps_a_base_duplicate"] = edit(doubled, doubled.replace(S2, S2.replace("12 June", "14 June")), [claim(2, T2_)])
+    c["no_small_edit_summary_unmarked"] = edit(LYON, LYON.replace("opened in 2004.[^c1]", "opened in 2004."), [claim(1, T1)])
+    c["ok_small_edit_summary_marked"] = edit(LYON, LYON.replace("opened in 2004.[^c1]", "opened in June 2004.[^c1]"), [claim(1, T1)])
+    c["no_small_edit_summary_cites_an_unlisted_base_claim"] = edit(LYON, LYON.replace("opened in 2004.[^c1]", "opened in 2004.[^c2]"), [claim(1, T1)])
+    c["no_small_edit_marker_in_a_new_heading"] = edit(LYON, LYON.replace(S4, S4 + "\n\n## Traffic[^c4]"), [claim(4, T4)])
+    # a kept line is read as it was published; a claim the edit lists anew is held to its whole sentence
+    legacy_s2 = "It opened to *traffic* on 12 June 2004.[^c2] ^c2"
+    legacy = LYON.replace(S2, legacy_s2)
+    legacy_claims = [claim(1, T1), claim(2, "It opened to traffic on 12 June 2004."), claim(3, T3), claim(4, T4)]
+    c["ok_small_edit_keeps_a_legacy_line"] = edit(legacy, legacy.replace(S3, S3.replace("200 m", "210 m")),
+                                                  [claim(2, "It opened to traffic on 12 June 2004."), claim(3, T3.replace("200 m", "210 m"))],
+                                                  base_claims=legacy_claims)
+    c["no_small_edit_relisted_claim_held_to_its_sentence"] = edit(legacy, legacy.replace(S3, S3.replace("200 m", "210 m")),
+                                                                  [claim(2, "It opened to traffic on 12 June 2004.", quote="opened to traffic"),
+                                                                   claim(3, T3.replace("200 m", "210 m"))], base_claims=legacy_claims)
+    return c
+
+
+# The platform's verdicts on golden_cases(), recorded with the harness described at the top: platform da3a732 (deployed 21 Oct
+# 2026, the fifth audit), rules/current.json 2026-10-27 — whose limits are the platform's fallbacks for the 2026-10-01 rules in force.
 GOLDEN_VERDICTS = {
     'no_blank_quote': 'validator=claims[1].quote: a sourced claim or a supplied source requires the exact quote gate0=pass',
     'no_block_id_mismatch': 'validator=ok gate0=2:block_id_mismatch',
     'no_braille_blank': 'validator=ok gate0=0:raw_html, 2:raw_html',
     'no_c1_control_in_quote': 'validator=ok gate0=2:raw_html',
+    'no_claim_cited_only_in_code_span': 'validator=ok gate0=1:claim_text_mismatch, 2:unused_claim',
+    'no_claim_text_case': 'validator=ok gate0=2:claim_text_mismatch',
+    'no_claim_text_emphasis_dropped': 'validator=ok gate0=2:claim_text_mismatch',
     'no_claim_text_over_2000_utf16': "validator=claims[1].text: The length of 'text' must be 2000 characters or fewer. You entered 2201 characters. gate0=pass",
+    'no_claim_text_typographic_quotes': 'validator=ok gate0=2:claim_text_mismatch',
+    'no_claim_text_wikilink_label': 'validator=ok gate0=1:claim_text_mismatch',
+    'no_claim_wikidata_id_leading_zero': 'validator=claims[0].wikidata_id: a Wikidata id: Q and its digits, as Wikidata writes it (no leading zero) gate0=pass',
+    'no_clause_claim_is_the_rest': 'validator=ok gate0=3:claim_text_mismatch',
     'no_combining_stack': 'validator=ok gate0=0:raw_html, 2:raw_html',
     'no_demonstrated_forbidden_source': 'validator=ok gate0=3:forbidden_source',
     'no_external_image_in_sentence': 'validator=ok gate0=2:media_unverified',
@@ -291,13 +436,18 @@ GOLDEN_VERDICTS = {
     'no_fm_empty_summary': 'validator=ok gate0=0:invalid_front_matter, 0:no_claim_marker',
     'no_fm_entities_names': 'validator=ok gate0=0:invalid_wikidata_id',
     'no_fm_quoted_domain': 'validator=ok gate0=0:invalid_front_matter, 0:no_claim_marker',
-    'no_fm_trailing_comment': 'validator=ok gate0=0:invalid_front_matter, 0:no_claim_marker',
+    'no_fm_trailing_comment': 'validator=ok gate0=0:invalid_front_matter, 0:no_claim_marker, 1:missing_second_source, 2:missing_second_source',
     'no_fm_unknown_domain': 'validator=ok gate0=0:invalid_front_matter, 0:no_claim_marker',
     'no_fm_unknown_key': 'validator=ok gate0=0:invalid_front_matter, 0:no_claim_marker',
+    'no_fm_wikidata_id_leading_zero': 'validator=ok gate0=0:invalid_wikidata_id',
+    'no_fm_wikidata_id_over_20_characters': 'validator=ok gate0=0:invalid_wikidata_id',
     'no_fm_wikidata_id_slug': 'validator=ok gate0=0:invalid_wikidata_id',
     'no_fm_without_lang': 'validator=ok gate0=0:invalid_front_matter, 0:no_claim_marker',
     'no_fm_without_summary': 'validator=ok gate0=0:invalid_front_matter, 0:no_claim_marker',
     'no_forbidden_source': 'validator=ok gate0=2:forbidden_source',
+    'no_front_matter_duplicate_key': 'validator=ok gate0=0:front_matter_duplicate_key',
+    'no_front_matter_duplicate_key_hides_a_sensitive_domain': 'validator=ok gate0=0:front_matter_duplicate_key, 1:missing_second_source, 2:missing_second_source',
+    'no_fullwidth_wikipedia_source': 'validator=ok gate0=1:forbidden_source',
     'no_handwritten_footnotes': 'validator=ok gate0=1:claim_text_mismatch, 1:external_link, 2:claim_text_mismatch, 2:external_link',
     'no_hangul_filler_body': 'validator=ok gate0=0:raw_html, 2:raw_html',
     'no_hash_number_is_prose': 'validator=ok gate0=0:no_claim_marker',
@@ -308,39 +458,64 @@ GOLDEN_VERDICTS = {
     'no_lang_over_35': "validator=lang: The length of 'lang' must be 35 characters or fewer. You entered 38 characters. gate0=pass",
     'no_line_without_period': 'validator=ok gate0=0:no_claim_marker',
     'no_mailto_link': 'validator=ok gate0=2:external_link',
-    'ok_marker_in_code_fence': 'validator=ok gate0=pass',
-    'ok_stray_marker_in_code_span': 'validator=ok gate0=pass',
-    'no_claim_cited_only_in_code_span': 'validator=ok gate0=2:unused_claim',
-    'ok_code_span_marker_on_cited_line': 'validator=ok gate0=pass',
-    'no_fullwidth_wikipedia_source': 'validator=ok gate0=1:forbidden_source',
-    'ok_wikimedia_named_in_a_query': 'validator=ok gate0=pass',
+    'no_marker_in_callout_title': 'validator=ok gate0=2:marker_outside_sentence',
+    'no_marker_in_heading': 'validator=ok gate0=2:marker_outside_sentence',
+    'no_marker_in_table_header': 'validator=ok gate0=2:marker_outside_sentence',
     'no_marker_without_claim': 'validator=ok gate0=2:no_claim_marker',
     'no_mission_id_not_a_ticket': "validator=mission_id: 'mission_id' is not in the correct format. gate0=pass",
     'no_network_path_link': 'validator=ok gate0=2:external_link',
     'no_noncharacter': 'validator=ok gate0=0:raw_html, 2:raw_html',
     'no_premise_names_no_claim': 'validator=ok gate0=5:premise_unresolved',
     'no_premise_not_earlier': 'validator=ok gate0=3:premise_unresolved',
+    'no_premises_over_20': 'validator=claims[2].premises: at most 20 premises per claim gate0=pass',
     'no_reviewer_instruction': 'validator=ok gate0=3:reviewer_instruction',
+    'no_second_sentence_borrows_the_first': 'validator=ok gate0=3:claim_text_mismatch',
     'no_second_source_governing_domain': 'validator=ok gate0=1:missing_second_source, 2:missing_second_source',
     'no_second_source_living_person': 'validator=ok gate0=1:missing_second_source, 2:missing_second_source',
+    'no_second_source_same_document': 'validator=ok gate0=2:second_source_not_independent',
     'no_see_also_wikilinks': 'validator=ok gate0=0:no_claim_marker',
     'no_short_first_sentence': 'validator=ok gate0=2:no_claim_marker',
     'no_short_unmarked_sentence': 'validator=ok gate0=0:no_claim_marker',
     'no_slug_double_hyphen': "validator=slug: 'slug' is not in the correct format. gate0=pass",
+    'no_small_edit_adds_a_duplicate_key': 'validator=ok gate0=0:front_matter_duplicate_key, 1:unused_claim',
+    'no_small_edit_adds_many_sentences': 'validator=ok gate0=0:not_a_small_edit',
+    'no_small_edit_changes_entities': 'validator=ok gate0=0:not_a_small_edit',
+    'no_small_edit_heading': 'validator=ok gate0=0:not_a_small_edit',
+    'no_small_edit_leaves_a_sensitive_domain': 'validator=ok gate0=0:not_a_small_edit',
+    'no_small_edit_marker_in_a_new_heading': 'validator=ok gate0=4:marker_outside_sentence',
+    'no_small_edit_moves_the_entity': 'validator=ok gate0=0:not_a_small_edit',
     'no_small_edit_paraphrased_claim': 'validator=ok gate0=3:claim_text_mismatch',
+    'no_small_edit_relisted_claim_held_to_its_sentence': 'validator=ok gate0=2:claim_text_mismatch',
     'no_small_edit_relists_a_removed_claim': 'validator=ok gate0=2:unused_claim',
+    'no_small_edit_retitle': 'validator=ok gate0=0:not_a_small_edit',
+    'no_small_edit_rewrite': 'validator=ok gate0=0:not_a_small_edit',
+    'no_small_edit_summary_cites_an_unlisted_base_claim': 'validator=ok gate0=1:unused_claim, 2:no_claim_marker',
+    'no_small_edit_summary_unmarked': 'validator=ok gate0=0:summary_unmarked, 1:unused_claim',
     'no_small_edit_without_claims': "validator=claims: 'claims' must not be empty. gate0=pass",
+    'no_source_url_over_2048': 'validator=claims[0].source_url: at most 2048 characters, on one line, with no control or invisible character gate0=pass',
+    'no_source_url_with_a_tab': 'validator=claims[0].source_url: at most 2048 characters, on one line, with no control or invisible character gate0=pass',
+    'no_summary_abbreviation': 'validator=ok gate0=0:summary_unmarked',
+    'no_summary_alt_text_sentence': 'validator=ok gate0=0:media_unverified, 0:summary_unmarked',
+    'no_summary_cites_an_unlisted_claim': 'validator=ok gate0=9:no_claim_marker',
+    'no_summary_external_link': 'validator=ok gate0=0:external_link',
+    'no_summary_four_sentences': 'validator=ok gate0=0:summary_too_long',
+    'no_summary_marker_inside_its_sentence': 'validator=ok gate0=0:summary_unmarked',
+    'no_summary_over_1200_characters': 'validator=ok gate0=0:summary_too_long',
     'no_summary_over_500': "validator=summary: The length of 'summary' must be 500 characters or fewer. You entered 501 characters. gate0=pass",
+    'no_summary_unmarked': 'validator=ok gate0=0:summary_unmarked',
     'no_table_after_heading': 'validator=ok gate0=0:no_claim_marker',
     'no_table_after_line_without_block_id': 'validator=ok gate0=0:no_claim_marker',
+    'no_table_cell_claim_folded': 'validator=ok gate0=3:claim_text_mismatch, 4:claim_text_mismatch',
     'no_table_first_in_body': 'validator=ok gate0=0:no_claim_marker',
-    'no_table_words_after_marker': 'validator=ok gate0=3:no_claim_marker',
+    'no_table_words_after_marker': 'validator=ok gate0=3:claim_text_mismatch, 3:no_claim_marker',
     'no_text_astral_case': 'validator=ok gate0=2:claim_text_mismatch',
     'no_text_diacritic': 'validator=ok gate0=1:claim_text_mismatch',
+    'no_text_folded_markup': 'validator=ok gate0=2:claim_text_mismatch',
     'no_text_paraphrased': 'validator=ok gate0=2:claim_text_mismatch',
+    'no_text_substring': 'validator=ok gate0=2:claim_text_mismatch',
     'no_too_many_media': 'validator=ok gate0=0:media_unverified, 0:too_many_media',
     'no_transclusion_in_callout': 'validator=ok gate0=0:transclusion_unresolved',
-    'no_transclusion_in_sentence': 'validator=ok gate0=0:transclusion_unresolved',
+    'no_transclusion_in_sentence': 'validator=ok gate0=0:transclusion_unresolved, 3:claim_text_mismatch',
     'no_transclusion_with_section': 'validator=ok gate0=0:transclusion_unresolved',
     'no_transclusion_without_block': 'validator=ok gate0=0:transclusion_unresolved',
     'no_unassigned_plane_4': 'validator=ok gate0=0:raw_html, 2:raw_html',
@@ -353,6 +528,10 @@ GOLDEN_VERDICTS = {
     'ok_base': 'validator=ok gate0=pass',
     'ok_character_of_unicode_15_1': 'validator=ok gate0=pass',
     'ok_character_of_unicode_16': 'validator=ok gate0=pass',
+    'ok_claim_text_emphasis_as_written': 'validator=ok gate0=pass',
+    'ok_claim_text_whitespace_normalised': 'validator=ok gate0=pass',
+    'ok_clause_cited_mid_sentence': 'validator=ok gate0=pass',
+    'ok_code_span_marker_on_cited_line': 'validator=ok gate0=pass',
     'ok_demonstrated_inline_premises': 'validator=ok gate0=pass',
     'ok_display_maths': 'validator=ok gate0=pass',
     'ok_fenced_code_and_inline_code': 'validator=ok gate0=pass',
@@ -361,18 +540,29 @@ GOLDEN_VERDICTS = {
     'ok_four_combining_marks': 'validator=ok gate0=pass',
     'ok_less_than_in_prose_then_callout': 'validator=ok gate0=pass',
     'ok_lists_and_callout': 'validator=ok gate0=pass',
+    'ok_marker_in_code_fence': 'validator=ok gate0=pass',
     'ok_ordinary_prose': 'validator=ok gate0=pass',
     'ok_premise_without_accessed_at': 'validator=ok gate0=pass',
+    'ok_premises_of_20': 'validator=ok gate0=pass',
     'ok_program_output_6000': 'validator=ok gate0=pass',
+    'ok_second_source_another_document': 'validator=ok gate0=pass',
     'ok_second_source_living_person': 'validator=ok gate0=pass',
+    'ok_small_edit_corrects_a_date': 'validator=ok gate0=pass',
+    'ok_small_edit_keeps_a_base_duplicate': 'validator=ok gate0=pass',
+    'ok_small_edit_keeps_a_legacy_line': 'validator=ok gate0=pass',
     'ok_small_edit_removal_keeps_a_context_claim': 'validator=ok gate0=pass',
     'ok_small_edit_replaces_a_sentence': 'validator=ok gate0=pass',
+    'ok_small_edit_summary_marked': 'validator=ok gate0=pass',
+    'ok_source_url_of_2048': 'validator=ok gate0=pass',
+    'ok_stray_marker_in_code_span': 'validator=ok gate0=pass',
+    'ok_summary_abbreviation_written_out': 'validator=ok gate0=pass',
+    'ok_summary_three_marked_sentences': 'validator=ok gate0=pass',
     'ok_table_figures_after_claim': 'validator=ok gate0=pass',
     'ok_table_marked_cells': 'validator=ok gate0=pass',
     'ok_table_without_outer_pipes': 'validator=ok gate0=pass',
     'ok_text_astral_case_as_written': 'validator=ok gate0=pass',
-    'ok_text_folded_markup': 'validator=ok gate0=pass',
-    'ok_text_substring': 'validator=ok gate0=pass',
+    'ok_two_sentences_on_one_line': 'validator=ok gate0=pass',
+    'ok_wikimedia_named_in_a_query': 'validator=ok gate0=pass',
     'ok_zwj_emoji': 'validator=ok gate0=pass',
     'ok_zwnj_persian': 'validator=ok gate0=pass',
 }
@@ -382,17 +572,25 @@ def check(p):
     return cc.check(copy.deepcopy(p))
 
 
+# Cases gate 0 passes that the plugin's own rule on top of it refuses — one sentence per line (markdown.md §2): the pre-flight
+# says that rule and nothing of gate 0's, so the per-marker reading the case pins is still the platform's.
+STRICTER_THAN_GATE0 = {"ok_two_sentences_on_one_line": "two claims on one line", "ok_clause_cited_mid_sentence": "two claims on one line"}
+
+
 class Golden(unittest.TestCase):
     def test_every_case_has_a_recorded_verdict(self):
         self.assertEqual(sorted(golden_cases()), sorted(GOLDEN_VERDICTS))
 
     def test_the_preflight_agrees_with_the_platform(self):
-        for name, proposal in golden_cases().items():
+        for name, case in golden_cases().items():
             verdict = GOLDEN_VERDICTS.get(name, "")
             refused = verdict != "validator=ok gate0=pass"
             with self.subTest(name=name, verdict=verdict):
-                problems, _ = check(proposal)
-                if refused:
+                proposal, base, base_claims = unwrap(case)
+                problems, _ = cc.check(copy.deepcopy(proposal), base=base, base_claims=copy.deepcopy(base_claims))
+                if name in STRICTER_THAN_GATE0 and not refused:
+                    self.assertTrue(problems and all(STRICTER_THAN_GATE0[name] in p and "gate 0" not in p for p in problems), problems)
+                elif refused:
                     self.assertTrue(problems, f"{name}: the platform refuses it ({verdict}), the pre-flight passed it")
                 else:
                     self.assertEqual(problems, [], f"{name}: the platform accepts it, the pre-flight refused it")
@@ -425,19 +623,61 @@ class Reasons(unittest.TestCase):
     def test_a_table_row_is_named_as_one(self):
         self.assertIn("table row", problems_of(golden_cases()["no_table_first_in_body"]))
 
-    def test_a_comment_in_the_domain_is_not_read_as_a_domain(self):
-        # markdown.md's old example: its comment named living_person, and the pre-flight demanded second sources for a science article
+    def test_a_comment_in_the_domain_is_read_as_the_platform_reads_it(self):
+        # markdown.md's old example: its comment named a sensitive domain. The front matter is refused, and since 20 Oct 2026
+        # every domain a `domain:` line declares counts toward second sources (FrontMatter.DeclaredDomains), as the platform says
         said = problems_of(golden_cases()["no_fm_trailing_comment"])
         self.assertIn("invalid_front_matter", said)
-        self.assertNotIn("second", said)
+        self.assertIn("missing_second_source", said)
+
+    def test_the_new_refusals_are_named(self):
+        cases = golden_cases()
+        for name, reason in (("no_summary_unmarked", "summary_unmarked"), ("no_summary_four_sentences", "summary_too_long"),
+                             ("no_summary_over_1200_characters", "summary_too_long"), ("no_summary_abbreviation", "summary_unmarked"),
+                             ("no_summary_alt_text_sentence", "summary_unmarked"), ("no_summary_cites_an_unlisted_claim", "no_claim_marker"),
+                             ("no_marker_in_heading", "marker_outside_sentence"), ("no_marker_in_table_header", "marker_outside_sentence"),
+                             ("no_marker_in_callout_title", "marker_outside_sentence"), ("no_front_matter_duplicate_key", "front_matter_duplicate_key"),
+                             ("no_second_source_same_document", "second_source_not_independent"), ("no_claim_text_case", "claim_text_mismatch"),
+                             ("no_source_url_over_2048", "limits.url_max_chars"), ("no_premises_over_20", "limits.premises_per_claim"),
+                             ("no_fm_wikidata_id_leading_zero", "invalid_wikidata_id"), ("no_small_edit_rewrite", "not_a_small_edit"),
+                             ("no_small_edit_retitle", "not_a_small_edit"), ("no_small_edit_changes_entities", "not_a_small_edit"),
+                             ("no_small_edit_leaves_a_sensitive_domain", "not_a_small_edit"),
+                             ("no_small_edit_adds_a_duplicate_key", "front_matter_duplicate_key"),
+                             ("no_small_edit_summary_cites_an_unlisted_base_claim", "no_claim_marker"),
+                             ("no_small_edit_relisted_claim_held_to_its_sentence", "claim_text_mismatch")):
+            with self.subTest(name=name):
+                proposal, base, base_claims = unwrap(cases[name])
+                self.assertIn(reason, " | ".join(cc.check(copy.deepcopy(proposal), base=base, base_claims=base_claims)[0]))
+
+    def test_without_the_base_claims_a_relisted_claim_is_only_a_warning(self):
+        # the platform reads the base revision's claims; without base-claims.json the pre-flight cannot tell a claim the edit
+        # re-cites (its kept line read as published) from one it lists anew (held to its whole sentence): it warns
+        proposal, base, _ = unwrap(golden_cases()["no_small_edit_relisted_claim_held_to_its_sentence"])
+        problems, warnings = cc.check(copy.deepcopy(proposal), base=base)
+        self.assertNotIn("claim_text_mismatch", " | ".join(problems))
+        self.assertIn("base-claims.json", " | ".join(warnings))
 
 
 class Dialect(unittest.TestCase):
-    def test_claim_text_folds_as_the_platform_does(self):
-        self.assertEqual(cc.claim_text("The [[rhone|Rhône]] is *long*.[^c1] ^c1"), "the rhône is long.")
-        self.assertEqual(cc.claim_text("A `code` _word_ in “quotes” — and ‘x’ – y z"), 'a code word in "quotes" - and \'x\' - y z')
-        self.assertEqual(cc.claim_text("snake_case stays"), "snake_case stays")
-        self.assertEqual(cc.claim_text("See ![[water^c1]] and [[de/wasser]]."), "see water and de/wasser.")
+    def test_claim_text_is_the_sentence_as_written(self):
+        # MarkdownDialect.ClaimText since 20 Oct 2026: markers and block id dropped, whitespace collapsed, nothing else
+        self.assertEqual(cc.claim_text("The [[rhone|Rhône]] is  *long*.[^c1] ^c1"), "The [[rhone|Rhône]] is *long*.")
+        self.assertEqual(cc.claim_text("A `code` _word_ in “quotes” — and ‘x’"), "A `code` _word_ in “quotes” — and ‘x’")
+        self.assertEqual(cc.claim_text("  It opened[^c1][^c2]  in 2004. "), "It opened in 2004.")
+
+    def test_a_kept_line_is_read_as_it_was_published(self):
+        # LegacyClaimText: the reader's fold of before 20 Oct 2026, for the lines a small edit leaves as they were
+        self.assertEqual(cc.legacy_claim_text("The [[rhone|Rhône]] is *long*.[^c1] ^c1"), "the rhône is long.")
+        self.assertEqual(cc.legacy_claim_text("A `code` _word_ in “quotes” — and ‘x’ – y z"), 'a code word in "quotes" - and \'x\' - y z')
+        self.assertEqual(cc.legacy_claim_text("See ![[water^c1]] and [[de/wasser]]."), "see water and de/wasser.")
+
+    def test_the_summary_is_read_in_sentences(self):
+        # MarkdownDialect.SummarySentences: (sentences, unmarked, characters said)
+        self.assertEqual(cc.summary_sentences("A is B.[^c1] It is C.[^c2]")[:2], (2, False))
+        self.assertEqual(cc.summary_sentences("A is B.[^c1] it is C.")[:2], (2, True))
+        self.assertEqual(cc.summary_sentences("Dr. Smith built it.[^c1]")[:2], (2, True))
+        self.assertEqual(cc.summary_sentences("![A view. Lit](media:x.png) It spans the river.[^c1]")[1], True)
+        self.assertEqual(cc.summary_sentences("![A view](media:x.png) It spans the river.[^c1]"), (1, False, len("It spans the river.[^c1]") + len("A view")))   # the text as written, markers included
 
     def test_hidden_characters_are_the_platforms(self):
         for text, hidden in (("‌", False), ("‍", False), ("\t\n\r", False), ("é̂̃̄", False),
@@ -454,7 +694,7 @@ class Dialect(unittest.TestCase):
 
     def test_claim_text_leaves_an_astral_letter_as_written(self):
         # char.ToLowerInvariant folds one UTF-16 unit, and a surrogate half has no case: Adlam, Deseret and Osage keep theirs
-        self.assertEqual(cc.claim_text("\U0001E900 \U00010400 \U000104B0 É"), "\U0001E900 \U00010400 \U000104B0 é")
+        self.assertEqual(cc.legacy_claim_text("\U0001E900 \U00010400 \U000104B0 É"), "\U0001E900 \U00010400 \U000104B0 é")
 
     def test_a_character_newer_than_this_python_is_named_not_refused(self):
         # the platform reads Unicode 16.0 (.NET 10): what an older Python calls unassigned may be a character it knows
@@ -548,6 +788,28 @@ class Build(unittest.TestCase):
     def build(self, d, *args):
         return subprocess.run([sys.executable, str(SCRIPTS / "build-proposal.py"), d, *args], capture_output=True, text=True,
                               env=dict(os.environ, SCIO_WORK_DIR=WORK), timeout=60)
+
+    def test_the_edit_summary_defaults_to_the_front_matters_without_its_markers(self):
+        d = self.task(draft=article()["body"])
+        r = self.build(d, "--slug", "lyon-bridge", "--lang", "en")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads(Path(d, "proposal.json").read_text(encoding="utf-8"))["summary"],
+                         "Lyon Bridge is a cable-stayed road bridge over the Rhône, opened in 2004.")
+
+    def test_base_claims_json_beside_the_proposal_tells_a_relisted_claim_from_a_recited_one(self):
+        # scio_get_claims' answer, saved as it came: `source` and `second_source`, no wikidata_id
+        case = golden_cases()["no_small_edit_relisted_claim_held_to_its_sentence"]
+        proposal, base, base_claims = unwrap(case)
+        served = {"revision_id": BASE_REVISION, "claims": [dict({k: v for k, v in c.items() if k not in ("source_url", "second_source_url", "wikidata_id")},
+                                                               source=c["source_url"], second_source=None) for c in base_claims]}
+        for name, claims in (("relisted", proposal["claims"]), ("recited", unwrap(golden_cases()["ok_small_edit_keeps_a_legacy_line"])[0]["claims"])):
+            with self.subTest(name=name):
+                d = self.task(claims=claims, patch=proposal["patch"], base=base)
+                Path(d, "base-claims.json").write_text(json.dumps(served), encoding="utf-8")
+                r = self.build(d, "--slug", "lyon-bridge", "--lang", "en", "--kind", "small_edit", "--base-revision", BASE_REVISION,
+                               "--summary", "Correct the span.", "--check")
+                self.assertEqual(r.returncode, 1 if name == "relisted" else 0, r.stdout)
+                self.assertEqual("claim_text_mismatch" in r.stdout, name == "relisted", r.stdout)
 
     def proposal(self, d):
         return json.loads(Path(d, "proposal.json").read_text(encoding="utf-8"))

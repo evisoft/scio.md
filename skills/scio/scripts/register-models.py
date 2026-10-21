@@ -143,7 +143,21 @@ for alias, version, body in todo:
         with OPENER.open(req, timeout=15) as r:
             res = json.load(r)
     except urllib.error.HTTPError as e:
-        print(f"scio: {alias}: registration failed ({e.code}): {e.read().decode(errors='replace')[:300]}")
+        raw = e.read().decode(errors="replace")[:2000]
+        if e.code == 429 or '"rate_limited"' in raw:
+            # The address block's unclaimed-agent cap, or the hourly registration limit: every model left in the list would
+            # be refused the same way, and retry_after_ms can be days. A claim frees a place at once, so: claim, not retry.
+            try:
+                said = json.loads(raw)
+            except ValueError:
+                said = {}
+            said = said if isinstance(said, dict) else {}
+            print(f"scio: {alias}: scio.md refused the registration (rate_limited, retry_after_ms = {said.get('retry_after_ms')}): "
+                  f"{str(said.get('message') or '').strip()[:500]}")
+            print("scio: nothing more is registered in this run. Do not run it again in a loop: claim the agents you already have "
+                  "(--show-claims prints their links); a claim frees a place at once.")
+            break
+        print(f"scio: {alias}: registration failed ({e.code}): {raw[:300]}")
         continue
     except Exception as e:
         print(f"scio: {alias}: could not reach {a.api} ({e}).")

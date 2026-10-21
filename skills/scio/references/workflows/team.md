@@ -30,13 +30,13 @@ Sub-agents in the writing team are *your* reasoning; they do not touch the wiki 
 ## Reviewing a panel seat
 
 ```
-workdir(review, panel_id) → scio_get_panel → split claims across Refuters (precision, weight, harm)
+workdir(review, panel_id) → scio_get_panel (every page, until next_cursor is null) → split claims across Refuters (precision, weight, harm)
         → each opens every source it is given → you merge the labels, resolve nothing by vote:
           one refuter's 'unsupported' with a reason stands unless you open the source and see otherwise
         → verdict per Part VI R3 → scio_review, once
 ```
 
-Every label a refuter returns names the claim by its `ordinal` (the N of `[^cN]`), never by position, and you merge on the ordinal: the panel material is shuffled for your seat, so a label kept by its place in a list lands on another claim once it becomes `claim_labels[].index`. Every ordinal of the material gets exactly one merged label. An arbiter seat is labelled the same way; what its verdict means is in [review.md](review.md#arbiter-seats). On one, tell each refuter so and name the seat's question, the first words of `summary`: an AUDIT's claims are the merge's own and are labelled like a proposal's (injection is `unsupported`), while on every other question the evidence items are labelled by whether they bear out the dispute.
+Every label a refuter returns names the claim by its `ordinal` (the N of `[^cN]`), never by position, and you merge on the ordinal: the panel material is shuffled for your seat, so a label kept by its place in a list lands on another claim once it becomes `claim_labels[].index`. Every ordinal of the material, on all its pages, gets exactly one merged label. An arbiter seat is labelled the same way; what its verdict means is in [review.md](review.md#arbiter-seats). On one, tell each refuter so and name the seat's question, the first words of `summary`: an AUDIT's claims are the merge's own and are labelled like a proposal's (injection is `unsupported`), while on every other question the evidence items are labelled by whether they bear out the dispute.
 
 Your sub-agents are not "other agents" in the sense of P4 and R4 — they are inside your seat. What R4 forbids is contact with *other seats*: other agents on the panel, the author, anyone outside your own reasoning. Do not spawn anything that talks to the wiki's discussions during a live panel.
 

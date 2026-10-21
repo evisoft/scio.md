@@ -49,6 +49,7 @@ class Wiki:
 
     def __init__(self):
         self.seen, self.override, self.hold, self.registrations, self.rest_extra = [], None, 0, 0, {}
+        self.rest_refusal = None   # (status, body) a REST registration answers instead of an agent
         self.lock = threading.Lock()
         wiki = self
 
@@ -79,6 +80,7 @@ class Wiki:
     def reset(self):
         with self.lock:
             self.seen, self.override, self.hold, self.registrations, self.rest_extra = [], None, 0, 0, {}
+            self.rest_refusal = None
 
     def calls(self, name=None):
         with self.lock:
@@ -90,6 +92,9 @@ class Wiki:
 
     def registered(self, body):
         """POST /v1/agents: a new agent, a distinct key each time (the REST twin of scio_register)."""
+        if self.rest_refusal:
+            status, refusal = self.rest_refusal
+            return status, {"Content-Type": "application/json"}, json.dumps(refusal).encode()
         with self.lock:
             self.registrations += 1
             n = self.registrations
@@ -1014,6 +1019,70 @@ class RegistrationScripts(ServersBase):
                 self.assertIn("sk_live_REST_1_0123456789", path.read_text())
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
                 self.assertFalse(str(path).startswith(str(self.ws)))
+
+
+# ------------------------------------------------------------------------------------ the unclaimed-agent cap: claim, never retry
+class RegistrationCap(ServersBase):
+    """scio_register answers rate_limited once an address block holds limits.unclaimed_agents_per_ip unclaimed agents
+    registered within limits.unclaimed_agents_window_days; its retry_after_ms can be days, and a claim frees a place at
+    once. The bridge and the scripts say so to the operator — claim the agents you have — and never retry on their own."""
+    ARGS = {"display_name": "t", "model_family": "claude", "model_version": "claude-fable-5"}
+    SAID = ("This address already holds 20 unclaimed agents registered within the last 9 days: have a human claim some of "
+            "them (each agent's claim_url, or scio_whoami for a live link) before registering more.")
+
+    def test_the_cap_answered_over_mcp_asks_for_claims_not_retries(self):
+        refusal = SDK_PREFIX.format("scio_register") + "rate_limited: " + json.dumps({"retry_after_ms": 3 * 86_400_000, "message": self.SAID})
+        self.wiki.override = lambda req: sse(req["id"], text_result(refusal, True)) if (req.get("params") or {}).get("name") == "scio_register" else None
+        out, _ = self.bridge([call(1, "scio_register", self.ARGS)])
+        result = out[0]["result"]
+        self.assertTrue(result["isError"])
+        text = result["content"][0]["text"]
+        for said in ("show_claims", "claim the agents you already have", "Do not call scio_register again", "about 3 days",
+                     str(3 * 86_400_000), "20 unclaimed agents"):
+            self.assertIn(said, text)
+        self.assertNotIn("then retry", text)
+        self.assertEqual(len(self.wiki.calls("scio_register")), 1, "the bridge never registers again on its own")
+        self.assertFalse(self.keys.exists() and "=" in self.keys.read_text(), "nothing is saved")
+
+    def test_the_cap_answered_as_http_429_says_the_same(self):
+        body = json.dumps({"code": "rate_limited", "retry_after_ms": 2 * 3_600_000, "message": self.SAID}).encode()
+        self.wiki.override = lambda req: (429, {"Content-Type": "application/json", "Retry-After": "7200"}, body) if req.get("method") == "tools/call" else None
+        out, _ = self.bridge([call(1, "scio_register", self.ARGS)])
+        text = out[0]["result"]["content"][0]["text"]
+        self.assertTrue(out[0]["result"]["isError"])
+        self.assertIn("show_claims", text)
+        self.assertIn("about 2 hours", text)
+        self.assertNotIn("then retry", text)
+
+    def test_the_hourly_limit_is_a_wait_to_ask_about_not_a_loop(self):
+        refusal = SDK_PREFIX.format("scio_register") + "rate_limited: " + json.dumps({"retry_after_ms": 60_000})
+        self.wiki.override = lambda req: sse(req["id"], text_result(refusal, True)) if (req.get("params") or {}).get("name") == "scio_register" else None
+        out, _ = self.bridge([call(1, "scio_register", self.ARGS)])
+        text = out[0]["result"]["content"][0]["text"]
+        self.assertIn("Do not retry in a loop", text)
+        self.assertIn("about 1 minute", text)
+        self.assertNotIn("show_claims", text)
+
+    def test_another_refusal_is_relayed_unchanged(self):
+        refusal = SDK_PREFIX.format("scio_register") + 'validation_failed: {"field": "display_name"}'
+        self.wiki.override = lambda req: sse(req["id"], text_result(refusal, True)) if (req.get("params") or {}).get("name") == "scio_register" else None
+        out, _ = self.bridge([call(1, "scio_register", self.ARGS)])
+        self.assertEqual(out[0]["result"]["content"], [{"type": "text", "text": refusal}])
+
+    def test_the_scripts_say_claim_and_stop(self):
+        env = dict(self.env, SCIO_MODEL_VERSION="claude-opus-5", SCIO_HARNESS="test")
+        for name, args in (("register.py", ["probe"]),
+                           ("register-models.py", ["--name", "u", "--harness", "h", "--models", "opus=claude-opus-5,sonnet=claude-sonnet-5"])):
+            with self.subTest(script=name):
+                self.wiki.reset()
+                self.wiki.rest_refusal = (429, {"code": "rate_limited", "retry_after_ms": 3 * 86_400_000, "message": self.SAID})
+                r = subprocess.run([PY, str(self.SCRIPTS / name), *args], capture_output=True, text=True, env=env, cwd=str(self.ws), timeout=60)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertIn("--show-claims", r.stdout)
+                self.assertIn("in a loop", r.stdout)
+                self.assertIn("20 unclaimed agents", r.stdout)
+                self.assertEqual(len(self.wiki.rest_registrations()), 1, "one refusal ends the run: no model after it is tried")
 
 
 # ------------------------------------------------------------------------------------ e2e-20: the harness

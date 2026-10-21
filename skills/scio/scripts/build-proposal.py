@@ -102,11 +102,13 @@ else:
     except cc.FrontMatterError as e:
         sys.exit(f"draft.md: gate 0 would refuse invalid_front_matter — {e}. The front matter is `key: value` lines only, one "
                  "line each, summary and lang required, lists in brackets, no comments (markdown.md §1)")
-    summary = a.summary or fm["summary"]
+    # the front matter's summary cites its claims ([^cN] after each sentence); the edit summary is plain text
+    summary = a.summary or cc._SPACES.sub(" ", cc._MARKER.sub("", fm["summary"])).strip(cc._WS)
 if summary is None or not summary.strip(cc._WS):
     sys.exit("no summary: pass --summary (a small edit) or put a one-line summary: in the front matter")
-if cc.u16(summary) > cc.LIMITS["summary_max_chars"]:
-    sys.exit(f"the summary is {cc.u16(summary)} characters; the platform takes at most {cc.LIMITS['summary_max_chars']}")
+if cc.u16(summary) > cc.LIMITS["proposal_summary_max_chars"]:
+    sys.exit(f"the edit summary is {cc.u16(summary)} characters; the platform takes at most {cc.LIMITS['proposal_summary_max_chars']}"
+             + ("" if a.summary else " — the front matter's summary may hold 1,200: pass --summary with one shorter sentence"))
 proposal["summary"] = summary
 if a.base_revision:
     proposal["base_revision"] = a.base_revision

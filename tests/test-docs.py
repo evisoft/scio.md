@@ -25,7 +25,7 @@ def bridge_module():
 LADDER = {"read": 0, "propose": 1, "contest": 1, "review_small": 2, "review_article": 3, "translate": 3,
           "curate": 4, "arbitrate": 5}
 # The questions an arbiter panel's summary asks (EfPanelStore.ContestQuestion), one per dispute remedy.
-ARBITER_QUESTIONS = ("APPEAL", "HIDE NOTICE", "REDACTION NOTICE", "CONDUCT", "AUDIT", "PROMOTION")
+ARBITER_QUESTIONS = ("APPEAL", "HIDE NOTICE", "REDACTION NOTICE", "CONDUCT", "AUDIT", "PROMOTION", "RESTORE")
 
 
 def text(path):
@@ -572,7 +572,9 @@ class ContestRefusals(unittest.TestCase):
         self.assertNotIn("upheld", without)
 
     def test_the_two_rate_limits_are_told_apart(self):
-        """The lock is named by its rules keys; the pool's one hour is described, not copied from the code."""
+        """The lock is named by its rules keys; the fleet's share of open hearings answers one hour (FleetHearingShare),
+        described, not copied from the code. Since 21 Oct 2026 an arbiter pool that cannot be seated is no refusal: the
+        appeal waits with panel_id null."""
         limited = re.search(r"^   - `rate_limited`.*$", text("skills/scio/references/workflows/contest.md"), re.M).group(0)
         self.assertIn("`panels.contest_lock_after_failures`", limited)
         self.assertIn("`windows_days.appeal_lock`", limited)
@@ -860,6 +862,105 @@ class RegisteredSearchAndRefusedKeys(unittest.TestCase):
         readme = text("README.md")
         self.assertNotIn("stops with the reason when the agent is unclaimed or its key is rejected", readme)
         self.assertRegex(readme, r"refused key[^.]*hourly")
+
+class ContractOf21October(unittest.TestCase):
+    """The platform contract deployed 21 Oct 2026 (evisoft/scio da3a732) and rules 2026-10-27: claim text as written,
+    the bounded and marked summary, the new gate reasons, quotas and conflicts, mission evidence, waiting hearings,
+    the restore, shadow seats and the unclaimed-agent cap on registration. Each is told where an agent meets it."""
+
+    MD = "skills/scio/references/markdown.md"
+
+    def test_claim_text_is_the_sentence_as_written(self):
+        body = text(self.MD)
+        for stale in ("everything is lower case", "reads `Rhône`", "(the whole sentence, or a part of it)",
+                      "Table rows, the front matter's summary and a demonstration's working are not compared"):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, body)
+        for needle in ("exactly as written", "Nothing else is folded", "`[[rhone|Rhône]]` stays",
+                       "mid-sentence", "`marker_outside_sentence`", "table body cell"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+        self.assertNotIn("found in the line that cites it", text("skills/scio/references/workflows/write.md"))
+
+    def test_every_example_summary_is_claim_marked(self):
+        for path in (self.MD,):
+            for line in re.findall(r"^summary: .*$", text(path), re.M):
+                with self.subTest(file=path, summary=line):
+                    summary = line[len("summary: "):]
+                    ends = list(re.finditer(r"[.!?][\"')\]*_`]*((?:\[\^c\d+\])*)(?=\s|$)", summary))
+                    self.assertTrue(ends)
+                    self.assertLessEqual(len(ends), 3)
+                    for end in ends:   # every terminator before a space ends a sentence there, and a marker closes it
+                        self.assertTrue(end.group(1), summary)
+                    self.assertRegex(summary, r"\[\^c\d+\]$")
+
+    def test_example_ids_are_valid_wikidata_ids(self):
+        for path in (self.MD,):
+            for qid in re.findall(r"^wikidata_id: (\S+)$", text(path), re.M):
+                with self.subTest(qid=qid):
+                    self.assertRegex(qid, r"^Q[1-9][0-9]{0,18}$")
+
+    def test_the_summary_rules_are_stated(self):
+        body = text(self.MD)
+        for needle in ("`summary_unmarked`", "`summary_too_long`", "1,200", "Doctor Smith", "alt text",
+                       "`front_matter_duplicate_key`", "at most 500 characters"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+        self.assertNotIn("One sentence, free to read in search", body)
+
+    def test_every_new_refusal_is_placed_where_an_agent_meets_it(self):
+        where = {
+            "second_source_not_independent": ("workflows/write.md", "contributing.md"),
+            "not_a_small_edit": ("workflows/write.md", "workflows/maintain.md"),
+            "summary_too_long": ("markdown.md",), "summary_unmarked": ("markdown.md",),
+            "front_matter_duplicate_key": ("markdown.md",), "marker_outside_sentence": ("markdown.md", "workflows/write.md"),
+            "source_retention_exceeded": ("workflows/write.md",),
+            "media_pending": ("workflows/write.md", "contributing.md"), "gap_reservations": ("workflows/gap.md", "contributing.md"),
+            "discussions": ("contributing.md",), "article_requests": ("workflows/request.md", "contributing.md"),
+            "media_provenance": ("workflows/write.md",), "own_proposal_undecided": ("workflows/write.md",),
+            "not_restorable": ("workflows/contest.md",),
+        }
+        for code, files in where.items():
+            for f in files:
+                with self.subTest(code=code, file=f):
+                    self.assertRegex(text(f"skills/scio/references/{f}"), rf"`(?:quota: )?{code}`")
+        self.assertRegex(text("skills/scio/references/contributing.md"), r"another operator's fleet[^.]*`conflict`")
+
+    def test_a_refused_registration_is_claimed_never_retried(self):
+        for path in ("skills/scio/references/workflows/onboard.md", "commands/register.md",
+                     "skills/scio/references/contributing.md"):
+            with self.subTest(file=path):
+                body = text(path)
+                self.assertIn("rate_limited", body)
+                self.assertIn("show_claims", body)
+                self.assertRegex(body, r"(?i)claim the agents (they|you) (already )?have")
+
+    def test_an_error_report_charges_only_on_live_evidence(self):
+        read = text("skills/scio/references/workflows/read.md")
+        self.assertRegex(read, r"(?i)exact sentence on it that contradicts")
+        self.assertRegex(read, r"(?i)dead[^.]*counts as no evidence")
+        self.assertRegex(read, r"(?i)without evidence is still a mission[^.]*charges nobody")
+        maintain = text("skills/scio/references/workflows/maintain.md")
+        self.assertNotIn("it books the replaced claim as a `factual_error` and charges its author the major correction.", maintain)
+        self.assertRegex(maintain, r"(?i)charges nobody")
+        self.assertIn("evidence_verified", text("skills/scio/references/workflows/review.md"))
+
+    def test_a_waiting_hearing_is_not_an_error_and_a_hiding_can_be_restored(self):
+        contest = text("skills/scio/references/workflows/contest.md")
+        self.assertIn("`panel_id: null` is not an error", contest)
+        self.assertIn("`target_kind: dispute`", contest)
+        self.assertNotIn("the fee is returned, and `retry_after_ms` is then always one hour", contest)
+        self.assertRegex(text("skills/scio/references/workflows/translate.md"), r"(?i)hid releases its slot")
+
+    def test_a_shadow_seat_and_paged_material_are_explained(self):
+        review = text("skills/scio/references/workflows/review.md")
+        self.assertIn("101", review)
+        self.assertIn("next_cursor", review)
+        for path in ("agents/scio-reviewer.md", "commands/review.md", "skills/scio/references/workflows/team.md"):
+            with self.subTest(file=path):
+                self.assertIn("next_cursor", text(path))
+        self.assertIn("101", text("agents/scio-reviewer.md"))
+
 
 if __name__ == "__main__":
     unittest.main()

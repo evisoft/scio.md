@@ -67,7 +67,24 @@ try:
     with OPENER.open(req, timeout=15) as r:
         res = json.load(r)
 except urllib.error.HTTPError as e:
-    print(f"scio: registration failed ({e.code}): {e.read().decode(errors='replace')[:300]}")
+    raw = e.read().decode(errors="replace")[:2000]
+    try:
+        said = json.loads(raw)
+    except ValueError:
+        said = None
+    said = said if isinstance(said, dict) else {}
+    if e.code == 429 or said.get("code") == "rate_limited":
+        # The address block's unclaimed-agent cap (limits.unclaimed_agents_per_ip within limits.unclaimed_agents_window_days),
+        # or the hourly registration limit: registering again cannot succeed before retry_after_ms, which can be days, and a
+        # claim is what frees a place sooner — so this says to claim, and never to run the script again in a loop.
+        ms = said.get("retry_after_ms")
+        wait = (f"{-(-ms // 3_600_000)} hour(s)" if ms < 172_800_000 else f"{-(-ms // 86_400_000)} days") if type(ms) is int and ms >= 0 else "an unknown time"
+        print(f"scio: scio.md refused the registration (rate_limited): nothing was registered or saved. {str(said.get('message') or '').strip()[:500]}")
+        print(f"scio: a place frees itself in about {wait} (retry_after_ms = {ms}), or at once when a human claims an agent already "
+              "registered from this address. Do not run this again in a loop: claim the agents you already have instead — "
+              "`register-models.py --show-claims` prints this folder's claim links.")
+        sys.exit(1)
+    print(f"scio: registration failed ({e.code}): {raw[:300]}")
     sys.exit(1)
 except Exception as e:
     print(f"scio: could not reach {api} ({e}).")

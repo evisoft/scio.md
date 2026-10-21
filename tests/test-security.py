@@ -196,7 +196,7 @@ expect(hook("guard-fetch.py", "WebFetch", {"url": "http://[::1]/"}) == "deny", "
 code, out = run("scan-injection.py", ["-"], stdin="see http://foo.localhost/admin")
 expect(code == 1 and "private_host" in out, "14: scan-injection flags *.localhost")
 def claims(*cl):
-    return json.dumps({"tool_input": {"body": "---\nlang: en\nsummary: S.\ndomain: history\n---\nA sentence.[^c1] ^c1", "claims": list(cl)}})
+    return json.dumps({"tool_input": {"body": "---\nlang: en\nsummary: S.[^c1]\ndomain: history\n---\nA sentence.[^c1] ^c1", "claims": list(cl)}})
 def preflight(payload):
     r = subprocess.run([PY, os.path.join(HERE, "check-claims.py")], input=payload, capture_output=True, text=True, env=aenv, timeout=T)
     try:
@@ -548,7 +548,7 @@ with tempfile.TemporaryDirectory() as d:
         return out_
     def ledger_preflight(claims, body=None):
         body = body or "".join(f"Sentence number {c['ordinal']} about the river in 2021.[^c{c['ordinal']}] ^c{c['ordinal']}\n" for c in claims)
-        pf = os.path.join(d, "p.json"); json.dump({"kind": "article", "slug": "river", "lang": "en", "summary": "A river.", "body": "---\ntitle: River\nlang: en\nsummary: A river.\n---\n" + body, "claims": claims}, open(pf, "w"))
+        pf = os.path.join(d, "p.json"); json.dump({"kind": "article", "slug": "river", "lang": "en", "summary": "A river.", "body": "---\ntitle: River\nlang: en\nsummary: A river.[^c1]\n---\n" + body, "claims": claims}, open(pf, "w"))
         r_ = subprocess.run([PY, os.path.join(HERE, "check-claims.py"), pf], capture_output=True, text=True, env=dict(aenv, SCIO_WORK_DIR=v_wd), timeout=T)
         return r_.returncode, r_.stdout
     ledger_claim = lambda n, url=URL, quote=QUOTE: {"ordinal": n, "text": f"Sentence number {n} about the river in 2021.", "source_url": url, "quote": quote, "accessed_at": "2026-09-18"}
@@ -714,7 +714,7 @@ with tempfile.TemporaryDirectory() as d:
     ascii_env = dict(aenv, LC_ALL="C", LANG="C", PYTHONCOERCECLOCALE="0", PYTHONUTF8="0", SCIO_WORK_DIR=wd)
     ascii_env.pop("PYTHONIOENCODING", None)
     td2 = os.path.join(wd, "write-enc"); os.makedirs(td2, exist_ok=True)
-    open(os.path.join(td2, "draft.md"), "w", encoding="utf-8").write("---\ntitle: Ș\nlang: ro\nsummary: Orașul are 中文.\n---\nOrașul Chișinău are 中文 locuitori în 2021.[^c1] ^c1\n")
+    open(os.path.join(td2, "draft.md"), "w", encoding="utf-8").write("---\ntitle: Ș\nlang: ro\nsummary: Orașul are 中文.[^c1]\n---\nOrașul Chișinău are 中文 locuitori în 2021.[^c1] ^c1\n")
     json.dump([{"ordinal": 1, "text": "Orașul Chișinău are 中文 locuitori în 2021.", "source_url": "https://example.com/x", "quote": "Orașul Chișinău are 中文 locuitori în 2021.", "accessed_at": "2026-08-29"}], open(os.path.join(td2, "claims.json"), "w", encoding="utf-8"), ensure_ascii=False)
     r = subprocess.run([PY, "-X", "utf8=0", os.path.join(HERE, "build-proposal.py"), td2, "--slug", "chisinau", "--lang", "ro", "--check"], capture_output=True, env=ascii_env, timeout=T)
     expect(r.returncode == 0 and b"ERROR" not in r.stdout and b"Traceback" not in r.stderr, "L5: build-proposal.py --check reads and writes a Romanian/CJK draft under an ASCII locale")
@@ -773,7 +773,7 @@ for f in glob.glob(os.path.join(ROOT, "agents", "*.md")):
 print("pre-flight false positives (v0.5.2 review)")
 def body_of(lines):
     cl = [{"ordinal": i + 1, "text": l.split("[^")[0], "source_url": f"https://example{i}.org/x", "quote": l.split("[^")[0], "accessed_at": "2026-08-29"} for i, l in enumerate(lines)]
-    return json.dumps({"tool_input": {"body": "---\ntitle: T\nlang: en\ndomain: history\nsummary: S\n---\n" + "\n".join(lines) + "\n", "claims": cl}})
+    return json.dumps({"tool_input": {"body": "---\ntitle: T\nlang: en\ndomain: history\nsummary: S.[^c1]\n---\n" + "\n".join(lines) + "\n", "claims": cl}})
 legit = ["Python was created by Guido van Rossum in 1991.[^c1] ^c1", "The election used a secret ballot in 2019.[^c2] ^c2", "The data were fitted to the model in 2019.[^c3] ^c3",
          "She began her career as an AI researcher in 2015.[^c4] ^c4", "It was published by Oxford Univ. Press in 1990.[^c5] ^c5", "The office moved to Washington D.C. since 1995 and stayed there.[^c6] ^c6",
          "The Secret Service was founded in 1865.[^c7] ^c7", "Bash is a Unix shell released in 1989.[^c8] ^c8", "See https://ja.example.org/wiki/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%81%AE%E6%AD%B4%E5%8F%B2 for the page.[^c9] ^c9"]
@@ -786,12 +786,12 @@ dcl = [{"ordinal": 1, "text": "x", "source_url": "https://a.org/1", "quote": "x"
        {"ordinal": 4, "text": "x", "source_url": "https://c.org/4", "quote": "x", "accessed_at": "2026-08-29"}, {"ordinal": 5, "text": "x", "source_url": "https://d.org/5", "quote": "x", "accessed_at": "2026-08-29"}]
 said = {1: "Water boils at 100 °C at 1 atm.", 2: "x", 3: "By the relation and the constant, water boils at about 81 °C at 0.5 atm.", 4: "100 °C at 1 atm.", 5: "The span `<code>` is not HTML."}
 dcl2 = [dict(c, text=said[c["ordinal"]]) for c in dcl]
-expect(preflight(json.dumps({"tool_input": {"body": "---\ntitle: T\nlang: en\ndomain: [history]\nsummary: S\n---\n" + "\n".join(dialect) + "\n", "claims": dcl2}})) in (None, "allow"), "P2: the dialect's own forms (inline premise markers, transclusion, media, a demonstration callout, fenced code, a table row, inline code) pass")
-p3 = subprocess.run([PY, os.path.join(HERE, "check-claims.py")], input=json.dumps({"tool_input": {"body": "---\nlang: en\ndomain:\n  - living_person\nsummary: S\n---\nX was born in 1970.[^c1] ^c1\n", "claims": [dict(dcl[0], text="X was born in 1970.")]}}), capture_output=True, text=True, env=aenv, timeout=T).stdout
+expect(preflight(json.dumps({"tool_input": {"body": "---\ntitle: T\nlang: en\ndomain: [history]\nsummary: S.[^c1]\n---\n" + "\n".join(dialect) + "\n", "claims": dcl2}})) in (None, "allow"), "P2: the dialect's own forms (inline premise markers, transclusion, media, a demonstration callout, fenced code, a table row, inline code) pass")
+p3 = subprocess.run([PY, os.path.join(HERE, "check-claims.py")], input=json.dumps({"tool_input": {"body": "---\nlang: en\ndomain:\n  - living_person\nsummary: S.[^c1]\n---\nX was born in 1970.[^c1] ^c1\n", "claims": [dict(dcl[0], text="X was born in 1970.")]}}), capture_output=True, text=True, env=aenv, timeout=T).stdout
 expect('"deny"' in p3 and "invalid_front_matter" in p3, "P3: a YAML block-list domain is refused as gate 0 refuses it (invalid_front_matter), not read as a list")
 # P4, P5, P10 and C6 each deny for their own reason, and each has a benign twin that passes: a fixture the platform would
 # refuse anyway (no lang, a claim text that is not its sentence) is denied whatever the check it names does
-FMOK = "---\nlang: en\nsummary: S\n---\n"
+FMOK = "---\nlang: en\nsummary: S.[^c1]\n---\n"
 def p4(heading, summary):
     return json.dumps({"tool_input": {"body": FMOK + heading + "\nA fact.[^c1] ^c1\n", "claims": [dict(dcl[0], text="A fact.")], "summary": summary}})
 expect(preflight(p4("# A heading", "A summary.")) in (None, "allow"), "P4: a plain heading and summary pass")
@@ -837,7 +837,7 @@ expect(sorted(m.get("id") for m in outp) == [1, 2, 3] and "Traceback" not in r.s
 
 print("the critic's round (v0.5.2 review)")
 # C1: a warnings-only pre-flight adds context but decides nothing — the trust gate and the harness decide
-r = subprocess.run([PY, os.path.join(HERE, "check-claims.py")], input=json.dumps({"tool_name": "mcp__plugin_scio_scio__scio_propose_edit", "tool_input": {"body": "---\ntitle: T\nlang: en\ndomain: history\nsummary: S\n---\nThe renowned city currently has many people.[^c1] ^c1\n", "claims": [{"ordinal": 1, "text": "The renowned city currently has many people.", "source_url": "https://e.org/x", "quote": "x", "accessed_at": "2026-08-29"}]}}), capture_output=True, text=True, env=dict(aenv, SCIO_TRUST_FILE="/nonexistent"), timeout=T)
+r = subprocess.run([PY, os.path.join(HERE, "check-claims.py")], input=json.dumps({"tool_name": "mcp__plugin_scio_scio__scio_propose_edit", "tool_input": {"body": "---\ntitle: T\nlang: en\ndomain: history\nsummary: S.[^c1]\n---\nThe renowned city currently has many people.[^c1] ^c1\n", "claims": [{"ordinal": 1, "text": "The renowned city currently has many people.", "source_url": "https://e.org/x", "quote": "x", "accessed_at": "2026-08-29"}]}}), capture_output=True, text=True, env=dict(aenv, SCIO_TRUST_FILE="/nonexistent"), timeout=T)
 hso = json.loads(r.stdout)["hookSpecificOutput"]
 expect("permissionDecision" not in hso and "warnings" in hso.get("additionalContext", ""), "C1: a warnings-only proposal is not auto-approved by the pre-flight hook (no bypass of the trust gate)")
 # C2: scio-local serves calls concurrently
@@ -848,7 +848,7 @@ expect(sorted(m.get("id") for m in outp) == [1, 2, 3] and time.time() - t0 < 5.5
 with tempfile.TemporaryDirectory() as d:
     wd = os.path.join(d, "work"); td = os.path.join(wd, "write-long"); os.makedirs(td)
     lines = [f"Sentence number {i} states a fact about the year {1800 + i} in some detail.[^c{i}] ^c{i}" for i in range(1, 151)]
-    open(os.path.join(td, "draft.md"), "w", encoding="utf-8").write("---\ntitle: T\nlang: en\ndomain: history\nsummary: S\n---\n" + "\n".join(lines) + "\n")
+    open(os.path.join(td, "draft.md"), "w", encoding="utf-8").write("---\ntitle: T\nlang: en\ndomain: history\nsummary: S.[^c1]\n---\n" + "\n".join(lines) + "\n")
     json.dump([{"ordinal": i, "text": lines[i - 1].split("[^")[0], "source_url": f"https://e{i % 50}.org/x", "quote": "q" * 400, "accessed_at": "2026-08-29"} for i in range(1, 151)], open(os.path.join(td, "claims.json"), "w"))   # 50 distinct URLs: within the limit
     outp, r = local([{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "build_proposal", "arguments": {"dir": td, "slug": "long", "lang": "en"}}}], SCIO_WORK_DIR=wd)
     ans = json.loads(outp[0]["result"]["content"][0]["text"])
