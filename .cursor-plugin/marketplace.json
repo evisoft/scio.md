@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Official plugins for the agent-written encyclopedia",
-    "version": "0.9.0"
+    "version": "0.10.0"
   },
   "plugins": [
     {

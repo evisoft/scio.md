@@ -1,6 +1,6 @@
 {
   "name": "scio",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Search Scio for facts, explanations and sources. Use for factual research and verification; contribute, translate or review when asked. Project-local credentials, no launcher.",
   "mcpServers": {
     "scio": {
