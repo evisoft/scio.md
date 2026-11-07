@@ -876,11 +876,14 @@ class UploadZipTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.base = Path(tmp.name)
 
-    def build(self, out):
+    def build(self, out, skill=False):
+        """The plugin archive (the first line build-zip.py prints), or the skill archive (the second)."""
         run = subprocess.run([PY, str(ROOT / "scripts/build-zip.py"), "--out", str(out)], capture_output=True, text=True,
                              timeout=60, env=clean_env())
         self.assertEqual(run.returncode, 0, run.stderr)
-        return Path(run.stdout.split("  ", 1)[0])
+        lines = run.stdout.splitlines()
+        self.assertEqual(len(lines), 2, run.stdout)
+        return Path(lines[1 if skill else 0].split("  ", 1)[0])
 
     def test_the_archive_holds_the_plugin_folder_and_nothing_else(self):
         import zipfile
@@ -917,13 +920,40 @@ class UploadZipTests(unittest.TestCase):
         self.assertIn("commands/approve-all.md", whoami(), "a file added after the download is still a tamper")
 
     def test_the_same_tree_gives_the_same_bytes(self):
-        one, two = self.build(self.base / "a"), self.build(self.base / "b")
-        self.assertEqual(hashlib.sha256(one.read_bytes()).digest(), hashlib.sha256(two.read_bytes()).digest())
+        for skill in (False, True):
+            one, two = self.build(self.base / "a", skill), self.build(self.base / "b", skill)
+            with self.subTest(skill=skill):
+                self.assertEqual(hashlib.sha256(one.read_bytes()).digest(), hashlib.sha256(two.read_bytes()).digest())
+
+    def test_the_skill_archive_is_what_the_skills_api_accepts(self):
+        """POST /v1/skills (Claude API, Managed Agents) and claude.ai's skill upload: SKILL.md at the top of one folder,
+        under 30 MB uncompressed, name and description within their limits — and exactly the skill's manifest."""
+        import zipfile
+        version = json.loads((ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
+        archive = self.build(self.base / "a", skill=True)
+        self.assertEqual(archive.name, f"scio-skill-{version}.zip")
+        with zipfile.ZipFile(archive) as z:
+            infos = z.infolist()
+            skill_md = z.read("scio/SKILL.md").decode("utf-8")
+        self.assertEqual({i.filename.split("/", 1)[0] for i in infos}, {"scio"})
+        self.assertLess(sum(i.file_size for i in infos), 30 * 1024 * 1024)
+        listed = {l.split("  ", 1)[1] for l in (ROOT / "skills/scio/MANIFEST.sha256").read_text(encoding="utf-8").splitlines() if "  " in l}
+        self.assertEqual({i.filename.split("/", 1)[1] for i in infos}, listed | {"MANIFEST.sha256"})
+        front = skill_md.split("---", 2)[1]
+        name = re.search(r"^name: (.*)$", front, re.M).group(1).strip()
+        description = re.search(r"^description: (.*)$", front, re.M).group(1).strip()
+        self.assertRegex(name, r"^[a-z0-9-]{1,64}$")
+        self.assertNotRegex(name, r"anthropic|claude")
+        self.assertTrue(0 < len(description) <= 1024)
+        self.assertNotRegex(name + description, r"<[^>]+>", "no XML tags")
+        keys = set(re.findall(r"^([a-z][a-z-]*):", front, re.M))
+        self.assertLessEqual(keys, {"name", "description", "license", "compatibility", "metadata", "allowed-tools"},
+                             "claude.ai and the Skills API refuse any other key")
 
     def test_the_release_attaches_the_zip_it_built_after_the_manifests(self):
         text = (ROOT / "scripts/release.sh").read_text(encoding="utf-8")
         self.assertRegex(text, r"python3 scripts/build-zip\.py")
-        self.assertRegex(text, r'gh release create "v\$v" "\$zip"')
+        self.assertRegex(text, r'gh release create "v\$v" "\$zip" "\$skill_zip"')
         self.assertLess(text.index("python3 scripts/gen-manifest.py --check"), text.index("python3 scripts/build-zip.py"))
 
 

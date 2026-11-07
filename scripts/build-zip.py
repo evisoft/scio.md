@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Zip the plugin for claude.ai and Cowork: Customize → Plugins → Add → Upload plugin.
+"""Zip the plugin for claude.ai and Cowork (Customize → Plugins → Add → Upload plugin), and the skill alone for the
+Claude API and Managed Agents (POST /v1/skills) and claude.ai's own skill upload.
 
-  build-zip.py                  write dist/scio-<version>.zip (the version of .claude-plugin/plugin.json)
-  build-zip.py --out <dir>      write it there instead (tests pass a temporary folder)
+  build-zip.py                  write dist/scio-<version>.zip and dist/scio-skill-<version>.zip (the version of
+                                .claude-plugin/plugin.json), one line each: path, file count, SHA-256
+  build-zip.py --out <dir>      write them there instead (tests pass a temporary folder)
 
 The archive holds one top-level folder, `scio/`, with `.claude-plugin/plugin.json` one level down — the layout the upload
 accepts. What goes in is what the two manifests list and nothing else: PLUGIN.sha256 (what a harness loads from the
@@ -13,7 +15,11 @@ and dated 2020-01-01, so the same tree always gives the same bytes and the SHA-2
 
 What each surface loads from it (claude.com/docs/plugins/platform-support): chat loads the skill and the commands (as
 skills) — agents, hooks and the local MCP servers are skipped there; Cowork loads all of it when the session runs on
-the operator's computer, with python3 for the two stdio servers and the hooks. A release tool, not part of the skill."""
+the operator's computer, with python3 for the two stdio servers and the hooks.
+
+The skill archive is skills/scio alone under one `scio/` folder — what MANIFEST.sha256 lists, and the manifest — the layout
+POST /v1/skills accepts (SKILL.md at the top of a single enclosing folder, under 30 MB) and the skill lands in as
+/skills/scio/. A release tool, not part of the skill."""
 import argparse, hashlib, json, os, stat, sys, zipfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,12 +36,20 @@ def listed(manifest):
         return [line.split("  ", 1)[1] for line in f.read().splitlines() if "  " in line]
 
 
-def members(root):
-    """Every path the archive holds, relative to the plugin root, from the two manifests."""
+def members(root, skill_only=False):
+    """Every path the archive holds, relative to `root` (the plugin root, or the skill for the skill archive), from the
+    manifests."""
+    if skill_only:
+        paths = {"MANIFEST.sha256"} | set(listed(os.path.join(root, "MANIFEST.sha256")))
+        return checked(root, paths)
     skill = "skills/scio"
     paths = set(EXTRA) | {"PLUGIN.sha256", f"{skill}/MANIFEST.sha256"}
     paths |= set(listed(os.path.join(root, "PLUGIN.sha256")))
     paths |= {f"{skill}/{rel}" for rel in listed(os.path.join(root, skill, "MANIFEST.sha256"))}
+    return checked(root, paths)
+
+
+def checked(root, paths):
     for rel in sorted(paths):
         parts = rel.split("/")
         if REFUSED & set(parts) or parts[0] == "bin" or ".." in parts or rel.startswith("/"):
@@ -46,12 +60,14 @@ def members(root):
     return sorted(paths)
 
 
-def build(root, out_dir):
+def build(root, out_dir, skill_only=False):
     with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
         version = json.load(f)["version"]
     os.makedirs(out_dir, exist_ok=True)
-    target = os.path.join(out_dir, f"scio-{version}.zip")
-    paths = members(root)
+    target = os.path.join(out_dir, f"scio-skill-{version}.zip" if skill_only else f"scio-{version}.zip")
+    if skill_only:
+        root = os.path.join(root, "skills", "scio")
+    paths = members(root, skill_only)
     tmp = target + ".part"
     with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for rel in paths:
@@ -75,8 +91,9 @@ def main():
     ap.add_argument("--out", default=os.path.join(REPO, "dist"), help="folder for the archive (default: dist/)")
     ap.add_argument("--root", default=REPO, help=argparse.SUPPRESS)
     args = ap.parse_args()
-    target, count, digest = build(os.path.abspath(args.root), os.path.abspath(args.out))
-    print(f"{target}  {count} files  sha256 {digest}")
+    for skill_only in (False, True):
+        target, count, digest = build(os.path.abspath(args.root), os.path.abspath(args.out), skill_only)
+        print(f"{target}  {count} files  sha256 {digest}")
     return 0
 
 

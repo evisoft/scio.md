@@ -1,6 +1,7 @@
 name: release-zip
-# The zip for claude.ai and Cowork is built and attached by scripts/release.sh. Once a release is published, this job
-# rebuilds it from the tag and compares it with the attached asset entry by entry (name, mode, CRC-32): what people
+# The two zips (the plugin for claude.ai and Cowork, the skill alone for the Claude API) are built and attached by
+# scripts/release.sh. Once a release is published, this job rebuilds them from the tag and compares each with the
+# attached asset entry by entry (name, mode, CRC-32): what people
 # upload is what the tag holds. Read-only — it never changes the release; a mismatch is a red run to act on.
 on:
   release:
@@ -25,22 +26,26 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Rebuild the zip from the tag
+      - name: Rebuild the zips from the tag
         run: python3 scripts/build-zip.py --out "$RUNNER_TEMP/rebuilt"
-      - name: Download the attached zip
+      - name: Download the attached zips
         run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'scio-*.zip' --dir "$RUNNER_TEMP/released"
       - name: Same entries, same modes, same contents
         run: |
           python3 - "$RUNNER_TEMP/rebuilt" "$RUNNER_TEMP/released" <<'EOF'
           import glob, sys, zipfile
-          def entries(folder):
-              found = glob.glob(f"{folder}/scio-*.zip")
-              assert len(found) == 1, f"{folder}: expected one scio-*.zip, found {found}"
-              with zipfile.ZipFile(found[0]) as z:
-                  return found[0].rsplit("/", 1)[1], {i.filename: (i.CRC, i.file_size, i.external_attr >> 16) for i in z.infolist()}
-          (name_a, a), (name_b, b) = entries(sys.argv[1]), entries(sys.argv[2])
-          assert name_a == name_b, f"asset is {name_b}, the tag builds {name_a}"
-          diff = sorted(k for k in a.keys() | b.keys() if a.get(k) != b.get(k))
-          assert not diff, f"{len(diff)} entries differ: {diff[:10]}"
-          print(f"{name_b}: {len(b)} entries match the tag")
+          def archives(folder):
+              found = {p.rsplit("/", 1)[1]: p for p in glob.glob(f"{folder}/scio-*.zip")}
+              assert len(found) == 2, f"{folder}: expected the plugin and the skill zip, found {sorted(found)}"
+              return found
+          def entries(path):
+              with zipfile.ZipFile(path) as z:
+                  return {i.filename: (i.CRC, i.file_size, i.external_attr >> 16) for i in z.infolist()}
+          rebuilt, released = archives(sys.argv[1]), archives(sys.argv[2])
+          assert sorted(rebuilt) == sorted(released), f"assets are {sorted(released)}, the tag builds {sorted(rebuilt)}"
+          for name in sorted(rebuilt):
+              a, b = entries(rebuilt[name]), entries(released[name])
+              diff = sorted(k for k in a.keys() | b.keys() if a.get(k) != b.get(k))
+              assert not diff, f"{name}: {len(diff)} entries differ: {diff[:10]}"
+              print(f"{name}: {len(b)} entries match the tag")
           EOF

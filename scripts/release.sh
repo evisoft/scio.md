@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cut a release: scripts/release.sh 0.3.0 [<contract>]  (also builds and attaches dist/scio-<v>.zip for claude.ai and Cowork)
+# Cut a release: scripts/release.sh 0.3.0 [<contract>]  (also builds and attaches dist/scio-<v>.zip for claude.ai and Cowork, dist/scio-skill-<v>.zip for the Claude API)
 # <contract> is the platform's tool contract: a path, or by default https://scio.md/v1/tools.json — the one deployed.
 # Policy: a release at every version bump — including every contract change from evisoft/scio (regenerated tools.md
 # counts) — and v1.0.0 only when the platform leaves alpha. Steps: a clean tree, versions in sync, the contract's three
@@ -36,16 +36,22 @@ notes="$(python3 scripts/gen-manifest.py --notes)"   # goes into the release not
 claude plugin validate . >/dev/null
 # The zip for claude.ai and Cowork (Customize → Plugins → Upload plugin): exactly what the manifests list, built from the
 # tree they were just checked against, validated unpacked, and attached to the release with its SHA-256 in the notes.
-zip_line="$(python3 scripts/build-zip.py)"
+zips="$(python3 scripts/build-zip.py)"   # two lines: the plugin, then the skill alone — path, file count, SHA-256
+zip_line="$(printf '%s\n' "$zips" | sed -n 1p)"
+skill_line="$(printf '%s\n' "$zips" | sed -n 2p)"
 zip="${zip_line%%  *}"
 zip_sha="${zip_line##* }"
+skill_zip="${skill_line%%  *}"
+skill_sha="${skill_line##* }"
 unpacked="$(mktemp -d)"
 trap 'rm -rf "$unpacked"' EXIT
 python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$zip" "$unpacked"
 claude plugin validate "$unpacked/scio" >/dev/null
 notes="$notes
 
-**claude.ai and Cowork:** download \`$(basename "$zip")\` below, then **Customize → Plugins → Add → Upload plugin**. Cowork loads all of it (skill, commands, agents, hooks, both local MCP servers — the task must run on your computer, with \`python3\`); claude.ai chat loads the skill and the commands only. SHA-256: \`$zip_sha\`"
+**claude.ai and Cowork:** download \`$(basename "$zip")\` below, then **Customize → Plugins → Add → Upload plugin**. Cowork loads all of it (skill, commands, agents, hooks, both local MCP servers — the task must run on your computer, with \`python3\`); claude.ai chat loads the skill and the commands only. SHA-256: \`$zip_sha\`
+
+**Claude API and Managed Agents:** upload \`$(basename "$skill_zip")\` with \`POST /v1/skills\` and attach the remote MCP server \`https://scio.md/mcp\` with the agent's key (README → Claude API and Managed Agents). SHA-256: \`$skill_sha\`"
 # Stage exactly what the steps above rewrite; anything else they changed stops the release instead of riding along.
 git add -- .claude-plugin/plugin.json .claude-plugin/marketplace.json .cursor-plugin/plugin.json .cursor-plugin/marketplace.json \
     plugin.json gemini-extension.json skills/scio/SKILL.md openclaw/scio/SKILL.md \
@@ -73,4 +79,4 @@ git tag -a "v$v" -m "Scio plugin $v"
 git push -q
 git push -q origin "v$v"
 git push -q origin "scio--v$v"
-gh release create "v$v" "$zip" --title "v$v" --notes "$notes" --generate-notes   # generated notes are appended after --notes
+gh release create "v$v" "$zip" "$skill_zip" --title "v$v" --notes "$notes" --generate-notes   # generated notes are appended after --notes
