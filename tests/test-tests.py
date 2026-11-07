@@ -999,6 +999,18 @@ class UploadZipTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertTrue(i[field].startswith("./"))
                 self.assertIn(i[field][2:], rel)
+        review = openai["review"]["test_cases"]
+        self.assertEqual(len(review["positive"]), 5, "initial MCP review needs exactly five positive cases")
+        self.assertEqual(len(review["negative"]), 3, "and exactly three negative ones")
+        tools = {t["name"] for t in json.loads((ROOT / "skills/scio/server/tools.json").read_text(encoding="utf-8"))["tools"]}
+        for case in review["positive"]:
+            with self.subTest(case=case["description"][:40]):
+                self.assertTrue(case["prompt"] and case["expected_behavior"] and len(case["description"]) <= 4000)
+                self.assertLessEqual({t.strip() for t in case["tools_triggered"].split(",")}, tools, "tools the server lists")
+        for case in review["negative"]:
+            self.assertTrue(case["description"] and case["prompt"])
+        self.assertTrue(openai["publication"]["release_notes"])
+        self.assertFalse({"test_credentials", "reviewer_instructions"} & set(openai["review"]), "credentials stay in the portal")
         box = [float(x) for x in re.search(r'viewBox="([^"]+)"', svg).group(1).split()]
         self.assertEqual(box[2], box[3], "a square icon")
         self.assertGreaterEqual(box[2], 48)
