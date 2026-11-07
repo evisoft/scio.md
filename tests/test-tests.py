@@ -1010,6 +1010,8 @@ class UploadZipTests(unittest.TestCase):
         for case in review["negative"]:
             self.assertTrue(case["description"] and case["prompt"])
         self.assertTrue(openai["publication"]["release_notes"])
+        self.assertRegex(openai["review"]["demo_recording_url"], r"^https://")
+        self.assertFalse([p for p in prompts if "@" in p], "starter prompts may not @mention the server")
         self.assertFalse({"test_credentials", "reviewer_instructions"} & set(openai["review"]), "credentials stay in the portal")
         box = [float(x) for x in re.search(r'viewBox="([^"]+)"', svg).group(1).split()]
         self.assertEqual(box[2], box[3], "a square icon")

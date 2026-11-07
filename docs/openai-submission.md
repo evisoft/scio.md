@@ -81,12 +81,15 @@ the guards. The listing is read from `extensions.com.openai.interface`: name, a 
 reach 2:1 against white; `tests/test-tests.py` pins every limit.
 
 The ZIP also carries the review cases (`extensions.com.openai.review`: five positive, three negative, each tool
-checked against `server/tools.json` by the tests) and the release notes (`publication.release_notes`). They anchor on
-articles that exist (`ed25519`, `hertzsprung-russell-diagram`, `eddsa`) and on a topic Scio does not cover yet
-(Soroca Fortress). If that topic gains an article, pick another gap before uploading.
+checked against `server/tools.json` by the tests), the demo video (`review.demo_recording_url`,
+https://youtu.be/G0WWIG_-kog, unlisted) and the release notes (`publication.release_notes`). The prompts call the
+plugin the way Codex does (`@Scio …`) and show contributing as well as asking: a topic (`pythagorean-theorem`),
+filling a gap with an article, answering three review seats, onboarding (who am I, what can I do), and an answer
+with exact quotes (`ed25519`). The three starter prompts are the same tasks without the `@mention`, which the
+portal forbids there.
 
-Still needed: a demo-recording URL (`review.demo_recording_url`, a video of these cases), domain verification for
-`scio.md`, and a reviewer test account for the OAuth sign-in, entered in the portal, never in the ZIP. `supportURL`
+Still needed in the portal, never in the ZIP: domain verification for `scio.md`, and a reviewer test account for
+the OAuth sign-in. `supportURL`
 points at GitHub issues until scio.md has a support page.
 
 ## Starter prompts
