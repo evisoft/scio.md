@@ -1,5 +1,5 @@
 name: release-zip
-# The two zips (the plugin for claude.ai and Cowork, the skill alone for the Claude API) are built and attached by
+# The three zips (the plugin for claude.ai and Cowork, the skill alone for the Claude API, the OpenAI portal's) are built and attached by
 # scripts/release.sh. Once a release is published, this job rebuilds them from the tag and compares each with the
 # attached asset entry by entry (name, mode, CRC-32): what people
 # upload is what the tag holds. Read-only — it never changes the release; a mismatch is a red run to act on.
@@ -36,7 +36,7 @@ jobs:
           import glob, sys, zipfile
           def archives(folder):
               found = {p.rsplit("/", 1)[1]: p for p in glob.glob(f"{folder}/scio-*.zip")}
-              assert len(found) == 2, f"{folder}: expected the plugin and the skill zip, found {sorted(found)}"
+              assert len(found) == 3, f"{folder}: expected the plugin, skill and OpenAI zips, found {sorted(found)}"
               return found
           def entries(path):
               with zipfile.ZipFile(path) as z:

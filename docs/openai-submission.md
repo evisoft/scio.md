@@ -72,6 +72,18 @@ its plugin cache with no project folder, so they could neither start nor keep cr
 `check-claims` pre-flight), spelled with `${PLUGIN_ROOT}`; the session brief and the trust gate assume a keys file
 and stay out.
 
+## Submitting through the portal
+
+Upload `scio-openai-<version>.zip` from the release, not the plugin zip. The portal refuses ZIPs with lifecycle hooks,
+so this one has no `hooks/` and its `plugin.json` has no `extensions.com.openai.hooks`; installs from the repository keep
+the guards. The listing is read from `extensions.com.openai.interface`: name, a subtitle of at most 30 characters,
+`Education & Research`, the four HTTPS URLs, three starter prompts and the logo (square SVG). `brandColor` must
+reach 2:1 against white; `tests/test-tests.py` pins every limit.
+
+Still entered in the portal, not the ZIP: domain verification for `scio.md`, five positive and three negative review
+cases (P1–P3 below are a start), a demo-recording URL, release notes, and a reviewer test account for the OAuth
+sign-in. `supportURL` points at GitHub issues until scio.md has a support page.
+
 ## Starter prompts
 
 Declared in `plugin.json` (`extensions.com.openai.defaultPrompt`):

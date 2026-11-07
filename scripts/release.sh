@@ -36,13 +36,16 @@ notes="$(python3 scripts/gen-manifest.py --notes)"   # goes into the release not
 claude plugin validate . >/dev/null
 # The zip for claude.ai and Cowork (Customize → Plugins → Upload plugin): exactly what the manifests list, built from the
 # tree they were just checked against, validated unpacked, and attached to the release with its SHA-256 in the notes.
-zips="$(python3 scripts/build-zip.py)"   # two lines: the plugin, then the skill alone — path, file count, SHA-256
+zips="$(python3 scripts/build-zip.py)"   # three lines: the plugin, the skill alone, the OpenAI portal's — path, file count, SHA-256
 zip_line="$(printf '%s\n' "$zips" | sed -n 1p)"
 skill_line="$(printf '%s\n' "$zips" | sed -n 2p)"
+openai_line="$(printf '%s\n' "$zips" | sed -n 3p)"
 zip="${zip_line%%  *}"
 zip_sha="${zip_line##* }"
 skill_zip="${skill_line%%  *}"
 skill_sha="${skill_line##* }"
+openai_zip="${openai_line%%  *}"
+openai_sha="${openai_line##* }"
 unpacked="$(mktemp -d)"
 trap 'rm -rf "$unpacked"' EXIT
 python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$zip" "$unpacked"
@@ -51,7 +54,9 @@ notes="$notes
 
 **claude.ai and Cowork:** download \`$(basename "$zip")\` below, then **Customize → Plugins → Add → Upload plugin**. Cowork loads all of it (skill, commands, agents, hooks, both local MCP servers — the task must run on your computer, with \`python3\`); claude.ai chat loads the skill and the commands only. SHA-256: \`$zip_sha\`
 
-**Claude API and Managed Agents:** upload \`$(basename "$skill_zip")\` with \`POST /v1/skills\` and attach the remote MCP server \`https://scio.md/mcp\` with the agent's key (README → Claude API and Managed Agents). SHA-256: \`$skill_sha\`"
+**Claude API and Managed Agents:** upload \`$(basename "$skill_zip")\` with \`POST /v1/skills\` and attach the remote MCP server \`https://scio.md/mcp\` with the agent's key (README → Claude API and Managed Agents). SHA-256: \`$skill_sha\`
+
+**OpenAI plugin directory:** \`$(basename "$openai_zip")\` is the package for the submission portal (no hooks, which the portal refuses; Codex installs from the repository keep them). SHA-256: \`$openai_sha\`"
 # Stage exactly what the steps above rewrite; anything else they changed stops the release instead of riding along.
 git add -- .claude-plugin/plugin.json .claude-plugin/marketplace.json .cursor-plugin/plugin.json .cursor-plugin/marketplace.json \
     plugin.json gemini-extension.json skills/scio/SKILL.md openclaw/scio/SKILL.md \
@@ -79,4 +84,4 @@ git tag -a "v$v" -m "Scio plugin $v"
 git push -q
 git push -q origin "v$v"
 git push -q origin "scio--v$v"
-gh release create "v$v" "$zip" "$skill_zip" --title "v$v" --notes "$notes" --generate-notes   # generated notes are appended after --notes
+gh release create "v$v" "$zip" "$skill_zip" "$openai_zip" --title "v$v" --notes "$notes" --generate-notes   # generated notes are appended after --notes

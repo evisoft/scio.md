@@ -876,14 +876,15 @@ class UploadZipTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.base = Path(tmp.name)
 
-    def build(self, out, skill=False):
-        """The plugin archive (the first line build-zip.py prints), or the skill archive (the second)."""
+    def build(self, out, skill=False, openai=False):
+        """The plugin archive (the first line build-zip.py prints), the skill archive (the second) or the OpenAI
+        portal's (the third)."""
         run = subprocess.run([PY, str(ROOT / "scripts/build-zip.py"), "--out", str(out)], capture_output=True, text=True,
                              timeout=60, env=clean_env())
         self.assertEqual(run.returncode, 0, run.stderr)
         lines = run.stdout.splitlines()
-        self.assertEqual(len(lines), 2, run.stdout)
-        return Path(lines[1 if skill else 0].split("  ", 1)[0])
+        self.assertEqual(len(lines), 3, run.stdout)
+        return Path(lines[2 if openai else 1 if skill else 0].split("  ", 1)[0])
 
     def test_the_archive_holds_the_plugin_folder_and_nothing_else(self):
         import zipfile
@@ -920,9 +921,9 @@ class UploadZipTests(unittest.TestCase):
         self.assertIn("commands/approve-all.md", whoami(), "a file added after the download is still a tamper")
 
     def test_the_same_tree_gives_the_same_bytes(self):
-        for skill in (False, True):
-            one, two = self.build(self.base / "a", skill), self.build(self.base / "b", skill)
-            with self.subTest(skill=skill):
+        for skill, openai in ((False, False), (True, False), (False, True)):
+            one, two = self.build(self.base / "a", skill, openai), self.build(self.base / "b", skill, openai)
+            with self.subTest(skill=skill, openai=openai):
                 self.assertEqual(hashlib.sha256(one.read_bytes()).digest(), hashlib.sha256(two.read_bytes()).digest())
 
     def test_the_skill_archive_is_what_the_skills_api_accepts(self):
@@ -950,10 +951,62 @@ class UploadZipTests(unittest.TestCase):
         self.assertLessEqual(keys, {"name", "description", "license", "compatibility", "metadata", "allowed-tools"},
                              "claude.ai and the Skills API refuse any other key")
 
+    def test_the_openai_archive_is_what_the_plugin_portal_accepts(self):
+        """The OpenAI portal (developers.openai.com/plugins/deploy/submission) refused v0.13.0's plugin zip: hooks are
+        not allowed, and the listing was read only from extensions.com.openai.interface, where nothing was. This pins
+        the portal's published limits on the archive it is given."""
+        import zipfile
+        version = json.loads((ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
+        archive = self.build(self.base / "a", openai=True)
+        self.assertEqual(archive.name, f"scio-openai-{version}.zip")
+        with zipfile.ZipFile(archive) as z:
+            names = z.namelist()
+            manifest = json.loads(z.read("scio/plugin.json"))
+            svg = z.read("scio/skills/scio/assets/logo.svg").decode("utf-8")
+        rel = {n.split("/", 1)[1] for n in names}
+        self.assertEqual({n.split("/", 1)[0] for n in names}, {"scio"})
+        self.assertTrue({"plugin.json", "mcp.json", "skills/scio/SKILL.md"} <= rel)
+        self.assertFalse([r for r in rel if r.startswith(("hooks", ".claude-plugin", ".cursor-plugin", ".agents"))
+                          or r in ("hooks.json", ".app.json") or "/" not in r and r.endswith(".mcp.json")])
+        openai = manifest["extensions"]["com.openai"]
+        self.assertNotIn("hooks", openai)
+        self.assertNotIn("apps", openai)
+        self.assertIn("hooks", json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))["extensions"]["com.openai"],
+                      "the repository keeps the guards for manual Codex installs")
+        i = openai["interface"]
+        self.assertLessEqual(len(i["displayName"]), 30)
+        self.assertLessEqual(len(i["shortDescription"]), 30)
+        self.assertLessEqual(len(i["longDescription"]), 4000)
+        self.assertLessEqual(len(i["developerName"]), 80)
+        self.assertIn(i["category"], {"Productivity", "Creativity", "Developer Tools", "Business & Operations",
+                                      "Data & Analytics", "Communication", "Education & Research", "Security", "Finance",
+                                      "Healthcare", "Travel", "Entertainment", "Other"})
+        self.assertTrue(i["capabilities"] and len(i["capabilities"]) <= 20 and all(0 < len(c) <= 120 for c in i["capabilities"]))
+        for field in ("websiteURL", "supportURL", "privacyPolicyURL", "termsOfServiceURL"):
+            with self.subTest(field=field):
+                self.assertRegex(i[field], r"^https://[^@\s]+$")
+                self.assertLessEqual(len(i[field]), 1024)
+        prompts = i["defaultPrompt"]
+        self.assertTrue(len(prompts) <= 3 and len(set(prompts)) == len(prompts) and all(len(p) <= 128 for p in prompts))
+        def luminance(h):
+            c = [int(h[k:k + 2], 16) / 255 for k in (1, 3, 5)]
+            c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+            return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+        contrast = lambda a, b: (max(luminance(a), luminance(b)) + 0.05) / (min(luminance(a), luminance(b)) + 0.05)
+        self.assertGreaterEqual(contrast(i["brandColor"], "#ffffff"), 2)
+        self.assertGreaterEqual(contrast(i["brandColorDark"], "#212121"), 2)
+        for field in ("logo", "composerIcon"):
+            with self.subTest(field=field):
+                self.assertTrue(i[field].startswith("./"))
+                self.assertIn(i[field][2:], rel)
+        box = [float(x) for x in re.search(r'viewBox="([^"]+)"', svg).group(1).split()]
+        self.assertEqual(box[2], box[3], "a square icon")
+        self.assertGreaterEqual(box[2], 48)
+
     def test_the_release_attaches_the_zip_it_built_after_the_manifests(self):
         text = (ROOT / "scripts/release.sh").read_text(encoding="utf-8")
         self.assertRegex(text, r"python3 scripts/build-zip\.py")
-        self.assertRegex(text, r'gh release create "v\$v" "\$zip" "\$skill_zip"')
+        self.assertRegex(text, r'gh release create "v\$v" "\$zip" "\$skill_zip" "\$openai_zip"')
         self.assertLess(text.index("python3 scripts/gen-manifest.py --check"), text.index("python3 scripts/build-zip.py"))
 
 
