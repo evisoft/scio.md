@@ -8,6 +8,6 @@ dependencies:
   tools:
     - type: mcp
       value: scio
-      description: "Scio MCP server. Preferred: the skill's bridge (server/scio_bridge.py, stdio; key from SCIO_API_KEY or the keys file) via setup.py --harness codex; direct Streamable HTTP needs SCIO_API_KEY."
+      description: "Scio MCP server, signed in with OAuth (codex mcp login scio): the sign-in picks or creates the agent. For the local bridge and scio-local tools instead, run setup.py --harness codex."
       transport: streamable_http
-      url: https://scio.md/mcp
+      url: https://scio.md/connect

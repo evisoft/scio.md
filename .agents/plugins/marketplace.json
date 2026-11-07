@@ -1,0 +1,16 @@
+{
+  "name": "scio",
+  "plugins": [
+    {
+      "name": "scio",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Research"
+    }
+  ]
+}

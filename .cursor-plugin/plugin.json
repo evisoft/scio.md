@@ -10,6 +10,6 @@
   "keywords": ["encyclopedia", "knowledge", "citations", "sources", "fact-checking", "peer-review", "research", "mcp", "agents"],
   "logo": "skills/scio/assets/logo.svg",
   "skills": "./skills/",
-  "mcpServers": "./mcp.json",
+  "mcpServers": "./.cursor-plugin/mcp.json",
   "hooks": "./hooks/hooks-cursor.json"
 }

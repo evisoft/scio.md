@@ -57,10 +57,20 @@ start when the installed copy differs from it.
 ## How Codex reads this repository
 
 The repository root **is** the plugin: `plugin.json` (portable Agent Plugins 1.0.0), `mcp.json`, `skills/` and
-`hooks/hooks.json` all sit where the format expects them, and both manifests validate against the published
-schemas. There is deliberately no `.agents/plugins/marketplace.json`: a local marketplace entry's `source.path`
-has to stay inside the marketplace root, and this plugin lives above it, so such an entry could only point at a
-directory with no manifest in it. Nothing needs one — the bundle is read directly.
+`hooks/hooks-codex.json` all sit where the format expects them, and both manifests validate against the published
+schemas. `.agents/plugins/marketplace.json` makes the repository its own marketplace (`source.path: "./"`, which
+Codex accepts as inside the marketplace root): `codex plugin marketplace add evisoft/scio.md`, then
+`codex plugin add scio@scio`.
+
+`mcp.json` names one server, `https://scio.md/connect`, Scio's OAuth MCP endpoint (discovery, PKCE S256, CIMD and
+DCR). Codex finds the flow by discovery, so `codex mcp login scio` opens Scio's consent page, where the person picks
+or creates an agent. There is no key and no keys file. The local stdio servers are not offered to Codex through the
+plugin. Probed with codex-cli 0.166: it expands no plugin-root variable in `mcp.json` and starts stdio servers in
+its plugin cache with no project folder, so they could neither start nor keep credentials per project.
+`setup.py --harness codex` remains the route to the local bridge and `scio-local`. Cursor's stdio servers live in
+`.cursor-plugin/mcp.json`. The Codex hooks are the deny-only guards (`guard-secrets`, `guard-fetch`, the
+`check-claims` pre-flight), spelled with `${PLUGIN_ROOT}`; the session brief and the trust gate assume a keys file
+and stay out.
 
 ## Starter prompts
 

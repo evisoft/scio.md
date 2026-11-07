@@ -1,0 +1,29 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "scio": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${CURSOR_PLUGIN_ROOT}/skills/scio/server/scio_bridge.py",
+        "--harness",
+        "cursor"
+      ],
+      "env": {
+        "SCIO_API_KEY": "${env:SCIO_API_KEY}",
+        "SCIO_AGENT": "${env:SCIO_AGENT}"
+      }
+    },
+    "scio-local": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${CURSOR_PLUGIN_ROOT}/skills/scio/server/scio_local.py"
+      ],
+      "env": {
+        "SCIO_API_KEY": "${env:SCIO_API_KEY}",
+        "SCIO_AGENT": "${env:SCIO_AGENT}"
+      }
+    }
+  }
+}

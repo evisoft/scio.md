@@ -887,10 +887,22 @@ class PortableManifestTests(unittest.TestCase):
         self.assertEqual(set(body.get("extensions", {})) - {"com.openai"}, set())
 
     def test_the_mcp_manifest_keeps_the_shape_the_schema_allows(self):
+        """Codex reads the root mcp.json. It expands no plugin-root variable in it and starts a stdio server in its
+        plugin cache with no project folder (probed with codex-cli 0.166: `${CURSOR_PLUGIN_ROOT}/…` reached python3
+        verbatim and both servers failed), so the root names Scio's OAuth endpoint: the sign-in is the identity, no
+        key or keys file is involved, and Codex finds the OAuth flow by discovery — no `extensions` block, which the
+        published schema would refuse."""
         body = json.loads((ROOT / "mcp.json").read_text(encoding="utf-8"))
         self.assertEqual(body.get("$schema"), self.MCP_SCHEMA)
         self.assertEqual(set(body), {"$schema", "mcpServers"})   # no notes: the schema forbids them
-        self.assertTrue(body["mcpServers"])
+        self.assertEqual(body["mcpServers"], {"scio": {"type": "streamable-http", "url": "https://scio.md/connect"}})
+        self.assertNotRegex(json.dumps(body), r"PLUGIN_ROOT|\$\{|python3", "nothing Codex would pass on unexpanded")
+
+    def test_cursor_keeps_its_own_stdio_servers(self):
+        manifest = json.loads((ROOT / ".cursor-plugin/plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["mcpServers"], "./.cursor-plugin/mcp.json")
+        body = json.loads((ROOT / manifest["mcpServers"]).read_text(encoding="utf-8"))
+        self.assertEqual(set(body["mcpServers"]), {"scio", "scio-local"})
         for name, server in body["mcpServers"].items():
             with self.subTest(server=name):
                 self.assertEqual(server.get("type"), "stdio")
@@ -898,6 +910,28 @@ class PortableManifestTests(unittest.TestCase):
                 self.assertEqual(set(server) - self.STDIO_KEYS, set())
                 # the spec reserves these two names for the runtime, so a plugin may not set them
                 self.assertEqual({"PLUGIN_ROOT", "PLUGIN_DATA"} & set(server.get("env", {})), set())
+
+    def test_codex_runs_the_guards_and_nothing_that_assumes_a_keys_file(self):
+        """Signed in through /connect there is no keys file: the session brief would tell the agent to register,
+        which /connect forbids, and the trust gate's approvals belong to Codex's own policy. The deny-only guards
+        stay, spelled with PLUGIN_ROOT, which Codex sets for hook commands."""
+        manifest = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["extensions"]["com.openai"]["hooks"], "./hooks/hooks-codex.json")
+        hooks = json.loads((ROOT / "hooks/hooks-codex.json").read_text(encoding="utf-8"))["hooks"]
+        self.assertEqual(set(hooks), {"PreToolUse"})
+        commands = [h["command"] for entry in hooks["PreToolUse"] for h in entry["hooks"]]
+        self.assertEqual(sorted(re.search(r"scripts/([\w-]+\.py)", c).group(1) for c in commands),
+                         ["check-claims.py", "guard-fetch.py", "guard-secrets.py"])
+        for command in commands:
+            with self.subTest(command=command[:50]):
+                self.assertIn('"${PLUGIN_ROOT}/skills/scio/scripts/', command)
+                self.assertTrue((ROOT / re.search(r"skills/scio/scripts/[\w-]+\.py", command).group(0)).is_file())
+
+    def test_the_skill_dependency_names_the_server_the_plugin_installs(self):
+        yaml = (ROOT / "skills/scio/agents/openai.yaml").read_text(encoding="utf-8")
+        url = json.loads((ROOT / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]["scio"]["url"]
+        self.assertIn(f"url: {url}\n", yaml)
+        self.assertIn("value: scio\n", yaml)
 
 
 class StatsLineTests(unittest.TestCase):
@@ -1023,7 +1057,7 @@ class ToolAnnotationTests(unittest.TestCase):
         python3 does not expand `~` the way a shell would. In mcp.json Cursor expands ${CURSOR_PLUGIN_ROOT}, and
         its docs say the standard's ${PLUGIN_ROOT} deliberately is not — so that file gets no machine path at all."""
         manifest = json.loads((ROOT / ".cursor-plugin/plugin.json").read_text(encoding="utf-8"))
-        body = (ROOT / manifest["mcpServers"].lstrip("./")).read_text(encoding="utf-8")
+        body = (ROOT / manifest["mcpServers"]).read_text(encoding="utf-8")
         commands = " ".join(re.findall(r'"(?:command|args)":\s*(\[[^\]]*\]|"[^"]*")', body))
         for machine in ("~/", "$HOME", "plugins/local", "/home/", "/Users/"):
             self.assertNotIn(machine, commands, f"mcp.json carries {machine}")
@@ -1035,7 +1069,7 @@ class ToolAnnotationTests(unittest.TestCase):
         and fail closed — a path that resolves to nothing denies every MCP call and every shell command — so the
         variable is used with the documented hand-clone location behind `:-`, and neither spelling alone."""
         manifest = json.loads((ROOT / ".cursor-plugin/plugin.json").read_text(encoding="utf-8"))
-        body = (ROOT / manifest["hooks"].lstrip("./")).read_text(encoding="utf-8")
+        body = (ROOT / manifest["hooks"]).read_text(encoding="utf-8")
         commands = re.findall(r'"command":\s*"((?:[^"\\]|\\.)*)"', body)
         self.assertTrue(commands)
         for command in commands:

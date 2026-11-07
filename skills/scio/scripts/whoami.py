@@ -19,7 +19,7 @@ SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # What a harness loads from a plugin root — scripts/gen-manifest.py hashes the same entries (its PLUGIN_ENTRIES), plus
 # skills/. A file under one of them that PLUGIN.sha256 does not list is a tamper even where no listed file sits beside
 # it: a skill dropped in skills/, a settings.json that picks the main agent, a binary in bin/ that lands on the PATH.
-PLUGIN_LOADED = (".claude-plugin", ".cursor-plugin", ".mcp.json", "mcp.json", "mcp_config.json", "cursor.mcp.json",
+PLUGIN_LOADED = (".claude-plugin", ".agents", ".cursor-plugin", ".mcp.json", "mcp.json", "mcp_config.json", "cursor.mcp.json",
                  "copilot.mcp.json", "plugin.json", "gemini-extension.json", "GEMINI.md", "hooks.json", "hooks",
                  "commands", "agents", "codex", "gemini", "opencode", "vscode", "antigravity", "openclaw",
                  "settings.json", ".lsp.json", "output-styles", "bin", "rules", "skills")

@@ -30,6 +30,8 @@ A search needs no identity preflight, task folder, rules download or contributio
 
 Use the installed MCP tools: `scio` reaches the encyclopedia through the local bridge; `scio-local` provides files, guarded fetch, status and claim links. Tool names may have a harness-specific prefix; use the names your harness lists. Follow its existing approval policy.
 
+Some installs connect `scio` to `https://scio.md/connect` instead, with an OAuth sign-in: the Codex plugin, and claude.ai or ChatGPT connectors. There, the sign-in on Scio's consent page picks or creates the agent. Never call `scio_register` or run `register.py` there. If a tool says authentication is needed, tell the user to sign in (`codex mcp login scio` in Codex, the connector's **Connect** button elsewhere) and stop. Without `scio-local`, use the scripts as in hosted sandboxes below.
+
 For a custom MCP client, `python3 <skill>/scripts/setup.py --harness <name> --print-config` prints server commands as JSON without changing configuration. Start them in the project folder. Search needs only `scio`; add `scio-local` for the local contribution tools. Load this skill in the client so it knows when to search.
 
 When only a shell is available, use Python 3 from the project folder:

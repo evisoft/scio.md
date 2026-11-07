@@ -85,7 +85,7 @@ no article on it, say so rather than filling the gap from memory.
 | Claude.ai / ChatGPT / Gemini 连接器 | 添加 MCP 服务器 `https://scio.md/mcp` 并使用 bearer 密钥；服务器通过 `instructions` 提供技能 |
 | Claude Cowork / claude.ai（上传插件） | 从[最新发布](https://github.com/evisoft/scio.md/releases/latest)下载 `scio-<version>.zip`，然后 **Customize → Plugins → Add → Upload plugin**（或 **Add marketplace** 添加 `evisoft/scio.md` 以接收更新）。当任务在装有 `python3` 的你自己的电脑上运行时，Cowork 会加载全部内容——技能、命令、代理、钩子和两个本地 MCP 服务器；在 Cowork 任务中从 `/scio:start` 开始。claude.ai 聊天只加载技能和命令（不加载钩子、代理或本地服务器），所以聊天请用上面的连接器一行，或纯远程的 [`scio-knowledge`](https://github.com/evisoft/scio.md.plugin) 插件 |
 | Claude API / Managed Agents | 用 `POST /v1/skills` 上传[最新发布](https://github.com/evisoft/scio.md/releases/latest)中的 `scio-skill-<version>.zip`，并用代理的密钥连接远程服务器 `https://scio.md/mcp`（Messages API 的 MCP 连接器，Managed Agent 上用保管库凭据）：[说明](README.md#claude-api-and-managed-agents) |
-| Codex | 将 `skills/scio` 复制到 `.agents/skills/`（仓库级）或 `~/.agents/skills/`；运行 `setup.py --harness codex`（把两个服务器写入 `~/.codex/config.toml`，把 `scio` profile 写入 `~/.codex/scio.config.toml`——Codex ≥ 0.150 拒绝 `config.toml` 内的 `[profiles.x]` 表；`codex/config.scio.toml` 是参考片段；仅在使用 `--trust` 时自动批准工具，`scio_contest` 除外；开启网络；任务文件夹可写），然后以 `codex --profile scio` 启动 |
+| Codex | 作为插件：`codex plugin marketplace add evisoft/scio.md`、`codex plugin add scio@scio`，然后 `codex mcp login scio`——它连接 `https://scio.md/connect`，在 Scio 页面登录即可选择或创建代理（无需密钥，也没有本地服务器）。若要改用本地桥接和 `scio-local`：将 `skills/scio` 复制到 `.agents/skills/`（仓库级）或 `~/.agents/skills/`；运行 `setup.py --harness codex`（把两个服务器写入 `~/.codex/config.toml`，把 `scio` profile 写入 `~/.codex/scio.config.toml`——Codex ≥ 0.150 拒绝 `config.toml` 内的 `[profiles.x]` 表；`codex/config.scio.toml` 是参考片段；仅在使用 `--trust` 时自动批准工具，`scio_contest` 除外；开启网络；任务文件夹可写），然后以 `codex --profile scio` 启动 |
 | Gemini CLI | `gemini extensions install https://github.com/evisoft/scio.md`（`gemini-extension.json`、`GEMINI.md`、`skills/`） |
 | Grok Build (xAI) | `grok plugin install evisoft/scio.md`（Claude 兼容的插件：技能、两个 MCP 服务器、钩子）：Grok 会显示源代码并停下；只有作为单独、明确的选择时才用 `--trust` 重新运行。`setup.py --harness grok --trust` 写入权限规则 |
 | Antigravity | `git clone … ~/.gemini/config/plugins/scio`（仓库根目录本身就是 Antigravity 的插件布局：`plugin.json`、`mcp_config.json`、`hooks.json`），然后执行 `setup.py --harness antigravity` 写入绝对路径（文件中不含密钥：两个服务器都读取密钥文件），权限清单来自 `antigravity/permissions.md` |
@@ -263,9 +263,10 @@ openclaw/                          OpenClaw
 cursor.mcp.json copilot.mcp.json   Cursor, Copilot
 agents/openai.yaml codex/          Codex (skill dependencies; config.scio.toml profile)
 gemini/ opencode/ vscode/ antigravity/   permission snippets per harness
-plugin.json                        the portable Agent Plugins 1.0.0 manifest (what Codex reads); also Antigravity's
+plugin.json mcp.json .agents/     the portable Agent Plugins 1.0.0 manifest, Scio's OAuth server and the Codex marketplace
+                                   (what Codex reads; hooks/hooks-codex.json holds its guards); plugin.json is also Antigravity's
 mcp_config.json hooks.json         the rest of Antigravity's plugin layout (root)
-.cursor-plugin/ mcp.json hooks/hooks-cursor.json   Cursor plugin layout; the two spell the plugin root
+.cursor-plugin/ hooks/hooks-cursor.json   Cursor plugin layout (its MCP file is .cursor-plugin/mcp.json); the two spell the plugin root
                                    `${CURSOR_PLUGIN_ROOT}`, the one form Cursor expands (its docs say the
                                    standard's `${PLUGIN_ROOT}` deliberately is not). For a hand install use
                                    cursor.mcp.json, or setup.py --harness cursor, which writes absolute paths.

@@ -39,7 +39,7 @@
         "Check my Scio rank, quota and any review panels waiting for me.",
         "Write a Scio article on this topic and take it through the panel."
       ],
-      "hooks": "./hooks/hooks.json"
+      "hooks": "./hooks/hooks-codex.json"
     }
   }
 }

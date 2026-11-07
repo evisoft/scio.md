@@ -71,7 +71,7 @@
 | Claude.ai / ChatGPT / Gemini コネクタ | MCP サーバー `https://scio.md/mcp` をベアラーキー付きで追加する。サーバーは `instructions` を通じてスキルを提供する |
 | Claude Cowork / claude.ai（プラグインのアップロード） | [最新リリース](https://github.com/evisoft/scio.md/releases/latest)から `scio-<version>.zip` をダウンロードし、**Customize → Plugins → Add → Upload plugin** を選ぶ（更新を受け取るには **Add marketplace** で `evisoft/scio.md` を追加）。タスクが `python3` のある自分のコンピューターで動くとき、Cowork はスキル・コマンド・エージェント・フック・2 つのローカル MCP サーバーをすべて読み込む。Cowork のタスクで `/scio:start` から始める。claude.ai のチャットが読み込むのはスキルとコマンドだけ（フック・エージェント・ローカルサーバーは読み込まない）なので、チャットでは上のコネクタの行か、リモート専用の [`scio-knowledge`](https://github.com/evisoft/scio.md.plugin) プラグインを使う |
 | Claude API / Managed Agents | [最新リリース](https://github.com/evisoft/scio.md/releases/latest)の `scio-skill-<version>.zip` を `POST /v1/skills` でアップロードし、エージェントのキーを付けてリモートサーバー `https://scio.md/mcp` を接続する（Messages API の MCP コネクタ、Managed Agent ではボールトの認証情報）：[手順](README.md#claude-api-and-managed-agents) |
-| Codex | `skills/scio` を `.agents/skills/`(リポジトリ)または `~/.agents/skills/` にコピーする。`setup.py --harness codex` を実行(両方のサーバーを `~/.codex/config.toml` へ、`scio` プロファイルを `~/.codex/scio.config.toml` へ — Codex 0.150 以降は `config.toml` 内の `[profiles.x]` テーブルを拒否します。`codex/config.scio.toml` が参照用スニペットです。`--trust` を付けたときのみ `scio_contest` を除くツールが自動承認され、ネットワークが有効になり、タスクフォルダが書き込み可能になります)し、`codex --profile scio` で起動する |
+| Codex | プラグインとして：`codex plugin marketplace add evisoft/scio.md`、`codex plugin add scio@scio`、続いて `codex mcp login scio`。`https://scio.md/connect` に接続し、Scio のページでのサインインがエージェントを選択または作成する（キーもローカルサーバーも不要）。代わりにローカルブリッジと `scio-local` を使う場合：`skills/scio` を `.agents/skills/`(リポジトリ)または `~/.agents/skills/` にコピーする。`setup.py --harness codex` を実行(両方のサーバーを `~/.codex/config.toml` へ、`scio` プロファイルを `~/.codex/scio.config.toml` へ — Codex 0.150 以降は `config.toml` 内の `[profiles.x]` テーブルを拒否します。`codex/config.scio.toml` が参照用スニペットです。`--trust` を付けたときのみ `scio_contest` を除くツールが自動承認され、ネットワークが有効になり、タスクフォルダが書き込み可能になります)し、`codex --profile scio` で起動する |
 | Gemini CLI | `gemini extensions install https://github.com/evisoft/scio.md`(`gemini-extension.json`、`GEMINI.md`、`skills/`) |
 | Grok Build (xAI) | `grok plugin install evisoft/scio.md`(Claude 互換のプラグイン: スキル、両方の MCP サーバー、フック): Grok はソースを表示して停止します。`--trust` での再実行は、別途の明示的な選択としてのみ行います。`setup.py --harness grok --trust` で権限ルールを追加します |
 | Antigravity | `git clone … ~/.gemini/config/plugins/scio`(リポジトリのルートがそのまま Antigravity のプラグイン構成です: `plugin.json`、`mcp_config.json`、`hooks.json`)の後、絶対パスのために `setup.py --harness antigravity`(ファイルにキーは入りません。両方のサーバーがキーファイルを読みます)。許可リストは `antigravity/permissions.md` から |
@@ -263,9 +263,10 @@ openclaw/                          OpenClaw
 cursor.mcp.json copilot.mcp.json   Cursor, Copilot
 agents/openai.yaml codex/          Codex (skill dependencies; config.scio.toml profile)
 gemini/ opencode/ vscode/ antigravity/   permission snippets per harness
-plugin.json                        the portable Agent Plugins 1.0.0 manifest (what Codex reads); also Antigravity's
+plugin.json mcp.json .agents/     the portable Agent Plugins 1.0.0 manifest, Scio's OAuth server and the Codex marketplace
+                                   (what Codex reads; hooks/hooks-codex.json holds its guards); plugin.json is also Antigravity's
 mcp_config.json hooks.json         the rest of Antigravity's plugin layout (root)
-.cursor-plugin/ mcp.json hooks/hooks-cursor.json   Cursor plugin layout; the two spell the plugin root
+.cursor-plugin/ hooks/hooks-cursor.json   Cursor plugin layout (its MCP file is .cursor-plugin/mcp.json); the two spell the plugin root
                                    `${CURSOR_PLUGIN_ROOT}`, the one form Cursor expands (its docs say the
                                    standard's `${PLUGIN_ROOT}` deliberately is not). For a hand install use
                                    cursor.mcp.json, or setup.py --harness cursor, which writes absolute paths.
