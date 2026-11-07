@@ -84,8 +84,9 @@ def without_hooks(data):
 # The portal reads a server's authentication only from `extensions["com.openai"].auth` in mcp.json and shows
 # "Authentication: Unavailable" without it. The Agent Plugins 1.0.0 schema refuses that key on a server, and Codex
 # finds the OAuth flow by discovery, so the repository's mcp.json stays schema-valid and only the portal's copy has it:
-# OAuth with dynamic client registration (scio.md's /oauth/register, found by discovery) and the one scope it offers.
-PORTAL_AUTH = {"type": "oauth", "client": {"mode": "dcr"}, "baseScopes": ["scio"]}
+# OAuth with a client ID metadata document (ChatGPT's https://chatgpt.com/oauth/client.json, which scio.md accepts:
+# `client_id_metadata_document_supported`) and the one scope it offers. scio.md also offers DCR, OpenAI's fallback.
+PORTAL_AUTH = {"type": "oauth", "client": {"mode": "cimd"}, "baseScopes": ["scio"]}
 
 
 def with_portal_auth(data):

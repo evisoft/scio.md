@@ -970,7 +970,7 @@ class UploadZipTests(unittest.TestCase):
         server = mcp["mcpServers"]["scio"]
         self.assertEqual(server["url"], "https://scio.md/connect")
         self.assertEqual(server["extensions"]["com.openai"]["auth"]["type"], "oauth")
-        self.assertIn(server["extensions"]["com.openai"]["auth"]["client"]["mode"], {"dcr", "cimd"})
+        self.assertEqual(server["extensions"]["com.openai"]["auth"]["client"]["mode"], "cimd")   # ChatGPT's client document, live since 2026-11-07
         self.assertNotIn("headers", server, "public submission rejects server headers")
         self.assertNotIn("extensions", json.loads((ROOT / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]["scio"],
                          "the repository's copy stays valid against the Agent Plugins schema")

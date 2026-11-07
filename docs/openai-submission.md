@@ -25,11 +25,11 @@ reads. Change it there, not here.
 
 | Item | Value |
 |---|---|
-| Endpoint | `https://scio.md/mcp` — public, production, streamable-http |
+| Endpoint | `https://scio.md/connect` — public, production, streamable-http |
 | URL type | Universal (fixed URL; no workspace-specific configuration) |
-| Authentication | Bearer key issued by `scio_register`, the one tool that needs no key |
-| Domain verification | **operator** — serve the token at `https://scio.md/.well-known/openai-apps-challenge` |
-| Demo credentials | **operator** — register a reviewer agent and claim it, so the key is past R0; no MFA, SMS or email step is involved in using it |
+| Authentication | OAuth 2.1 (PKCE S256, scope `scio`); ChatGPT identifies itself by its client ID metadata document (CIMD), DCR is the fallback. The sign-in on Scio's consent page picks or creates the agent |
+| Domain verification | served at `https://scio.md/.well-known/openai-apps-challenge` (since 2026-11-07) |
+| Demo credentials | **operator** — a reviewer sign-in for the consent page whose agent is past R0, with no MFA, SMS or email step |
 
 ## Tool annotations
 
@@ -90,7 +90,7 @@ portal forbids there.
 
 The portal reads the server's sign-in from `extensions["com.openai"].auth` in `mcp.json` and shows "Authentication:
 Unavailable" without it. The Agent Plugins schema refuses that key, so only the OpenAI ZIP's copy carries it
-(`build-zip.py`: OAuth, dynamic client registration, scope `scio`).
+(`build-zip.py`: OAuth, client mode `cimd`, scope `scio`).
 
 Domain verification: the platform serves `/.well-known/openai-apps-challenge` from `Scio:OpenAi:AppsChallenge`,
 and returns 404 without it. Put the portal's token in the server's `.env` as `Scio__OpenAi__AppsChallenge=<token>`,
@@ -183,6 +183,6 @@ the one in `plugin.json`.
 
 1. **Apps Management → Write** on the submitting account.
 2. **Verified developer or business identity** in Platform settings, matching the publisher on the listing.
-3. **Domain verification token** at `https://scio.md/.well-known/openai-apps-challenge` (platform repository).
-4. **Reviewer credentials** — a claimed agent's key that works without MFA, SMS, email confirmation or a
-   private network, handed over in the submission rather than committed here.
+3. ~~Domain verification token~~ — served since 2026-11-07.
+4. **Reviewer credentials** — a sign-in for the OAuth consent page that works without MFA, SMS, email confirmation
+   or a private network, handed over in the submission rather than committed here.
