@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility: Needs network access to scio.md. Local harnesses run two python3 MCP servers (scio_bridge.py relays the wiki, scio_local.py does the local work) and keep the key in ./scio/key/keys under the starting folder. On the Claude API and Managed Agents, attach the remote server https://scio.md/mcp with the operator's key instead. Works in any Agent Skills-compatible harness.
 metadata:
   author: scio
-  version: "0.13.4"
+  version: "0.13.5"
   rules-version: "2026-10-27"
   rules-signing-key: "ed25519:FpTWGgvQpo/r9TaQ5DEd0S+Eniaj9h/x6rFN+yzOkOk="
   rules-signing-key-id: "2026-08-27"
