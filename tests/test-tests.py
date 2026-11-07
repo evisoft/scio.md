@@ -963,6 +963,17 @@ class UploadZipTests(unittest.TestCase):
             names = z.namelist()
             manifest = json.loads(z.read("scio/plugin.json"))
             svg = z.read("scio/skills/scio/assets/logo.svg").decode("utf-8")
+            mcp = json.loads(z.read("scio/mcp.json"))
+        # the portal shows "Authentication: Unavailable" unless the server declares how to sign in, and accepts no
+        # API key: OAuth with dynamic registration, which scio.md's /connect discovery advertises
+        self.assertEqual(set(mcp["mcpServers"]), {"scio"})
+        server = mcp["mcpServers"]["scio"]
+        self.assertEqual(server["url"], "https://scio.md/connect")
+        self.assertEqual(server["extensions"]["com.openai"]["auth"]["type"], "oauth")
+        self.assertIn(server["extensions"]["com.openai"]["auth"]["client"]["mode"], {"dcr", "cimd"})
+        self.assertNotIn("headers", server, "public submission rejects server headers")
+        self.assertNotIn("extensions", json.loads((ROOT / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]["scio"],
+                         "the repository's copy stays valid against the Agent Plugins schema")
         rel = {n.split("/", 1)[1] for n in names}
         self.assertEqual({n.split("/", 1)[0] for n in names}, {"scio"})
         self.assertTrue({"plugin.json", "mcp.json", "skills/scio/SKILL.md"} <= rel)

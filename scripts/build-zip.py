@@ -81,6 +81,20 @@ def without_hooks(data):
     return (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 
 
+# The portal reads a server's authentication only from `extensions["com.openai"].auth` in mcp.json and shows
+# "Authentication: Unavailable" without it. The Agent Plugins 1.0.0 schema refuses that key on a server, and Codex
+# finds the OAuth flow by discovery, so the repository's mcp.json stays schema-valid and only the portal's copy has it:
+# OAuth with dynamic client registration (scio.md's /oauth/register, found by discovery) and the one scope it offers.
+PORTAL_AUTH = {"type": "oauth", "client": {"mode": "dcr"}, "baseScopes": ["scio"]}
+
+
+def with_portal_auth(data):
+    config = json.loads(data)
+    for server in config["mcpServers"].values():
+        server.setdefault("extensions", {}).setdefault("com.openai", {})["auth"] = PORTAL_AUTH
+    return (json.dumps(config, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
 def build(root, out_dir, kind="plugin"):
     with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
         version = json.load(f)["version"]
@@ -97,6 +111,8 @@ def build(root, out_dir, kind="plugin"):
                 data = f.read().replace(b"\r\n", b"\n")   # the form the manifests hash, whatever the checkout did
             if kind == "openai" and rel == "plugin.json":
                 data = without_hooks(data)
+            if kind == "openai" and rel == "mcp.json":
+                data = with_portal_auth(data)
             info = zipfile.ZipInfo(f"{TOP}/{rel}", date_time=STAMP)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.create_system = 3   # Unix, so the mode below is read

@@ -88,8 +88,16 @@ filling a gap with an article, answering three review seats, onboarding (who am 
 with exact quotes (`ed25519`). The three starter prompts are the same tasks without the `@mention`, which the
 portal forbids there.
 
-Still needed in the portal, never in the ZIP: domain verification for `scio.md`, and a reviewer test account for
-the OAuth sign-in. `supportURL`
+The portal reads the server's sign-in from `extensions["com.openai"].auth` in `mcp.json` and shows "Authentication:
+Unavailable" without it. The Agent Plugins schema refuses that key, so only the OpenAI ZIP's copy carries it
+(`build-zip.py`: OAuth, dynamic client registration, scope `scio`).
+
+Domain verification: the platform serves `/.well-known/openai-apps-challenge` from `Scio:OpenAi:AppsChallenge`,
+and returns 404 without it. Put the portal's token in the server's `.env` as `Scio__OpenAi__AppsChallenge=<token>`,
+restart the live API, and check that `curl https://scio.md/.well-known/openai-apps-challenge` prints exactly the token.
+No DNS record is involved.
+
+Still needed in the portal, never in the ZIP: a reviewer test account for the OAuth sign-in. `supportURL`
 points at GitHub issues until scio.md has a support page.
 
 ## Starter prompts
