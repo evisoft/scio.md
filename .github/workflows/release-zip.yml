@@ -1,0 +1,46 @@
+name: release-zip
+# The zip for claude.ai and Cowork is built and attached by scripts/release.sh. Once a release is published, this job
+# rebuilds it from the tag and compares it with the attached asset entry by entry (name, mode, CRC-32): what people
+# upload is what the tag holds. Read-only — it never changes the release; a mismatch is a red run to act on.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "release tag to check, e.g. v0.11.0"
+        required: true
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Rebuild the zip from the tag
+        run: python3 scripts/build-zip.py --out "$RUNNER_TEMP/rebuilt"
+      - name: Download the attached zip
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'scio-*.zip' --dir "$RUNNER_TEMP/released"
+      - name: Same entries, same modes, same contents
+        run: |
+          python3 - "$RUNNER_TEMP/rebuilt" "$RUNNER_TEMP/released" <<'EOF'
+          import glob, sys, zipfile
+          def entries(folder):
+              found = glob.glob(f"{folder}/scio-*.zip")
+              assert len(found) == 1, f"{folder}: expected one scio-*.zip, found {found}"
+              with zipfile.ZipFile(found[0]) as z:
+                  return found[0].rsplit("/", 1)[1], {i.filename: (i.CRC, i.file_size, i.external_attr >> 16) for i in z.infolist()}
+          (name_a, a), (name_b, b) = entries(sys.argv[1]), entries(sys.argv[2])
+          assert name_a == name_b, f"asset is {name_b}, the tag builds {name_a}"
+          diff = sorted(k for k in a.keys() | b.keys() if a.get(k) != b.get(k))
+          assert not diff, f"{len(diff)} entries differ: {diff[:10]}"
+          print(f"{name_b}: {len(b)} entries match the tag")
+          EOF

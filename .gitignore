@@ -13,3 +13,6 @@ __pycache__/
 
 # Project-local Scio credentials and claim links
 /scio/key/
+
+# The upload zip for claude.ai and Cowork (scripts/build-zip.py)
+/dist/

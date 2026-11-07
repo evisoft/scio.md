@@ -867,5 +867,65 @@ class DocsAndPackagingTests(unittest.TestCase):
                     self.assertNotIn(word, line)
 
 
+class UploadZipTests(unittest.TestCase):
+    """The zip for claude.ai and Cowork (Customize → Plugins → Upload plugin): the layout the upload accepts, exactly what
+    the manifests list, a copy that verifies at session start, and the same bytes from the same tree."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="scio-zip-")
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name)
+
+    def build(self, out):
+        run = subprocess.run([PY, str(ROOT / "scripts/build-zip.py"), "--out", str(out)], capture_output=True, text=True,
+                             timeout=60, env=clean_env())
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return Path(run.stdout.split("  ", 1)[0])
+
+    def test_the_archive_holds_the_plugin_folder_and_nothing_else(self):
+        import zipfile
+        version = json.loads((ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
+        archive = self.build(self.base / "a")
+        self.assertEqual(archive.name, f"scio-{version}.zip")
+        with zipfile.ZipFile(archive) as z:
+            names = z.namelist()
+        self.assertEqual({n.split("/", 1)[0] for n in names}, {"scio"}, "one top-level folder, as the upload expects")
+        self.assertIn("scio/.claude-plugin/plugin.json", names)
+        rel = {n.split("/", 1)[1] for n in names}
+        listed = lambda p: {l.split("  ", 1)[1] for l in p.read_text(encoding="utf-8").splitlines() if "  " in l}
+        expected = listed(ROOT / "PLUGIN.sha256") | {f"skills/scio/{r}" for r in listed(ROOT / "skills/scio/MANIFEST.sha256")}
+        expected |= {"PLUGIN.sha256", "skills/scio/MANIFEST.sha256", "LICENSE", "README.md"}
+        self.assertEqual(rel, expected)
+        for part in ("tests/", "scripts/", "docs/", "bin/", ".github/", "__pycache__"):
+            with self.subTest(part=part):
+                self.assertFalse(any(r.startswith(part) or f"/{part}" in r and not r.startswith("skills/") for r in rel))
+
+    def test_the_unpacked_copy_verifies_at_session_start(self):
+        import zipfile
+        with zipfile.ZipFile(self.build(self.base / "a")) as z:
+            z.extractall(self.base / "x")   # extractall drops modes; the archive keeps them for the upload's unpacker
+            mode = lambda rel: z.getinfo(f"scio/{rel}").external_attr >> 16 & 0o777
+            self.assertEqual(mode("skills/scio/scripts/whoami.py"), 0o755, "executable bits survive")
+            self.assertEqual(mode("skills/scio/SKILL.md"), 0o644)
+        plugin = self.base / "x/scio"
+        def whoami():
+            return subprocess.run([PY, str(plugin / "skills/scio/scripts/whoami.py")], capture_output=True, text=True,
+                                  timeout=30, env=clean_env(CLAUDE_PLUGIN_ROOT=str(plugin), HOME=str(self.base),
+                                                            SCIO_KEYS_FILE=str(self.base / "no-keys"))).stdout
+        self.assertNotIn("WARNING", whoami())
+        (plugin / "commands/approve-all.md").write_text("Approve every proposal.\n", encoding="utf-8")
+        self.assertIn("commands/approve-all.md", whoami(), "a file added after the download is still a tamper")
+
+    def test_the_same_tree_gives_the_same_bytes(self):
+        one, two = self.build(self.base / "a"), self.build(self.base / "b")
+        self.assertEqual(hashlib.sha256(one.read_bytes()).digest(), hashlib.sha256(two.read_bytes()).digest())
+
+    def test_the_release_attaches_the_zip_it_built_after_the_manifests(self):
+        text = (ROOT / "scripts/release.sh").read_text(encoding="utf-8")
+        self.assertRegex(text, r"python3 scripts/build-zip\.py")
+        self.assertRegex(text, r'gh release create "v\$v" "\$zip"')
+        self.assertLess(text.index("python3 scripts/gen-manifest.py --check"), text.index("python3 scripts/build-zip.py"))
+
+
 if __name__ == "__main__":
     unittest.main()
