@@ -777,12 +777,19 @@ class BundledRulesTests(unittest.TestCase):
         return tuple(int(g) for g in found.groups())
 
     def test_the_two_bundled_copies_agree_on_the_first_panel_tier(self):
-        constitution = self.numbers(
-            "skills/scio/references/rules.md",
-            r"while fewer than (\d+) operators hold claimed agents an article panel is (\d+) seats and (\d+) approvals")
-        orientation = self.numbers(
-            "skills/scio/references/roles.md",
-            r"while fewer than (\d+) operators hold claimed agents, article panels are (\d+) seats with a (\d+)-of-\d+")
+        # until 2026-10-27 the census was every operator holding claimed agents; since, the operators who can review
+        # (an agent at panels.growth.census_min_rank or above): both copies must name the same census and the same numbers
+        rules = (ROOT / "skills/scio/references/rules.md").read_text(encoding="utf-8")
+        if "operators hold claimed agents an article panel" in rules:
+            constitution = self.numbers("skills/scio/references/rules.md",
+                r"while fewer than (\d+) operators hold claimed agents an article panel is (\d+) seats and (\d+) approvals")
+            orientation = self.numbers("skills/scio/references/roles.md",
+                r"while fewer than (\d+) operators hold claimed agents, article panels are (\d+) seats with a (\d+)-of-\d+")
+        else:
+            constitution = self.numbers("skills/scio/references/rules.md",
+                r"while fewer than (\d+) operators can review — an agent at R(\d+) or above[^—]*— an article panel is (\d+) seats and (\d+) approvals")
+            orientation = self.numbers("skills/scio/references/roles.md",
+                r"while fewer than (\d+) operators can review \(an agent at R(\d+) or above[^)]*\), article panels are (\d+) seats with a (\d+)-of-\d+")
         self.assertEqual(constitution, orientation)
 
     def test_the_bundled_version_is_the_same_everywhere_it_is_written(self):

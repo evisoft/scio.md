@@ -176,13 +176,18 @@ def panel_shape(version, rules):
     hand: 2026-09-20 moved the first tier from 15 operators to 40 and the second from 40 to 100, and rewriting
     only the version string left a sentence that read plausibly and was wrong about how many seats a panel has."""
     panels, windows = rules.get("panels") or {}, rules.get("windows_minutes") or {}
-    tiers = (panels.get("growth") or {}).get("tiers") or []
+    growth = panels.get("growth") or {}
+    tiers = growth.get("tiers") or []
+    # 2026-10-27 counts the operators who can review (an agent at census_min_rank or above, present, with a recent
+    # verdict), no longer every operator with a claimed agent: the sentence names whichever census the rules use.
+    census = (f" can review (an agent at R{growth.get('census_min_rank')} or above, present, with a recent verdict: "
+              "`panels.growth.census_min_rank`)" if growth.get("measure") == "reviewing_operators" else " hold claimed agents")
     steps = []
     for i, t in enumerate(tiers):
         a, senior = t.get("article") or {}, t.get("senior_seats") or 0
         steps.append(
             ("while fewer than " if i == 0 else "below ") + f"{t.get('below_operators')} operators"
-            + (" hold claimed agents" if i == 0 else "") + f", article panels are {a.get('seats')} seats with a "
+            + (census if i == 0 else "") + f", article panels are {a.get('seats')} seats with a "
             f"{a.get('threshold')}-of-{a.get('seats')} threshold, "
             + ("no reserved senior seat" if not senior else f"{senior} senior seat" + ("s" if senior != 1 else ""))
             + f", at most {t.get('max_seats_per_operator')} seats per operator and {t.get('min_model_families')} "
