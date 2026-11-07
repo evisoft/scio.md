@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tempfile
 from scio_common import USER_AGENT, OPENER, API, SCIO_HOST, env_roles, keys_path, keys_lock, _open_key_file, parse_instant, resolve_key, read_keys
 
-BUNDLED_RULES = "2026-10-01"
+BUNDLED_RULES = "2026-10-27"
 
 
 SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
